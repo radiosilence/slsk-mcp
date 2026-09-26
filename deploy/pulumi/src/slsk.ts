@@ -2,7 +2,7 @@ import * as k8s from "@pulumi/kubernetes";
 import * as pulumi from "@pulumi/pulumi";
 import type * as z from "zod";
 import type { Deployed } from "./contract.ts";
-import { SlskConfSchema } from "./slsk.schemas.ts";
+import { SlskConfSchema, insideMediaRoot } from "./slsk.schemas.ts";
 import { VERSIONS } from "./versions.ts";
 
 const NAME = "slsk";
@@ -79,66 +79,55 @@ export function createSlsk(
   },
 ) {
   const conf = SlskConfSchema.parse(confArgs);
+  if (!insideMediaRoot(conf)) {
+    throw new Error(`slsk: library, downloads and shares must all be inside mediaRoot (${conf.mediaRoot})`);
+  }
   const options = { provider };
   const state = conf.statePath;
   const shares = conf.shares ?? [conf.library];
   const downloads = conf.downloads.replace(/\/+$/, "");
 
   /**
-   * A local volume and its claim, one per directory. Each path must already
-   * exist on the node — a local volume is never created — which is the
-   * property wanted: these live on the media drive, and with it unmounted the
-   * paths are gone and the pod waits rather than writing to the root disk. A
-   * single volume on the mountpoint with subpaths would not, since the
-   * mountpoint always exists and kubelet creates missing subpaths.
-   *
-   * Retain: a local volume is someone's disk, and deleting the claim must
-   * never be read as permission to touch what is on it.
+   * The drive, as one local volume and its claim. Retain: a local volume is
+   * someone's disk, and deleting the claim must never be read as permission
+   * to touch what is on it.
    */
-  const localVolume = (key: string, path: string) => {
-    const pv = new k8s.core.v1.PersistentVolume(
-      `slsk-${key}`,
-      {
-        metadata: { name: `slsk-${key}` },
-        spec: {
-          accessModes: ["ReadWriteOnce"],
-          capacity: { storage: conf.capacity },
-          local: { path },
-          nodeAffinity: {
-            required: {
-              nodeSelectorTerms: [
-                { matchExpressions: [{ key: "kubernetes.io/hostname", operator: "In", values: [opts.node] }] },
-              ],
-            },
+  const pv = new k8s.core.v1.PersistentVolume(
+    "slsk-media",
+    {
+      metadata: { name: "slsk-media" },
+      spec: {
+        accessModes: ["ReadWriteOnce"],
+        capacity: { storage: conf.capacity },
+        local: { path: conf.mediaRoot },
+        nodeAffinity: {
+          required: {
+            nodeSelectorTerms: [
+              { matchExpressions: [{ key: "kubernetes.io/hostname", operator: "In", values: [opts.node] }] },
+            ],
           },
-          persistentVolumeReclaimPolicy: "Retain",
-          storageClassName: "local-storage",
-          volumeMode: "Filesystem",
         },
+        persistentVolumeReclaimPolicy: "Retain",
+        storageClassName: "local-storage",
+        volumeMode: "Filesystem",
       },
-      options,
-    );
-    return new k8s.core.v1.PersistentVolumeClaim(
-      `slsk-${key}`,
-      {
-        metadata: { name: `slsk-${key}`, namespace },
-        spec: {
-          accessModes: ["ReadWriteOnce"],
-          storageClassName: "local-storage",
-          volumeName: pv.metadata.name,
-          resources: { requests: { storage: conf.capacity } },
-        },
+    },
+    options,
+  );
+  const claim = new k8s.core.v1.PersistentVolumeClaim(
+    "slsk-media",
+    {
+      metadata: { name: "slsk-media", namespace },
+      spec: {
+        accessModes: ["ReadWriteOnce"],
+        storageClassName: "local-storage",
+        volumeName: pv.metadata.name,
+        resources: { requests: { storage: conf.capacity } },
       },
-      options,
-    );
-  };
-  const extraShares = shares.filter((p) => p !== conf.library);
-  const claims = [
-    { key: "library", path: conf.library, readOnly: false },
-    { key: "downloads", path: downloads, readOnly: false },
-    ...extraShares.map((path, i) => ({ key: `share-${i}`, path, readOnly: true })),
-  ].map((v) => ({ ...v, claim: localVolume(v.key, v.path) }));
-  const mediaMounts = claims.map(({ key, path, readOnly }) => ({ name: key, mountPath: path, readOnly }));
+    },
+    options,
+  );
+  const mediaMounts = [{ name: "media", mountPath: conf.mediaRoot }];
 
   const secret = new k8s.core.v1.Secret(
     "slsk-secrets",
@@ -228,7 +217,7 @@ export function createSlsk(
                 command: [
                   "sh",
                   "-c",
-                  `mkdir -p ${state}/postgres ${state}/data /downloads/incomplete /downloads/complete && chown 1000:1000 ${state} ${state}/postgres ${state}/data /downloads /downloads/incomplete /downloads/complete && chmod 700 ${state}/postgres`,
+                  `test -d ${conf.library} && mkdir -p ${state}/postgres ${state}/data ${downloads}/incomplete ${downloads}/complete && chown 1000:1000 ${state} ${state}/postgres ${state}/data ${downloads} ${downloads}/incomplete ${downloads}/complete && chmod 700 ${state}/postgres`,
                 ],
                 securityContext: {
                   runAsUser: 0,
@@ -239,7 +228,7 @@ export function createSlsk(
                 resources: { requests: { cpu: "5m", memory: "8Mi" }, limits: { memory: "32Mi" } },
                 volumeMounts: [
                   { name: "state", mountPath: state },
-                  { name: "downloads", mountPath: "/downloads" },
+                  { name: "media", mountPath: conf.mediaRoot },
                 ],
               },
             ],
@@ -333,7 +322,7 @@ export function createSlsk(
               },
             ],
             volumes: [
-              ...claims.map(({ key, claim }) => ({ name: key, persistentVolumeClaim: { claimName: claim.metadata.name } })),
+              { name: "media", persistentVolumeClaim: { claimName: claim.metadata.name } },
               { name: "state", hostPath: { path: state, type: "DirectoryOrCreate" } },
               ...(beets ? [{ name: "beets", configMap: { name: "slsk-beets" } }] : []),
             ],
@@ -341,7 +330,7 @@ export function createSlsk(
         },
       },
     },
-    { dependsOn: [secret, ...claims.map((c) => c.claim), ...(beets ? [beets] : [])], deleteBeforeReplace: true, provider },
+    { dependsOn: [secret, claim, ...(beets ? [beets] : [])], deleteBeforeReplace: true, provider },
   );
 
   if (conf.upnp) {

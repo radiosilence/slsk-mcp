@@ -357,20 +357,28 @@ pub fn scan(
             .filter(|f| AUDIO.contains(&f.extension.as_str()))
             .filter(|f| !matches!(cache.0.get(&f.path), Some(p) if p.size == f.size && p.mtime == f.mtime))
             .collect();
+        // Two readers: the library is usually one spinning disk, where more
+        // concurrent readers only add seeks, and imports and uploads share it.
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(2)
+            .build()
+            .expect("a two-thread pool");
         for chunk in unknown.chunks(2000) {
-            let fresh: Vec<(PathBuf, Probed)> = chunk
-                .par_iter()
-                .map(|f| {
-                    (
-                        f.path.clone(),
-                        Probed {
-                            size: f.size,
-                            mtime: f.mtime,
-                            attrs: probe(&f.path),
-                        },
-                    )
-                })
-                .collect();
+            let fresh: Vec<(PathBuf, Probed)> = pool.install(|| {
+                chunk
+                    .par_iter()
+                    .map(|f| {
+                        (
+                            f.path.clone(),
+                            Probed {
+                                size: f.size,
+                                mtime: f.mtime,
+                                attrs: probe(&f.path),
+                            },
+                        )
+                    })
+                    .collect()
+            });
             cache.0.extend(fresh);
             checkpoint(cache);
         }

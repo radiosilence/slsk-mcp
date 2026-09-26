@@ -3,17 +3,20 @@ import { AbsolutePath, ResourcesSchema } from "./contract.ts";
 
 export const SlskConfSchema = z.strictObject({
   /**
-   * The music library: where imported albums are filed, and what is shared
-   * unless `shares` says otherwise. A local volume on `node`, at this path.
+   * The media drive's mountpoint, mounted whole as one local volume so the
+   * library and the download area are one filesystem mount: an import is a
+   * rename, where separate volumes turn every import into a copy, even on
+   * the same disk. The service refuses to start while `library` is missing,
+   * which is what an unmounted drive looks like.
    */
+  mediaRoot: AbsolutePath,
+  /** The music library, inside `mediaRoot`. */
   library: AbsolutePath,
   /**
-   * `incomplete/` for downloads in progress, `complete/` for finished ones
-   * waiting for import or for a person. Best on the library's drive, where
-   * an import is a rename.
+   * `incomplete/` and `complete/` for downloads, inside `mediaRoot`.
    */
   downloads: AbsolutePath,
-  /** Shared with the network, read-only. Defaults to the library. */
+  /** Shared with the network. Defaults to the library. */
   shares: z.array(AbsolutePath).optional(),
   /** Nominal; a local volume has whatever the drive has. */
   capacity: z.string().default("2Ti"),
@@ -53,3 +56,9 @@ export const SlskConfSchema = z.strictObject({
     })
     .prefault({}),
 });
+
+/** Every path the service uses must sit inside the one volume it mounts. */
+export const insideMediaRoot = (c: z.infer<typeof SlskConfSchema>) => {
+  const root = c.mediaRoot.replace(/\/+$/, "") + "/";
+  return [c.library, c.downloads, ...(c.shares ?? [])].every((p) => p.startsWith(root));
+};

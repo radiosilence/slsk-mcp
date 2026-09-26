@@ -46,6 +46,14 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let cfg = Arc::new(Config::from_env()?);
+    // The library must already be there. On a removable drive an absent
+    // library means the drive is not mounted, and everything written from
+    // here on would land on whatever disk holds the mountpoint instead.
+    anyhow::ensure!(
+        cfg.library_dir.is_dir(),
+        "library {} does not exist; is the drive mounted?",
+        cfg.library_dir.display()
+    );
     let db = db::connect(&cfg.database_url).await.context("database")?;
     for dir in [&cfg.staging_dir, &cfg.complete_dir] {
         std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;

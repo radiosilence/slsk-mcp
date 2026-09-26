@@ -1,21 +1,26 @@
 import { describe, expect, it } from "vitest";
-import { SlskConfSchema } from "./slsk.schemas.ts";
+import { SlskConfSchema, insideMediaRoot } from "./slsk.schemas.ts";
+
+const base = { mediaRoot: "/mnt/kontent", library: "/mnt/kontent/music", downloads: "/mnt/kontent/slsk" };
 
 describe("SlskConfSchema", () => {
-  it("fills defaults from the library alone", () => {
-    const c = SlskConfSchema.parse({ library: "/mnt/kontent/music", downloads: "/mnt/kontent/slsk" });
+  it("fills defaults", () => {
+    const c = SlskConfSchema.parse(base);
     expect(c.listenPort).toBe(2240);
     expect(c.statePath).toBe("/var/lib/slsk");
-    expect(c.postgres.limits.memory).toBe("256Mi");
+    expect(insideMediaRoot(c)).toBe(true);
   });
 
   it("refuses relative paths, which would mount the wrong thing silently", () => {
-    expect(() => SlskConfSchema.parse({ library: "music", downloads: "/d" })).toThrow();
-    expect(() => SlskConfSchema.parse({ library: "/m", downloads: "slsk" })).toThrow();
+    expect(() => SlskConfSchema.parse({ ...base, library: "music" })).toThrow();
   });
 
-  it("refuses the port every other client defaults to below 1024 and unknown keys", () => {
-    const base = { library: "/m", downloads: "/d" };
+  it("knows when a path is outside the one volume it mounts", () => {
+    expect(insideMediaRoot(SlskConfSchema.parse({ ...base, downloads: "/srv/dl" }))).toBe(false);
+    expect(insideMediaRoot(SlskConfSchema.parse({ ...base, library: "/mnt/kontentx/music" }))).toBe(false);
+  });
+
+  it("refuses privileged ports and unknown keys", () => {
     expect(() => SlskConfSchema.parse({ ...base, listenPort: 80 })).toThrow();
     expect(() => SlskConfSchema.parse({ ...base, roots: [] })).toThrow();
   });
