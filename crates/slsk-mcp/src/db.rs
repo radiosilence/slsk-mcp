@@ -94,6 +94,7 @@ pub struct Job {
     pub library_path: Option<String>,
     pub analysis: Option<Json<Vec<crate::analysis::TrackAnalysis>>>,
     pub approved: bool,
+    pub as_is_blocker: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -378,6 +379,15 @@ pub async fn claim_import(db: &PgPool, id: Uuid) -> sqlx::Result<bool> {
     .fetch_optional(db)
     .await
     .map(|row| row.is_some())
+}
+
+pub async fn set_as_is_blocker(db: &PgPool, id: Uuid, blocker: &str) -> sqlx::Result<()> {
+    sqlx::query("UPDATE jobs SET as_is_blocker = $2 WHERE id = $1")
+        .bind(id)
+        .bind(blocker)
+        .execute(db)
+        .await
+        .map(|_| ())
 }
 
 pub async fn set_approved(db: &PgPool, id: Uuid) -> sqlx::Result<()> {

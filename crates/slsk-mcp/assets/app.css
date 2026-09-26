@@ -115,3 +115,5 @@ button.busy::after, .job.busy .pill::after {
 .uploads .files .name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .uploads .files .meta { flex: none; font-size: 13px; }
 .uploads .files button { flex: none; padding: 3px 8px; font-size: 13px; }
+
+.job .advice { margin: 10px 0 0; padding: 8px 10px; border-left: 3px solid var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); border-radius: 4px; font-size: 14px; }

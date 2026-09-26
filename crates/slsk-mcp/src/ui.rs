@@ -233,6 +233,14 @@ async fn status_html(app: &App) -> String {
     view.render().unwrap_or_default()
 }
 
+/// A suggested next step for a job, with the reason in a person's terms.
+struct Advice {
+    /// The path under `/jobs/{id}/` that does it.
+    action: String,
+    label: &'static str,
+    why: String,
+}
+
 #[derive(Template)]
 #[template(path = "jobs.html")]
 struct JobsView {
@@ -278,6 +286,136 @@ impl JobsView {
             _ => path.to_string(),
         }
     }
+    /// The status as a person would say it.
+    fn label(&self, status: &str) -> &'static str {
+        match status {
+            "review" => "needs a choice",
+            "suspect" => "check quality",
+            "importing" => "filing",
+            "downloading" => "downloading",
+            "imported" => "in library",
+            "failed" => "failed",
+            "cancelled" => "cancelled",
+            _ => "working",
+        }
+    }
+
+    /// Why an import as-is would be refused, when it has been checked and
+    /// would be.
+    fn as_is_blocked<'a>(&self, j: &'a Job) -> Option<&'a str> {
+        j.as_is_blocker.as_deref().filter(|b| !b.is_empty())
+    }
+
+    /// The one action most likely right, and why: the judgement a person
+    /// would otherwise make from the evidence on the card.
+    fn advice(&self, j: &Job) -> Option<Advice> {
+        let next = |why: String| Advice {
+            action: "next".into(),
+            label: "Try another copy",
+            why,
+        };
+        match j.status.as_str() {
+            "review" => {
+                let best = j.candidates.first();
+                if let Some(c) = best
+                    && c.missing == 0
+                    && c.extra == 0
+                    && c.distance <= 0.12
+                {
+                    return Some(Advice {
+                        action: format!("resolve/{}", c.release_id),
+                        label: "Use this release",
+                        why: format!(
+                            "{} — {} lines up track for track; only details such as the credit differ.",
+                            c.artist, c.title
+                        ),
+                    });
+                }
+                if best.is_none() && self.as_is_blocked(j).is_none() {
+                    return Some(Advice {
+                        action: "as-is".into(),
+                        label: "Import as-is",
+                        why: "MusicBrainz doesn't have this release, and the files are properly tagged.".into(),
+                    });
+                }
+                if j.alternates > 0 {
+                    return Some(next(match best {
+                        None => "MusicBrainz doesn't have it and these files aren't tagged well enough to file; another copy may be.".into(),
+                        Some(c) if c.missing > 0 => format!("This copy is missing {} tracks.", c.missing),
+                        Some(_) => "No release fits these files closely.".into(),
+                    }));
+                }
+                best.map(|c| Advice {
+                    action: format!("resolve/{}", c.release_id),
+                    label: "Use the closest release",
+                    why: "No other copy to try.".into(),
+                })
+            }
+            "suspect" => {
+                let flagged: Vec<_> = j
+                    .analysis
+                    .iter()
+                    .filter(|t| {
+                        !matches!(
+                            t.verdict,
+                            crate::analysis::Verdict::Lossless
+                                | crate::analysis::Verdict::Uncertain
+                        )
+                    })
+                    .collect();
+                let padded = !flagged.is_empty()
+                    && flagged.iter().all(|t| {
+                        t.estimate
+                            .as_deref()
+                            .is_some_and(|e| e.contains("16-bit content"))
+                    });
+                if padded {
+                    return Some(Advice {
+                        action: "approve".into(),
+                        label: "Import anyway",
+                        why:
+                            "Only padded: CD-quality audio in a 24-bit container. Nothing is lost."
+                                .into(),
+                    });
+                }
+                if j.alternates > 0 {
+                    return Some(next(
+                        "The audio may not be true lossless; another copy may be clean.".into(),
+                    ));
+                }
+                Some(Advice {
+                    action: "approve".into(),
+                    label: "Import anyway",
+                    why: "No other copy; the audio may not be true lossless.".into(),
+                })
+            }
+            "failed" if j.alternates > 0 => Some(next("This copy couldn't be fetched.".into())),
+            "failed" => Some(Advice {
+                action: "retry".into(),
+                label: "Retry",
+                why: "No other copy was found.".into(),
+            }),
+            _ => None,
+        }
+    }
+
+    /// Whether to show `action` among the other choices: it applies, and
+    /// is not already the suggestion.
+    fn offer(&self, j: &Job, action: &str) -> bool {
+        let applies = match action {
+            "approve" => j.status == "suspect",
+            "next" => {
+                matches!(j.status.as_str(), "review" | "suspect" | "failed") && j.alternates > 0
+            }
+            "as-is" => j.status == "review" && self.as_is_blocked(j).is_none(),
+            "retry" => j.status == "failed",
+            "match" => j.status == "review",
+            "cancel" => j.status == "downloading",
+            _ => false,
+        };
+        applies && self.advice(j).is_none_or(|a| a.action != action)
+    }
+
     /// What the job needs from the person, in their terms; the reason
     /// underneath is the machine's.
     fn ask(&self, j: &Job) -> Option<&'static str> {
@@ -622,7 +760,19 @@ async fn job_action(
         "remove" => jobs.remove(id).await,
         "approve" => jobs.import_soon(id, true, None).await,
         "next" => jobs.next_source(id, crate::jobs::cause::REQUESTED).await,
-        "as-is" => jobs.import_as_is_soon(id).await,
+        // Waited for, since it is quick without MusicBrainz, so a refusal
+        // is reported to the person who asked rather than looking like a
+        // tap that did nothing.
+        "as-is" => match jobs.import_as_is(id, sift::Edits::default()).await {
+            Ok(()) => match crate::db::job(&s.app.db, id).await {
+                Ok(Some(j)) if j.status == "review" => Err(anyhow::anyhow!(
+                    "Couldn't import as-is: {}",
+                    j.error.unwrap_or_default()
+                )),
+                _ => Ok(()),
+            },
+            Err(e) => Err(e),
+        },
         _ => return StatusCode::NOT_FOUND.into_response(),
     };
     match result {

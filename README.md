@@ -163,6 +163,16 @@ the other, and nothing else to either.
 - Credentials are sealed with XChaCha20-Poly1305 in the database and held in
   memory only as long as the session needs them to log back in.
 
+## Load
+
+`cargo test --release -p slsk-engine --test load -- --ignored --nocapture`
+queues 40,000 transfers at once in each direction through real sockets: one
+client downloading 1,000 files from each of 40 peers, and one library serving
+1,000 files to each of 40 clients, every byte checked on arrival
+(`LOAD_PEERS`, `LOAD_FILES` scale it). On a laptop each run completes in about
+two minutes with no failures. Throughput there is set by the protocol's
+per-file handshakes and one upload per user at a time, not by the engine.
+
 ## Development
 
 ```

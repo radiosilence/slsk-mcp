@@ -145,6 +145,9 @@ pub(crate) struct Job {
     /// `suspect` failed it; `approveJob` imports it anyway.
     pub analysis: Vec<crate::analysis::TrackAnalysis>,
     pub import_log: Option<String>,
+    /// For a job in review: why `importAsIs` would be refused, or empty when
+    /// it would be accepted; null when not yet checked.
+    pub as_is_blocker: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -201,6 +204,7 @@ pub(crate) async fn job_view(app: &App, job: db::Job, with_files: bool) -> Resul
         library_path: job.library_path,
         analysis: job.analysis.map(|a| a.0).unwrap_or_default(),
         import_log: job.import_log,
+        as_is_blocker: job.as_is_blocker,
         created_at: job.created_at,
         updated_at: job.updated_at,
     })

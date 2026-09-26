@@ -216,6 +216,7 @@ impl Jobs {
             library_path: None,
             analysis: None,
             approved: false,
+            as_is_blocker: None,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         };
@@ -254,6 +255,7 @@ impl Jobs {
             library_path: None,
             analysis: None,
             approved: false,
+            as_is_blocker: None,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         };
@@ -584,6 +586,10 @@ impl Jobs {
         cause: &str,
     ) -> Result<()> {
         let mut alternates = job.alternates.0.clone();
+        // A peer that stalled us recently goes last here as it does in grab:
+        // the order was fixed when the job began, before it was known.
+        let stalled = self.recently_stalled();
+        alternates.sort_by_key(|a| stalled.contains(&a.username));
         let errors: Vec<String> = rows.iter().filter_map(|f| f.error.clone()).collect();
         let left = rows.first().map(|r| r.peer.clone()).unwrap_or_default();
         for f in rows {
@@ -747,6 +753,11 @@ impl Jobs {
             }) => {
                 db::set_import_log(&self.db, id, &log).await?;
                 db::set_review(&self.db, id, &reason, &candidates).await?;
+                let blocker = match self.tagger.check_as_is(&dir).await {
+                    Ok(()) => String::new(),
+                    Err(e) => format!("{e:#}"),
+                };
+                db::set_as_is_blocker(&self.db, id, &blocker).await?;
                 let c = match candidates.first() {
                     None => cause::NO_CANDIDATES,
                     Some(b) if b.missing > 0 => cause::INCOMPLETE,

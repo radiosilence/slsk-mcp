@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.24
+
+- Each album waiting on a decision leads with one suggested action and the reason, the judgement otherwise made from the evidence on the card: a release that lines up track for track is **Use this release**; a release MusicBrainz lacks, with complete tags, is **Import as-is**; a copy with missing tracks, untagged files or lossy audio is **Try another copy**; audio only padded to 24-bit is **Import anyway**. Other actions stay available, less prominently.
+- Import as-is is checked when an album reaches review (`asIsBlocker`), and is offered only when it would be accepted; otherwise the card says why. When it is refused, the refusal is shown, rather than the card quietly returning to where it was.
+- Statuses read as a person would say them: needs a choice, check quality, filing, in library.
+- A fallback puts peers that stalled recently last, as grab does; the order was fixed when the job began.
+- `cargo test --release -p slsk-engine --test load -- --ignored` runs 40,000 downloads from 40 peers and 40,000 uploads to 40 clients through the test server, checking every byte. On a laptop both complete in about two minutes with no failures, the engines together peaking at 360–615 MB.
+
 ## 0.1.23
 
 - An assistant can work the review queue end to end. `jobTracks(id)` gives a job's files and their tags; `compareRelease(id, releaseId)` lines them up against a release track by track, with title and length differences and missing and extra tracks; `importAsIs(id, edits)` corrects album, artist, title or track numbers before filing, under the same coherence check as the files' own tags. The MCP guidance describes when each applies (sift).
