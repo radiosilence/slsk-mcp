@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.25
+
+- Grab ranks a folder named close to the query ahead of one carrying much else in its name: a leaf folder with more than three words beyond the query is treated like a variant. Scene-style release names ("Artist-Album-(CAT001)-WEB-FLAC-2019-GROUP") had ranked alongside the plain album folder.
+- Filing an album that is already filed, identically, succeeds rather than failing on existing files (sift). A retried import after a crash or double submission no longer ends in an error; a partial overlap with different files is still refused.
+
 ## 0.1.24
 
 - Each album waiting on a decision leads with one suggested action and the reason, the judgement otherwise made from the evidence on the card: a release that lines up track for track is **Use this release**; a release MusicBrainz lacks, with complete tags, is **Import as-is**; a copy with missing tracks, untagged files or lossy audio is **Try another copy**; audio only padded to 24-bit is **Import anyway**. Other actions stay available, less prominently.
