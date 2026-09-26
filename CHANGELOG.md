@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.15
+
+- Long tracks get a length allowance in proportion to their length, so a twenty-minute side that differs by twenty seconds between editions still matches (sift).
+- The import log shows what the best match's distance is made of: album, artist, titles and lengths (sift).
+
 ## 0.1.14
 
 - A download that receives nothing for twenty minutes moves to its next source. Some peers queue every file and never send one (no free slot for strangers, or a queue they never work through), which held albums indefinitely while four other sources sat untried. A slow peer that is sending is left alone.
