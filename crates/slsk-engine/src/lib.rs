@@ -43,6 +43,8 @@ pub struct EngineConfig {
     pub username: String,
     pub password: String,
     pub server: String,
+    /// 0 binds whatever port the system assigns; the bound port is what is
+    /// announced to the server.
     pub listen_port: u16,
     pub share_dirs: Vec<PathBuf>,
     /// Where the audio-probe cache lives between scans.
@@ -216,6 +218,8 @@ impl Engine {
     /// once the listener is bound; login progress is on [`Engine::status`].
     pub async fn start(cfg: EngineConfig) -> std::io::Result<Self> {
         let listener = tokio::net::TcpListener::bind(("0.0.0.0", cfg.listen_port)).await?;
+        let mut cfg = cfg;
+        cfg.listen_port = listener.local_addr()?.port();
         let (status, _) = watch::channel(Status::Connecting);
         let (events, _) = broadcast::channel(4096);
         let metrics = Arc::new(Metrics::default());
@@ -267,6 +271,11 @@ impl Engine {
 
     pub fn username(&self) -> String {
         self.0.username()
+    }
+
+    /// The port peers connect to.
+    pub fn listen_port(&self) -> u16 {
+        self.0.cfg.listen_port
     }
 
     /// Log in as someone else, or with a new password. Also the way out of

@@ -19,7 +19,7 @@ async fn server() -> Option<TestServer> {
 async fn engine(server: &TestServer, name: &str, shares: Vec<PathBuf>, state: &Path) -> Engine {
     let mut cfg = EngineConfig::new(name, "hunter2");
     cfg.server = server.address();
-    cfg.listen_port = free_port();
+    cfg.listen_port = 0;
     cfg.share_dirs = shares;
     cfg.state_dir = state.to_path_buf();
     let engine = Engine::start(cfg).await.unwrap();
