@@ -71,6 +71,8 @@ const RETRY_ROUNDS: u32 = 2;
 /// How long a download may go without a single byte before another source
 /// is tried.
 const STALL: Duration = Duration::from_secs(20 * 60);
+/// How long a search for another copy collects responses.
+const SEARCH_WAIT: Duration = Duration::from_secs(15);
 
 /// How long after a start before stalls are judged. The clock counts from
 /// the job row, so a restart does not forgive a stalled peer; this keeps the
@@ -529,10 +531,23 @@ impl Jobs {
                     }
                     entry.0
                 };
-                if now.duration_since(self.started) >= STARTUP_GRACE
-                    && now.duration_since(since) >= STALL
-                    && !job.alternates.0.is_empty()
-                {
+                let stalled = now.duration_since(self.started) >= STARTUP_GRACE
+                    && now.duration_since(since) >= STALL;
+                if stalled && job.alternates.0.is_empty() {
+                    // Nothing left to fall back to. Peers come and go, so a
+                    // copy that was not there when the job began may be now.
+                    // Restarting the clock spaces the searches a stall apart.
+                    self.stalled
+                        .lock()
+                        .expect("stalled")
+                        .insert(job.id, (now, received));
+                    let (jobs, engine, job) = (self.clone(), engine.clone(), job.clone());
+                    tokio::spawn(async move {
+                        if let Err(e) = jobs.search_again(&engine, &job).await {
+                            tracing::warn!(job = %job.id, error = %e, "search for another copy failed");
+                        }
+                    });
+                } else if stalled {
                     self.stalled.lock().expect("stalled").remove(&job.id);
                     tracing::info!(job = %job.id, "no data from the peer; trying another source");
                     if let Some(peer) = rows.first().map(|r| r.peer.clone()) {
@@ -1039,6 +1054,50 @@ impl Jobs {
         let rows = db::job_files(&self.db, id).await?;
         let _ = tokio::fs::remove_dir_all(self.complete_dir(&job)).await;
         self.fall_back(&engine, &job, &rows, cause).await
+    }
+
+    /// Search for the job's title again and move to the best copy found on
+    /// another peer, for a stalled job with no fallbacks left. Titles are the
+    /// query a grab was given, so this is the grab's own search.
+    async fn search_again(self: &Arc<Self>, engine: &Engine, job: &Job) -> Result<()> {
+        let rows = db::job_files(&self.db, job.id).await?;
+        let current = rows.first().map(|r| r.peer.clone()).unwrap_or_default();
+        let stalled = self.recently_stalled();
+        let search = async |filter: &crate::folders::Filter| -> Result<Vec<Folder>> {
+            let mut rx = engine.search(&job.title)?;
+            let deadline = tokio::time::Instant::now() + SEARCH_WAIT;
+            let mut responses = Vec::new();
+            while let Ok(Some(r)) = tokio::time::timeout_at(deadline, rx.recv()).await {
+                responses.push(r);
+            }
+            Ok(
+                crate::folders::relevant(crate::folders::group(&responses, filter), &job.title)
+                    .into_iter()
+                    .filter(|f| f.username != current && !stalled.contains(&f.username))
+                    .collect(),
+            )
+        };
+        let lossless = crate::folders::Filter {
+            lossless: true,
+            ..Default::default()
+        };
+        let mut found = search(&lossless).await?;
+        if found.is_empty() {
+            found = search(&Default::default()).await?;
+        }
+        if found.is_empty() {
+            tracing::info!(job = %job.id, "no other copy online; still waiting on {current}");
+            return Ok(());
+        }
+        tracing::info!(job = %job.id, copies = found.len(), "found other copies; moving off {current}");
+        self.stalled_peers
+            .lock()
+            .expect("stalled peers")
+            .insert(current, tokio::time::Instant::now());
+        let mut job = job.clone();
+        job.alternates = Json(found.into_iter().take(4).map(Alternate::from).collect());
+        self.fall_back(engine, &job, &rows, cause::STALLED_PEER)
+            .await
     }
 
     /// Retry a failed or cancelled job from its current source.

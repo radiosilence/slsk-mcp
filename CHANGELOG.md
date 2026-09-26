@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.27
+
+- An album stalled on its only known copy searches again for its title, and moves to the best copy on another peer if one is online. Without this, a rare album found on one peer waited on that peer indefinitely. Searches are spaced a stall (twenty minutes) apart and skip peers that stalled recently.
+
 ## 0.1.26
 
 - A download counts as stalled when no bytes have arrived for twenty minutes, rather than when none ever have. A peer that sent the first file and queued the rest behind hundreds of others was treated as sending, so the album never moved to another copy.
