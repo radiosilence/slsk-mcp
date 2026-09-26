@@ -72,7 +72,7 @@ band and are not detected
 ## Running it
 
 It is a long-running daemon: it holds one Soulseek login, shares the library
-continuously, and serves the UI and MCP on two ports. Each of these works;
+continuously, and serves the UI, MCP and metrics on three ports. Each of these works;
 pick by what the host already runs.
 
 - **Container** — `ghcr.io/radiosilence/slsk-mcp`, a static binary on
@@ -93,8 +93,9 @@ Whatever runs it, three things matter:
    unreachable client can only download from the half of the network that is
    reachable, and uploads to the other half never happen.
 2. **The internal port** (`INTERNAL_ADDR`) trusts `X-Slsk-*` credential
-   headers. Bind it to loopback or firewall it to the MCP gateway and the
-   metrics scraper; never publish it.
+   headers. Bind it to loopback or firewall it to the MCP gateway; never
+   publish it. Metrics have a port of their own (`METRICS_ADDR`) so the
+   scraper never needs this one.
 3. **The library and downloads on one filesystem**, so an import is a rename
    rather than a copy of every album.
 
@@ -103,7 +104,7 @@ holds hundreds. Raise `LimitNOFILE`/`ulimit -n` above the default 1024.
 
 ## Monitoring
 
-`/metrics` on the internal port is Prometheus text: bytes up and down, uploads
+`/metrics` on the metrics port is Prometheus text: bytes up and down, uploads
 and downloads by state, the upload queue, distinct users served, searches
 received, answered and shed under load, distributed-network position, shared
 files, folders and bytes, jobs by status, unread messages and open wishes.
@@ -128,15 +129,17 @@ startup.
 | `UPLOAD_SLOTS`, `UPLOAD_LIMIT`, `DOWNLOAD_LIMIT` | `5`, `0`, `0` | Limits in bytes per second; 0 is unlimited. |
 | `BEETS_CONFIG` | — | A beets `config.yaml` for the importer's template and replacements. |
 | `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | — | Required for the UI. `UI_INSECURE_NO_AUTH=1` disables sign-in and is only accepted with a loopback `UI_ADDR`. |
-| `UI_ADDR`, `INTERNAL_ADDR`, `PUBLIC_URL` | `0.0.0.0:8080`, `0.0.0.0:8081` | |
+| `UI_ADDR`, `INTERNAL_ADDR`, `METRICS_ADDR`, `PUBLIC_URL` | `0.0.0.0:8080`, `0.0.0.0:8081`, `0.0.0.0:9464` | |
 
-## Two listeners
+## Three listeners
 
-The UI listens on one port behind OIDC. MCP, GraphQL and `/metrics` listen on
-another, where `X-Slsk-Username`/`X-Slsk-Password` headers are trusted
-without question — that is how the MCP gateway passes the signed-in user's
-account. That port must be reachable from the gateway and the metrics
-scraper only; the chart's NetworkPolicy enforces it.
+The UI listens on one port behind OIDC. MCP and GraphQL listen on another,
+where `X-Slsk-Username`/`X-Slsk-Password` headers are trusted without
+question — that is how the MCP gateway passes the signed-in user's account —
+so it must be reachable from the gateway only. `/metrics` has a third port
+to itself, so a scraper can be admitted without being admitted to the second.
+The chart's NetworkPolicy admits the gateway to one and the metrics agent to
+the other, and nothing else to either.
 
 ## Security notes
 

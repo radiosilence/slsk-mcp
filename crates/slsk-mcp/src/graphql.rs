@@ -563,6 +563,25 @@ pub(crate) async fn search(
 /// Search, pick the best relevant folder, keep four fallbacks, start a job.
 /// Without a filter it prefers lossless and settles for lossy only when
 /// there is no lossless copy at all.
+/// Peers holding downloads of ours in their queue while sending none.
+fn stuck_peers(downloads: &[slsk_engine::TransferView]) -> std::collections::HashSet<String> {
+    let mut queued = std::collections::HashSet::new();
+    let mut sending = std::collections::HashSet::new();
+    for t in downloads {
+        match t.state {
+            "remote_queued" => {
+                queued.insert(t.username.clone());
+            }
+            "starting" | "transferring" => {
+                sending.insert(t.username.clone());
+            }
+            _ => {}
+        }
+    }
+    queued.retain(|u| !sending.contains(u));
+    queued
+}
+
 pub(crate) async fn grab(
     app: &App,
     query: &str,
@@ -577,6 +596,12 @@ pub(crate) async fn grab(
     let mut found = folders::relevant(search(app, query, wait, &filter).await?, query);
     if found.is_empty() && !strict {
         found = folders::relevant(search(app, query, wait, &Filter::default()).await?, query);
+    }
+    // A peer we are already queued with and receiving nothing from answers
+    // searches readily and sends nothing; its folders go last.
+    if let Some(engine) = app.session.engine() {
+        let stuck = stuck_peers(&engine.downloads());
+        found.sort_by_key(|f| stuck.contains(&f.username));
     }
     let mut found = found.into_iter();
     let best = found

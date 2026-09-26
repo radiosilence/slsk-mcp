@@ -118,7 +118,10 @@ async fn main() -> anyhow::Result<()> {
 
     let internal = internal_router(app.clone());
     let internal_listener = tokio::net::TcpListener::bind(&cfg.internal_addr).await?;
-    tracing::info!(addr = %cfg.internal_addr, "internal listener: /mcp /graphql /metrics");
+    tracing::info!(addr = %cfg.internal_addr, "internal listener: /mcp /graphql");
+    let metrics_listener = tokio::net::TcpListener::bind(&cfg.metrics_addr).await?;
+    tracing::info!(addr = %cfg.metrics_addr, "metrics: /metrics");
+    let metrics = metrics_router(app.clone());
     let ui_listener = tokio::net::TcpListener::bind(&cfg.ui_addr).await?;
     tracing::info!(addr = %cfg.ui_addr, "web UI");
     let ui = ui::router(app.clone());
@@ -133,15 +136,20 @@ async fn main() -> anyhow::Result<()> {
                 .with_graceful_shutdown(shutdown())
                 .await
         },
+        async {
+            axum::serve(metrics_listener, metrics)
+                .with_graceful_shutdown(shutdown())
+                .await
+        },
     )?;
     tracing::info!("stopping; waiting for any import in progress");
     jobs.drain().await;
     Ok(())
 }
 
-/// MCP, GraphQL and metrics. Credentials in headers are trusted here, so this
-/// listener is reachable from the gateway and the metrics scraper and nothing
-/// else — the deployment's NetworkPolicy is what enforces that.
+/// MCP and GraphQL. Credentials in headers are trusted here, so this listener
+/// is reachable from the gateway and nothing else — the deployment's
+/// NetworkPolicy is what enforces that.
 fn internal_router(app: Arc<App>) -> Router {
     use rmcp::transport::streamable_http_server::{
         StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
@@ -175,27 +183,29 @@ fn internal_router(app: Arc<App>) -> Router {
                 }
             }),
         )
-        .route(
-            "/metrics",
-            get({
-                let app = app.clone();
-                move || {
-                    let app = app.clone();
-                    async move {
-                        let mut out = String::new();
-                        if let Some(engine) = app.session.engine() {
-                            engine.metrics().render(&mut out);
-                        }
-                        state_metrics(&app, &mut out).await;
-                        (
-                            [(http::header::CONTENT_TYPE, "text/plain; version=0.0.4")],
-                            out,
-                        )
-                    }
-                }
-            }),
-        )
         .route("/healthz", get(|| async { "ok" }))
+}
+
+/// Metrics alone, on a listener of their own, so a scraper can be let in
+/// without being let near the port that believes credentials in headers.
+fn metrics_router(app: Arc<App>) -> Router {
+    Router::new().route(
+        "/metrics",
+        get(move || {
+            let app = app.clone();
+            async move {
+                let mut out = String::new();
+                if let Some(engine) = app.session.engine() {
+                    engine.metrics().render(&mut out);
+                }
+                state_metrics(&app, &mut out).await;
+                (
+                    [(http::header::CONTENT_TYPE, "text/plain; version=0.0.4")],
+                    out,
+                )
+            }
+        }),
+    )
 }
 
 /// Gauges read from current state at scrape time, where counting as things

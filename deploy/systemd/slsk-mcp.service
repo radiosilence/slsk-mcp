@@ -17,6 +17,7 @@ Environment=STATE_DIR=/var/lib/slsk-mcp
 Environment=LISTEN_PORT=2240
 Environment=UI_ADDR=127.0.0.1:8080
 Environment=INTERNAL_ADDR=127.0.0.1:8081
+Environment=METRICS_ADDR=127.0.0.1:9464
 Environment=PUBLIC_URL=https://slsk.example.com
 Environment=OIDC_ISSUER=https://auth.example.com
 Environment=OIDC_CLIENT_ID=slsk

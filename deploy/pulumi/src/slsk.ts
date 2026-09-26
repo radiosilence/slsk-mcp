@@ -9,11 +9,12 @@ const NAME = "slsk";
 const SECRETS_NAME = "slsk-secrets";
 const UI_PORT = 8080;
 /**
- * MCP, GraphQL and metrics. Credentials arriving in headers on this port are
- * trusted, so the NetworkPolicy admits the gateway and the node's scraper
- * and nothing else.
+ * MCP and GraphQL. Credentials arriving in headers on this port are trusted,
+ * so the NetworkPolicy admits the gateway and nothing else.
  */
 export const INTERNAL_PORT = 8081;
+/** `/metrics` alone, so the scraper is let in without reaching the above. */
+export const METRICS_PORT = 9464;
 
 const secretRef = (key: string) => ({
   valueFrom: { secretKeyRef: { name: SECRETS_NAME, key } },
@@ -76,6 +77,8 @@ export function createSlsk(
     account?: { username: pulumi.Input<string>; password: pulumi.Input<string> };
     /** Pod labels allowed to reach the internal port. */
     gatewayPodLabels?: Record<string, string>;
+    /** Pod labels allowed to scrape the metrics port. */
+    scraperPodLabels?: Record<string, string>;
   },
 ) {
   const conf = SlskConfSchema.parse(confArgs);
@@ -174,7 +177,7 @@ export function createSlsk(
             labels: { app: NAME },
             annotations: {
               "prometheus.io/scrape": "true",
-              "prometheus.io/port": String(INTERNAL_PORT),
+              "prometheus.io/port": String(METRICS_PORT),
               "prometheus.io/path": "/metrics",
               // Restart when the importer's config changes; a mounted file
               // alone would be read once, at start.
@@ -269,6 +272,7 @@ export function createSlsk(
                 ports: [
                   { name: "ui", containerPort: UI_PORT },
                   { name: "internal", containerPort: INTERNAL_PORT },
+                  { name: "metrics", containerPort: METRICS_PORT },
                   {
                     name: "peer",
                     protocol: "TCP",
@@ -290,6 +294,7 @@ export function createSlsk(
                   { name: "DOWNLOAD_LIMIT", value: String(conf.downloadLimit) },
                   { name: "UI_ADDR", value: `0.0.0.0:${UI_PORT}` },
                   { name: "INTERNAL_ADDR", value: `0.0.0.0:${INTERNAL_PORT}` },
+                  { name: "METRICS_ADDR", value: `0.0.0.0:${METRICS_PORT}` },
                   { name: "PUBLIC_URL", value: `https://${opts.hostname}` },
                   { name: "OIDC_ISSUER", value: opts.oidc.issuer },
                   { name: "OIDC_CLIENT_ID", value: opts.oidc.clientId },
@@ -416,14 +421,19 @@ export function createSlsk(
             ],
             ports: [{ protocol: "TCP", port: UI_PORT }],
           },
-          // Headers carrying credentials are believed here, so: the gateway,
-          // and the node, whose host-network scraper reads /metrics.
+          // Headers carrying credentials are believed here: the gateway only.
           {
             from: [
               { podSelector: { matchLabels: opts.gatewayPodLabels ?? { app: "mcp-gateway" } } },
-              { ipBlock: { cidr: "192.168.0.0/16" } },
             ],
             ports: [{ protocol: "TCP", port: INTERNAL_PORT }],
+          },
+          // The metrics agent, to /metrics and nothing else.
+          {
+            from: [
+              { podSelector: { matchLabels: opts.scraperPodLabels ?? { app: "metrics-vmagent" } } },
+            ],
+            ports: [{ protocol: "TCP", port: METRICS_PORT }],
           },
           // Peers, from anywhere: that is what a peer port is.
           {

@@ -43,6 +43,8 @@ pub struct Config {
     /// MCP, GraphQL and metrics. Trusts credential headers, so it must only
     /// be reachable from the gateway and the metrics scraper.
     pub internal_addr: String,
+    /// `/metrics` only.
+    pub metrics_addr: String,
     /// The web UI, behind OIDC.
     pub ui_addr: String,
     pub public_url: String,
@@ -135,6 +137,7 @@ impl Config {
             upload_limit: num("UPLOAD_LIMIT", 0)?,
             download_limit: num("DOWNLOAD_LIMIT", 0)?,
             internal_addr: or("INTERNAL_ADDR", "0.0.0.0:8081"),
+            metrics_addr: or("METRICS_ADDR", "0.0.0.0:9464"),
             ui_addr,
             public_url: or("PUBLIC_URL", "http://127.0.0.1:8080")
                 .trim_end_matches('/')

@@ -13,7 +13,8 @@ services:
     ports:
       - "2240:2240" # Soulseek peers — public
       - "127.0.0.1:8080:8080" # web UI — put a TLS proxy in front
-      - "127.0.0.1:8081:8081" # MCP, GraphQL, /metrics — trusts credential headers; never expose
+      - "127.0.0.1:8081:8081" # MCP, GraphQL — trusts credential headers; never expose
+      - "127.0.0.1:9464:9464" # /metrics
     environment:
       DATABASE_URL: postgres://slsk:${POSTGRES_PASSWORD}@postgres:5432/slsk
       SEAL_KEY: ${SEAL_KEY} # openssl rand -base64 32
