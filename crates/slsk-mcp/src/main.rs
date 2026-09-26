@@ -71,6 +71,9 @@ async fn main() -> anyhow::Result<()> {
     // Staging is ours; moving out of it is the whole point.
     sift_cfg.move_files = true;
     sift_cfg.musicbrainz_contact = "https://github.com/radiosilence/slsk-mcp".into();
+    // The root filesystem is read-only in a container; the state volume is
+    // where a cache survives restarts.
+    sift_cfg.cache_dir = Some(cfg.state_dir.join("cache"));
     let importer = Arc::new(sift::Importer::new(sift_cfg));
 
     let session = Session::new(cfg.clone(), db.clone());

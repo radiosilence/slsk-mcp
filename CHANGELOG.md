@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.8
+
+- MusicBrainz responses are kept in the state directory — releases for a week, searches for a day — so retrying an import, or importing another copy of an album, asks MusicBrainz for nothing it has already answered (sift).
+
 ## 0.1.7
 
 - MusicBrainz rate limiting is waited out rather than failing the import: up to ten attempts, honouring `Retry-After`, with the request gate held meanwhile (sift).
