@@ -224,6 +224,60 @@ const VARIANTS: &[&str] = &[
     "podcast",
 ];
 
+/// How many unasked-for words a folder's name may carry before it ranks
+/// behind folders named closer to the query. A threshold, not a count to
+/// minimise: a lossless copy named `Artist - Album [WEB FLAC 24-44.1]` should
+/// not lose to a lossy one named `Album`.
+const MAX_EXTRA_WORDS: usize = 3;
+
+/// Words folder names carry that say nothing about which release it is:
+/// numbers (years, disc and track counts), formats and sources, bit depths
+/// and rates, catalogue numbers mixing letters and digits, and joining words.
+fn is_clutter(w: &str) -> bool {
+    const WORDS: &[&str] = &[
+        "flac",
+        "mp3",
+        "wav",
+        "aiff",
+        "alac",
+        "ogg",
+        "opus",
+        "aac",
+        "m4a",
+        "web",
+        "cd",
+        "vinyl",
+        "lp",
+        "ep",
+        "single",
+        "album",
+        "bit",
+        "bits",
+        "khz",
+        "hz",
+        "hi",
+        "res",
+        "hires",
+        "lossless",
+        "24bit",
+        "16bit",
+        "the",
+        "and",
+        "a",
+        "of",
+        "by",
+        "va",
+        "various",
+        "artists",
+        "remaster",
+        "remastered",
+    ];
+    w.is_empty()
+        || w.chars().all(|c| c.is_ascii_digit())
+        || (w.chars().any(|c| c.is_ascii_digit()) && w.chars().any(|c| c.is_alphabetic()))
+        || WORDS.contains(&w)
+}
+
 /// Folders that answer the query, best first, keeping each tier in the
 /// order it came in. Peers match words anywhere in a path, so a search for
 /// an album also returns every other folder under the artist's directory:
@@ -247,7 +301,15 @@ pub fn relevant(folders: Vec<Folder>, query: &str) -> Vec<Folder> {
         let variant = leaf
             .split(' ')
             .any(|w| VARIANTS.contains(&w) && !wanted.contains(&w));
-        Some(u8::from(variant))
+        // Words in the folder's own name that the query did not ask for and
+        // that are not the usual clutter: many of them mean something else
+        // by the artist ("Artist (2021) Cyberpunk 2077 - Radio, Vol. 4"),
+        // not the album asked for.
+        let extra = leaf
+            .split(' ')
+            .filter(|w| !wanted.contains(w) && !is_clutter(w))
+            .count();
+        Some(u8::from(variant) * 2 + u8::from(extra > MAX_EXTRA_WORDS))
     };
     let mut ranked: Vec<(Option<u8>, Folder)> =
         folders.into_iter().map(|f| (tier(&f), f)).collect();
@@ -457,5 +519,49 @@ mod tests {
             paths(relevant(folders(), "nina kraviz fabric"))[0],
             "m\\Nina Kraviz - Fabric 91_ Nina Kraviz"
         );
+    }
+
+    #[test]
+    fn a_folder_named_like_the_query_beats_one_with_much_else_in_it() {
+        let folders = || {
+            vec![
+                folder(
+                    "a",
+                    "m\\Nina Kraviz (Russian DJ)\\Nina Kraviz (2021) Cyberpunk 2077 - Radio, Vol. 4 - Original Soundtrack",
+                ),
+                folder("b", "m\\Nina Kraviz\\Nina Kraviz (2012)"),
+            ]
+        };
+        assert_eq!(
+            paths(relevant(folders(), "nina kraviz nina kraviz"))[0],
+            "m\\Nina Kraviz\\Nina Kraviz (2012)"
+        );
+        // Asking for the soundtrack makes its words wanted.
+        assert_eq!(
+            paths(relevant(
+                folders(),
+                "nina kraviz cyberpunk radio original soundtrack"
+            ))
+            .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn scene_release_names_are_mostly_clutter() {
+        let found = relevant(
+            vec![folder(
+                "a",
+                "m\\Techno\\202609\\Amelie_Lens-AURA-EXH022-24BIT-WEB-FLAC-2026-WAVED",
+            )],
+            "amelie lens aura",
+        );
+        assert_eq!(found.len(), 1);
+        for w in ["exh022", "24bit", "web", "flac", "2026", "dc215", "b2b001"] {
+            assert!(is_clutter(w), "{w}");
+        }
+        for w in ["cyberpunk", "soundtrack", "radio", "waved"] {
+            assert!(!is_clutter(w), "{w}");
+        }
     }
 }
