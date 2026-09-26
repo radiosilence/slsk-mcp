@@ -615,6 +615,20 @@ impl Jobs {
                     ),
                 );
             }
+            // Files that will not parse are this copy's fault, not the
+            // album's: another source is worth trying without being asked.
+            Err(e @ (sift::ImportError::Meta(_) | sift::ImportError::Empty(_)))
+                if !job.alternates.0.is_empty() =>
+            {
+                db::set_status(&self.db, id, "failed", Some(&format!("{e:#}"))).await?;
+                tracing::info!(%id, error = %e, "unreadable copy; trying another source");
+                let jobs = self.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = jobs.next_source(id).await {
+                        tracing::warn!(%id, error = %e, "could not move to another source");
+                    }
+                });
+            }
             Err(e) => {
                 db::set_status(&self.db, id, "failed", Some(&format!("{e:#}"))).await?;
             }

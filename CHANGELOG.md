@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.18
+
+- A copy whose files will not parse (a truncated or corrupt FLAC) moves to the next source by itself. It stopped as `failed`, waiting for someone to ask for another copy, though the fault was the copy's and not the album's.
+- Compilations tagged `VA` are matched as "Various Artists" (sift).
+
 ## 0.1.17
 
 - `/metrics` moves to a port of its own (`METRICS_ADDR`, default 9464). The chart's NetworkPolicy had admitted the scraper to the internal port on the assumption it ran on the host network; it runs as a pod, so every scrape was refused and the dashboards were empty. Admitting it to the internal port instead would have let the metrics agent send credentials the service trusts, so it is admitted to the metrics port alone.
