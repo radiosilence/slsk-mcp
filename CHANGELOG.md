@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.21
+
+- DJ-mix folders (`mix`, `mixed`, `fabric`, `podcast`) rank behind the album unless the query names them. "Artist - fabric 91: Artist" repeats the artist's name, so it passed for the self-titled album.
+
 ## 0.1.20
 
 - **Import as-is** (`importAsIs`) files an album in review by its files' own tags, for a release MusicBrainz does not have. It is refused, and the album stays in review with the reason, unless the tags describe one album (sift).

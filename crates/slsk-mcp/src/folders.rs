@@ -215,6 +215,13 @@ const VARIANTS: &[&str] = &[
     "covers",
     "commentary",
     "interview",
+    // DJ mixes: an artist's name appears twice in "Artist - fabric 91: Artist",
+    // which otherwise passes for the self-titled album.
+    "mix",
+    "mixed",
+    "mixes",
+    "fabric",
+    "podcast",
 ];
 
 /// Folders that answer the query, best first, keeping each tier in the
@@ -432,5 +439,23 @@ mod tests {
         ];
         let all = group(&rs, &Filter::default());
         assert_eq!(all[0].username, "flac");
+    }
+
+    #[test]
+    fn a_dj_mix_waits_behind_the_self_titled_album() {
+        let folders = || {
+            vec![
+                folder("a", "m\\Nina Kraviz - Fabric 91_ Nina Kraviz"),
+                folder("b", "m\\Nina Kraviz\\Nina Kraviz (2012)"),
+            ]
+        };
+        assert_eq!(
+            paths(relevant(folders(), "nina kraviz nina kraviz"))[0],
+            "m\\Nina Kraviz\\Nina Kraviz (2012)"
+        );
+        assert_eq!(
+            paths(relevant(folders(), "nina kraviz fabric"))[0],
+            "m\\Nina Kraviz - Fabric 91_ Nina Kraviz"
+        );
     }
 }
