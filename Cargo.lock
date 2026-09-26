@@ -2793,7 +2793,7 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 [[package]]
 name = "sift"
 version = "0.1.0"
-source = "git+https://github.com/radiosilence/sift#ac8307bdbf1f578bb78a76ca2f0306982cc7071c"
+source = "git+https://github.com/radiosilence/sift#fd562a2f8b526abd45ae2c147a957babe1cbca29"
 dependencies = [
  "anyhow",
  "bytes",

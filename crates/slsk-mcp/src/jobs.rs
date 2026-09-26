@@ -36,6 +36,9 @@ pub struct Jobs {
     /// Imports touch the library tree; one at a time keeps two albums from
     /// racing for the same destination.
     import_lock: Mutex<()>,
+    /// Imports put off while MusicBrainz is unavailable: when to try again,
+    /// and the release a person chose, if any.
+    deferred: std::sync::Mutex<HashMap<Uuid, (tokio::time::Instant, Option<String>)>>,
     wake: Notify,
 }
 
@@ -56,6 +59,7 @@ impl Jobs {
             spectrograms,
             tagger,
             import_lock: Mutex::new(()),
+            deferred: Default::default(),
             wake: Notify::new(),
         })
     }
@@ -298,6 +302,22 @@ impl Jobs {
     }
 
     async fn tick(self: &Arc<Self>) -> Result<()> {
+        let due: Vec<_> = {
+            let mut deferred = self.deferred.lock().expect("deferred imports");
+            let now = tokio::time::Instant::now();
+            let ids: Vec<Uuid> = deferred
+                .iter()
+                .filter(|(_, (at, _))| *at <= now)
+                .map(|(id, _)| *id)
+                .collect();
+            ids.into_iter()
+                .filter_map(|id| deferred.remove(&id).map(|(_, r)| (id, r)))
+                .collect()
+        };
+        for (id, release) in due {
+            let jobs = self.clone();
+            tokio::spawn(async move { jobs.import(id, release).await });
+        }
         let Some(engine) = self.session.engine().cloned() else {
             return Ok(());
         };
@@ -400,13 +420,16 @@ impl Jobs {
         let job = db::job(&self.db, id).await?.context("no such job")?;
         // Out of incomplete/ and into complete/ first, so what is left for a
         // person to look at is in one findable place whatever happens next.
+        // A fresh download replaces what an earlier attempt left there.
         let dir = self.complete_dir(&job);
         let incoming = self.dir(id);
-        if tokio::fs::try_exists(&incoming).await.unwrap_or(false)
-            && !tokio::fs::try_exists(&dir).await.unwrap_or(false)
-            && let Err(e) = tokio::fs::rename(&incoming, &dir).await
-        {
-            tracing::warn!(error = %e, "could not move {} to {}", incoming.display(), dir.display());
+        if tokio::fs::try_exists(&incoming).await.unwrap_or(false) {
+            if tokio::fs::try_exists(&dir).await.unwrap_or(false) {
+                let _ = tokio::fs::remove_dir_all(&dir).await;
+            }
+            if let Err(e) = tokio::fs::rename(&incoming, &dir).await {
+                tracing::warn!(error = %e, "could not move {} to {}", incoming.display(), dir.display());
+            }
         }
         let dir = if tokio::fs::try_exists(&dir).await.unwrap_or(false) {
             dir
@@ -461,6 +484,24 @@ impl Jobs {
             }) => {
                 db::set_import_log(&self.db, id, &log).await?;
                 db::set_review(&self.db, id, &reason, &candidates).await?;
+            }
+            // MusicBrainz being busy says nothing about the files, so the job
+            // waits rather than asking a person to retry it.
+            Err(e) if e.is_transient() => {
+                db::set_status(
+                    &self.db,
+                    id,
+                    "importing",
+                    Some(&format!("{e:#}; trying again in 5 minutes")),
+                )
+                .await?;
+                self.deferred.lock().expect("deferred imports").insert(
+                    id,
+                    (
+                        tokio::time::Instant::now() + Duration::from_secs(300),
+                        release,
+                    ),
+                );
             }
             Err(e) => {
                 db::set_status(&self.db, id, "failed", Some(&format!("{e:#}"))).await?;
