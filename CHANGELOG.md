@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.22
+
+- Fallback sources keep the file list the search found, and use it when the peer will not list the folder, as the first choice already did. A fallback kept only its folder name, so a peer that did not answer a folder listing was no fallback at all.
+- Stalls are not judged for three minutes after a start. The stall clock counts from the job row, so the first tick after a restart judged every overdue job before the session had logged in, and every fallback's folder listing failed with it: eight albums failed with four untried copies each.
+- A peer that stalls a download is remembered for a day, across restarts, and grab ranks its folders last. Cancelling our queue with it made it look idle again, and it would be chosen again.
+- Outcome history records the peer involved.
+- An album whose every source failed says why ("the peer sent nothing for twenty minutes, and no other copy could be fetched") rather than "download failed".
+
 ## 0.1.21
 
 - DJ-mix folders (`mix`, `mixed`, `fabric`, `podcast`) rank behind the album unless the query names them. "Artist - fabric 91: Artist" repeats the artist's name, so it passed for the self-titled album.

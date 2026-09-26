@@ -661,24 +661,19 @@ pub(crate) async fn grab(
     if found.is_empty() && !strict {
         found = folders::relevant(search(app, query, wait, &Filter::default()).await?, query);
     }
-    // A peer we are already queued with and receiving nothing from answers
-    // searches readily and sends nothing; its folders go last.
+    // A peer we are queued with and receiving nothing from, or one that
+    // stalled us recently, answers searches readily and sends nothing; its
+    // folders go last.
     if let Some(engine) = app.session.engine() {
-        let stuck = stuck_peers(&engine.downloads());
+        let mut stuck = stuck_peers(&engine.downloads());
+        stuck.extend(app.jobs.recently_stalled());
         found.sort_by_key(|f| stuck.contains(&f.username));
     }
     let mut found = found.into_iter();
     let best = found
         .next()
         .ok_or_else(|| Error::new(format!("nothing found for {query:?}")))?;
-    let alternates = found
-        .take(4)
-        .map(|f| Alternate {
-            username: f.username,
-            folder: f.path,
-            folder_raw: f.remote_path.as_bytes().to_vec(),
-        })
-        .collect();
+    let alternates = found.take(4).map(Alternate::from).collect();
     Ok(app
         .jobs
         .from_folder(&best, Some(query.to_string()), alternates)

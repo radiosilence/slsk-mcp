@@ -58,6 +58,26 @@ pub struct Alternate {
     pub username: String,
     pub folder: String,
     pub folder_raw: Vec<u8>,
+    /// What the search found in it, `(remote path, size)`: used when the peer
+    /// will not list the folder, as for the first choice. Empty in rows
+    /// written before it was kept.
+    #[serde(default)]
+    pub files: Vec<(Vec<u8>, u64)>,
+}
+
+impl From<crate::folders::Folder> for Alternate {
+    fn from(f: crate::folders::Folder) -> Self {
+        Self {
+            files: f
+                .files
+                .iter()
+                .map(|x| (x.remote.as_bytes().to_vec(), x.size))
+                .collect(),
+            username: f.username,
+            folder: f.path,
+            folder_raw: f.remote_path.as_bytes().to_vec(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -243,13 +263,14 @@ pub async fn record_event(
     db: &PgPool,
     job_id: Uuid,
     title: &str,
+    peer: Option<&str>,
     outcome: &str,
     cause: Option<&str>,
     detail: Option<&str>,
 ) -> sqlx::Result<()> {
     sqlx::query(
-        "INSERT INTO job_events (job_id, title, version, outcome, cause, detail) \
-         VALUES ($1, $2, $3, $4, $5, $6)",
+        "INSERT INTO job_events (job_id, title, version, outcome, cause, detail, peer) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7)",
     )
     .bind(job_id)
     .bind(title)
@@ -257,6 +278,7 @@ pub async fn record_event(
     .bind(outcome)
     .bind(cause)
     .bind(detail)
+    .bind(peer)
     .execute(db)
     .await
     .map(|_| ())
@@ -293,6 +315,19 @@ pub async fn event_counts(db: &PgPool) -> sqlx::Result<Vec<(String, Option<Strin
     sqlx::query_as("SELECT outcome, cause, count(*) FROM job_events GROUP BY 1, 2")
         .fetch_all(db)
         .await
+}
+
+/// Peers that stalled a download in the last day. Events from before the
+/// peer was recorded name it through their job's source.
+pub async fn stalled_peers(db: &PgPool) -> sqlx::Result<Vec<String>> {
+    sqlx::query_scalar(
+        "SELECT DISTINCT coalesce(e.peer, j.source->>'username') FROM job_events e \
+         LEFT JOIN jobs j ON j.id = e.job_id \
+         WHERE e.cause = 'stalled_peer' AND e.at > now() - interval '1 day' \
+         AND coalesce(e.peer, j.source->>'username') IS NOT NULL",
+    )
+    .fetch_all(db)
+    .await
 }
 
 pub async fn set_imported(db: &PgPool, id: Uuid, path: &str) -> sqlx::Result<()> {

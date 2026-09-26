@@ -72,6 +72,12 @@ const RETRY_ROUNDS: u32 = 2;
 /// is tried.
 const STALL: Duration = Duration::from_secs(20 * 60);
 
+/// How long after a start before stalls are judged. The clock counts from
+/// the job row, so a restart does not forgive a stalled peer; this keeps the
+/// first tick from judging every peer, and every fallback's folder listing,
+/// before the session has logged in and reached anyone.
+const STARTUP_GRACE: Duration = Duration::from_secs(3 * 60);
+
 pub struct Jobs {
     db: PgPool,
     session: Arc<Session>,
@@ -94,6 +100,13 @@ pub struct Jobs {
     closing: std::sync::atomic::AtomicBool,
     /// When each downloading job was first seen with nothing arriving.
     stalled: std::sync::Mutex<HashMap<Uuid, tokio::time::Instant>>,
+    /// When this process started: stalls are not judged until the session
+    /// has had time to reach the network again.
+    started: tokio::time::Instant,
+    /// Peers that queued a download and sent nothing, and when: grab ranks
+    /// their folders last for a day, since cancelling our queue with them
+    /// makes them look idle again.
+    stalled_peers: std::sync::Mutex<HashMap<String, tokio::time::Instant>>,
     wake: Notify,
 }
 
@@ -118,6 +131,8 @@ impl Jobs {
             retried: Default::default(),
             closing: Default::default(),
             stalled: Default::default(),
+            started: tokio::time::Instant::now(),
+            stalled_peers: Default::default(),
             wake: Notify::new(),
         })
     }
@@ -164,7 +179,16 @@ impl Jobs {
     ) -> Result<Job> {
         let engine = self.session.require()?.clone();
         let files = self
-            .listing(&engine, &folder.username, &folder.remote_path, Some(folder))
+            .listing(
+                &engine,
+                &folder.username,
+                &folder.remote_path,
+                &folder
+                    .files
+                    .iter()
+                    .map(|f| (f.remote.clone(), f.size))
+                    .collect::<Vec<_>>(),
+            )
             .await?;
         let id = Uuid::new_v4();
         let title = title.unwrap_or_else(|| {
@@ -246,7 +270,7 @@ impl Jobs {
         engine: &Engine,
         username: &str,
         folder: &RawStr,
-        fallback: Option<&Folder>,
+        fallback: &[(RawStr, u64)],
     ) -> Result<Vec<(RawStr, u64, String)>> {
         let root = folder.to_string_lossy();
         let from_dirs = |dirs: Vec<Directory>| -> Vec<(RawStr, u64, String)> {
@@ -274,21 +298,20 @@ impl Jobs {
                 if let Err(e) = other {
                     tracing::debug!(%username, error = %e, "folder listing failed; using search results");
                 }
-                let folder = fallback.context("the peer did not list the folder")?;
+                anyhow::ensure!(!fallback.is_empty(), "the peer did not list the folder");
                 // Disc folders are grouped under their album, so each file's
                 // own directory still decides where it lands.
-                Ok(folder
-                    .files
+                Ok(fallback
                     .iter()
-                    .map(|f| {
-                        let path = f.remote.to_string_lossy();
+                    .map(|(remote, size)| {
+                        let path = remote.to_string_lossy();
                         let dir = path.rsplit_once('\\').map_or("", |(d, _)| d);
                         let sub = dir
                             .strip_prefix(&root)
                             .unwrap_or("")
                             .trim_start_matches('\\')
                             .replace('\\', "/");
-                        (f.remote.clone(), f.size, sub)
+                        (remote.clone(), *size, sub)
                     })
                     .collect())
             }
@@ -342,6 +365,15 @@ impl Jobs {
     /// Re-queue unfinished downloads after a restart. The engine resumes each
     /// from its `.part`.
     pub async fn resume(self: &Arc<Self>) -> Result<()> {
+        // Remembered across restarts: a peer that stalled us yesterday is
+        // no more likely to send today because this process is new.
+        let now = tokio::time::Instant::now();
+        for peer in db::stalled_peers(&self.db).await.unwrap_or_default() {
+            self.stalled_peers
+                .lock()
+                .expect("stalled peers")
+                .insert(peer, now);
+        }
         let engine = self.session.require()?.clone();
         for job in db::jobs(&self.db, Some("downloading"), 10_000).await? {
             let rows = db::job_files(&self.db, job.id).await?;
@@ -353,6 +385,13 @@ impl Jobs {
         }
         self.wake.notify_one();
         Ok(())
+    }
+
+    /// Peers that stalled a download in the last day.
+    pub fn recently_stalled(&self) -> std::collections::HashSet<String> {
+        let mut peers = self.stalled_peers.lock().expect("stalled peers");
+        peers.retain(|_, at| at.elapsed() < Duration::from_secs(24 * 3600));
+        peers.keys().cloned().collect()
     }
 
     /// Let an import in progress finish. Moving an album into the library is
@@ -470,11 +509,18 @@ impl Jobs {
                     }
                 };
                 if let Some(since) = since
+                    && now.duration_since(self.started) >= STARTUP_GRACE
                     && now.duration_since(since) >= STALL
                     && !job.alternates.0.is_empty()
                 {
                     self.stalled.lock().expect("stalled").remove(&job.id);
                     tracing::info!(job = %job.id, "no data from the peer; trying another source");
+                    if let Some(peer) = rows.first().map(|r| r.peer.clone()) {
+                        self.stalled_peers
+                            .lock()
+                            .expect("stalled peers")
+                            .insert(peer, now);
+                    }
                     self.fall_back(&engine, &job, &rows, cause::STALLED_PEER)
                         .await?;
                 }
@@ -546,7 +592,12 @@ impl Jobs {
         while !alternates.is_empty() {
             let alt = alternates.remove(0);
             let folder = RawStr(alt.folder_raw.clone().into());
-            match self.listing(engine, &alt.username, &folder, None).await {
+            let found: Vec<(RawStr, u64)> = alt
+                .files
+                .iter()
+                .map(|(r, s)| (RawStr(r.clone().into()), *s))
+                .collect();
+            match self.listing(engine, &alt.username, &folder, &found).await {
                 Ok(files) if !files.is_empty() => {
                     tracing::info!(job = %job.id, user = %alt.username, ?errors, "falling back to another source");
                     let _ = tokio::fs::remove_dir_all(self.dir(job.id)).await;
@@ -566,10 +617,14 @@ impl Jobs {
                 _ => continue,
             }
         }
-        let error = errors
-            .first()
-            .cloned()
-            .unwrap_or_else(|| "download failed".into());
+        let error = errors.first().cloned().unwrap_or_else(|| {
+            if cause == cause::STALLED_PEER {
+                "the peer sent nothing for twenty minutes, and no other copy could be fetched"
+                    .into()
+            } else {
+                "download failed, and no other copy could be fetched".into()
+            }
+        });
         db::set_status(&self.db, job.id, "failed", Some(&error)).await?;
         self.event(job, "failed", Some(cause), Some(&error)).await;
         Ok(())
@@ -578,7 +633,19 @@ impl Jobs {
     /// Record an outcome in the job's history. A failure to record is
     /// logged, never allowed to fail the work it describes.
     async fn event(&self, job: &Job, outcome: &str, cause: Option<&str>, detail: Option<&str>) {
-        if let Err(e) = db::record_event(&self.db, job.id, &job.title, outcome, cause, detail).await
+        let peer = match &job.source.0 {
+            Source::Soulseek { username, .. } | Source::Files { username } => username.as_str(),
+        };
+        if let Err(e) = db::record_event(
+            &self.db,
+            job.id,
+            &job.title,
+            Some(peer),
+            outcome,
+            cause,
+            detail,
+        )
+        .await
         {
             tracing::warn!(job = %job.id, error = %e, "could not record job event");
         }

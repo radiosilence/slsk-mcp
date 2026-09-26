@@ -525,14 +525,7 @@ impl Social {
         if wish.grab {
             let mut found = found.into_iter();
             if let Some(best) = found.next() {
-                let alternates = found
-                    .take(4)
-                    .map(|f| crate::db::Alternate {
-                        username: f.username,
-                        folder: f.path,
-                        folder_raw: f.remote_path.as_bytes().to_vec(),
-                    })
-                    .collect();
+                let alternates = found.take(4).map(crate::db::Alternate::from).collect();
                 let job = self
                     .jobs
                     .from_folder(&best, Some(wish.query.clone()), alternates)
