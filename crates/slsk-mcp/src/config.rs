@@ -25,8 +25,13 @@ pub struct Config {
     /// Where beets moves imported albums. Also shared by default.
     pub library_dir: PathBuf,
     pub share_dirs: Vec<PathBuf>,
-    /// Downloads land here, one directory per job, until imported.
+    /// Downloads in progress, one directory per job.
     pub staging_dir: PathBuf,
+    /// Finished downloads waiting for import — and, for anything the tagger
+    /// could not place, waiting for a person. Named for the album, so it can
+    /// be browsed. On the same filesystem as the library, an import is a
+    /// rename rather than a copy.
+    pub complete_dir: PathBuf,
     /// The beets database and config, and the share probe cache.
     pub state_dir: PathBuf,
     /// The Soulseek peer port. Must be reachable from the internet for other
@@ -122,7 +127,8 @@ impl Config {
             server: or("SLSK_SERVER", "server.slsknet.org:2242"),
             library_dir,
             share_dirs,
-            staging_dir: PathBuf::from(or("STAGING_DIR", "/data/staging")),
+            staging_dir: PathBuf::from(or("STAGING_DIR", "/data/incomplete")),
+            complete_dir: PathBuf::from(or("COMPLETE_DIR", "/data/complete")),
             state_dir: PathBuf::from(or("STATE_DIR", "/data")),
             listen_port: num("LISTEN_PORT", 2234)?,
             upload_slots: num("UPLOAD_SLOTS", 5)?,

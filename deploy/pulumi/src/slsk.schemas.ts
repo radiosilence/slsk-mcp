@@ -4,14 +4,22 @@ import { AbsolutePath, ResourcesSchema } from "./contract.ts";
 export const SlskConfSchema = z.strictObject({
   /**
    * The music library: where imported albums are filed, and what is shared
-   * unless `shares` says otherwise. Mounted read-write at the same path.
+   * unless `shares` says otherwise. A local volume on `node`, at this path.
    */
   library: AbsolutePath,
-  /** Shared with the network. Defaults to the library alone. */
-  shares: z.array(AbsolutePath).optional(),
   /**
-   * The service's own state on the node's internal disk: Postgres, the
-   * download staging area and the share-probe cache. Not the media drive —
+   * `incomplete/` for downloads in progress, `complete/` for finished ones
+   * waiting for import or for a person. Best on the library's drive, where
+   * an import is a rename.
+   */
+  downloads: AbsolutePath,
+  /** Shared with the network, read-only. Defaults to the library. */
+  shares: z.array(AbsolutePath).optional(),
+  /** Nominal; a local volume has whatever the drive has. */
+  capacity: z.string().default("2Ti"),
+  /**
+   * The service's own state on the node's internal disk: Postgres and the
+   * share-probe cache. Not the media drive —
    * this is the machine's state, and should not go missing when the drive
    * does. Created and handed to uid 1000 by an init container.
    */

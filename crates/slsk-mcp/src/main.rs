@@ -44,8 +44,9 @@ async fn main() -> anyhow::Result<()> {
 
     let cfg = Arc::new(Config::from_env()?);
     let db = db::connect(&cfg.database_url).await.context("database")?;
-    std::fs::create_dir_all(&cfg.staging_dir)
-        .with_context(|| format!("creating {}", cfg.staging_dir.display()))?;
+    for dir in [&cfg.staging_dir, &cfg.complete_dir] {
+        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    }
     std::fs::create_dir_all(&cfg.state_dir)
         .with_context(|| format!("creating {}", cfg.state_dir.display()))?;
 
@@ -67,6 +68,7 @@ async fn main() -> anyhow::Result<()> {
         db.clone(),
         session.clone(),
         cfg.staging_dir.clone(),
+        cfg.complete_dir.clone(),
         importer,
     );
     let app = Arc::new(App {

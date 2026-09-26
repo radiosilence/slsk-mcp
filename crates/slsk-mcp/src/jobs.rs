@@ -29,6 +29,7 @@ pub struct Jobs {
     db: PgPool,
     session: Arc<Session>,
     staging: PathBuf,
+    complete: PathBuf,
     tagger: Arc<sift::Importer>,
     /// Imports touch the library tree; one at a time keeps two albums from
     /// racing for the same destination.
@@ -41,20 +42,49 @@ impl Jobs {
         db: PgPool,
         session: Arc<Session>,
         staging: PathBuf,
+        complete: PathBuf,
         tagger: Arc<sift::Importer>,
     ) -> Arc<Self> {
         Arc::new(Self {
             db,
             session,
             staging,
+            complete,
             tagger,
             import_lock: Mutex::new(()),
             wake: Notify::new(),
         })
     }
 
+    /// Where a job's files arrive: by id, since it holds `.part` files and
+    /// nobody browses it.
     fn dir(&self, id: Uuid) -> PathBuf {
         self.staging.join(id.to_string())
+    }
+
+    /// Where a finished job waits: named for the album so it can be found by
+    /// eye, with the id's first block so two jobs for one album do not meet.
+    fn complete_dir(&self, job: &Job) -> PathBuf {
+        let name: String = job
+            .title
+            .chars()
+            .map(|c| {
+                if matches!(
+                    c,
+                    '/' | '\\' | '\0' | ':' | '*' | '?' | '"' | '<' | '>' | '|'
+                ) {
+                    '-'
+                } else {
+                    c
+                }
+            })
+            .collect();
+        let name = name.trim().trim_start_matches('.');
+        let short = &job.id.to_string()[..8];
+        self.complete.join(format!(
+            "{} [{short}]",
+            if name.is_empty() { "job" } else { name }
+        ))
     }
 
     /// Queue `folder` and everything under it. The peer is asked for the
@@ -359,7 +389,23 @@ impl Jobs {
     /// MusicBrainz release, which is how a job in review is resolved.
     pub async fn import(self: &Arc<Self>, id: Uuid, release: Option<String>) -> Result<()> {
         let _lock = self.import_lock.lock().await;
-        let dir = self.dir(id);
+        let job = db::job(&self.db, id).await?.context("no such job")?;
+        // Out of incomplete/ and into complete/ first, so what is left for a
+        // person to look at is in one findable place whatever happens next.
+        let dir = self.complete_dir(&job);
+        let incoming = self.dir(id);
+        if tokio::fs::try_exists(&incoming).await.unwrap_or(false)
+            && !tokio::fs::try_exists(&dir).await.unwrap_or(false)
+        {
+            if let Err(e) = tokio::fs::rename(&incoming, &dir).await {
+                tracing::warn!(error = %e, "could not move {} to {}", incoming.display(), dir.display());
+            }
+        }
+        let dir = if tokio::fs::try_exists(&dir).await.unwrap_or(false) {
+            dir
+        } else {
+            incoming
+        };
         db::set_status(&self.db, id, "importing", None).await?;
         let outcome = self.tagger.import(&dir, release.as_deref()).await;
         match outcome {
@@ -423,11 +469,10 @@ impl Jobs {
             }
         }
         let _ = tokio::fs::remove_dir_all(self.dir(id)).await;
+        if let Some(job) = db::job(&self.db, id).await? {
+            let _ = tokio::fs::remove_dir_all(self.complete_dir(&job)).await;
+        }
         db::delete_job(&self.db, id).await?;
         Ok(())
-    }
-
-    pub fn staging_dir(&self, id: Uuid) -> PathBuf {
-        self.dir(id)
     }
 }

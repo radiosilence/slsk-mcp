@@ -53,7 +53,9 @@ startup.
 | `SLSK_USERNAME`, `SLSK_PASSWORD` | — | Log in at start. Credentials from the gateway or the UI replace them. |
 | `LIBRARY_DIR` | `/music` | Where imports are filed. |
 | `SHARE_DIRS` | the library | Comma-separated. |
-| `STAGING_DIR`, `STATE_DIR` | `/data/staging`, `/data` | |
+| `STAGING_DIR` | `/data/incomplete` | Downloads in progress. |
+| `COMPLETE_DIR` | `/data/complete` | Finished downloads waiting for import, or for a person when the tagger could not place them. Best on the library's filesystem, where an import is a rename. |
+| `STATE_DIR` | `/data` | The share-probe cache. |
 | `LISTEN_PORT` | `2234` | The peer port. Must be reachable for peers behind NAT to connect. |
 | `UPLOAD_SLOTS`, `UPLOAD_LIMIT`, `DOWNLOAD_LIMIT` | `5`, `0`, `0` | Limits in bytes per second; 0 is unlimited. |
 | `BEETS_CONFIG` | — | A beets `config.yaml` for the importer's template and replacements. |

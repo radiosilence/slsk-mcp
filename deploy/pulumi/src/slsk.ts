@@ -58,8 +58,11 @@ export function createSlsk(
   confArgs: z.input<typeof SlskConfSchema>,
   opts: {
     hostname: string;
-    /** Selects the node holding the library. */
-    nodeLabel: string;
+    /**
+     * The node holding the media drive, by hostname: a local volume's
+     * affinity names a node, and the pod follows the volume there.
+     */
+    node: string;
     oidc: { issuer: string; clientId: string };
     oidcClientSecret: pulumi.Input<string>;
     /** 32 random bytes, base64. Seals Soulseek credentials at rest. */
@@ -79,6 +82,63 @@ export function createSlsk(
   const options = { provider };
   const state = conf.statePath;
   const shares = conf.shares ?? [conf.library];
+  const downloads = conf.downloads.replace(/\/+$/, "");
+
+  /**
+   * A local volume and its claim, one per directory. Each path must already
+   * exist on the node — a local volume is never created — which is the
+   * property wanted: these live on the media drive, and with it unmounted the
+   * paths are gone and the pod waits rather than writing to the root disk. A
+   * single volume on the mountpoint with subpaths would not, since the
+   * mountpoint always exists and kubelet creates missing subpaths.
+   *
+   * Retain: a local volume is someone's disk, and deleting the claim must
+   * never be read as permission to touch what is on it.
+   */
+  const localVolume = (key: string, path: string) => {
+    const pv = new k8s.core.v1.PersistentVolume(
+      `slsk-${key}`,
+      {
+        metadata: { name: `slsk-${key}` },
+        spec: {
+          accessModes: ["ReadWriteOnce"],
+          capacity: { storage: conf.capacity },
+          local: { path },
+          nodeAffinity: {
+            required: {
+              nodeSelectorTerms: [
+                { matchExpressions: [{ key: "kubernetes.io/hostname", operator: "In", values: [opts.node] }] },
+              ],
+            },
+          },
+          persistentVolumeReclaimPolicy: "Retain",
+          storageClassName: "local-storage",
+          volumeMode: "Filesystem",
+        },
+      },
+      options,
+    );
+    return new k8s.core.v1.PersistentVolumeClaim(
+      `slsk-${key}`,
+      {
+        metadata: { name: `slsk-${key}`, namespace },
+        spec: {
+          accessModes: ["ReadWriteOnce"],
+          storageClassName: "local-storage",
+          volumeName: pv.metadata.name,
+          resources: { requests: { storage: conf.capacity } },
+        },
+      },
+      options,
+    );
+  };
+  const extraShares = shares.filter((p) => p !== conf.library);
+  const claims = [
+    { key: "library", path: conf.library, readOnly: false },
+    { key: "downloads", path: downloads, readOnly: false },
+    ...extraShares.map((path, i) => ({ key: `share-${i}`, path, readOnly: true })),
+  ].map((v) => ({ ...v, claim: localVolume(v.key, v.path) }));
+  const mediaMounts = claims.map(({ key, path, readOnly }) => ({ name: key, mountPath: path, readOnly }));
 
   const secret = new k8s.core.v1.Secret(
     "slsk-secrets",
@@ -109,9 +169,6 @@ export function createSlsk(
       )
     : undefined;
 
-  const shareMounts = shares
-    .filter((p) => p !== conf.library)
-    .map((path, i) => ({ name: `share-${i}`, path }));
 
   const deployment = new k8s.apps.v1.Deployment(
     NAME,
@@ -150,7 +207,7 @@ export function createSlsk(
                 { name: "attempts", value: "3" },
               ],
             },
-            nodeSelector: { [opts.nodeLabel]: "true" },
+            nodeSelector: { "kubernetes.io/hostname": opts.node },
             // The media tree is 1000:1000 throughout; what this writes into it
             // must be manageable by everything else that serves it. No
             // fsGroup, which would walk and chown the whole library.
@@ -161,9 +218,9 @@ export function createSlsk(
               seccompProfile: { type: "RuntimeDefault" },
             },
             // The one thing that runs as root, with only the ownership
-            // capabilities and only the state directory mounted: kubelet
-            // creates a missing hostPath as root, and this pod cannot write
-            // what root owns.
+            // capabilities and only the state and download directories
+            // mounted: kubelet creates a missing hostPath as root, and this
+            // pod cannot write what root owns.
             initContainers: [
               {
                 name: "state",
@@ -171,7 +228,7 @@ export function createSlsk(
                 command: [
                   "sh",
                   "-c",
-                  `mkdir -p ${state}/postgres ${state}/data ${state}/staging && chown 1000:1000 ${state} ${state}/postgres ${state}/data ${state}/staging && chmod 700 ${state}/postgres`,
+                  `mkdir -p ${state}/postgres ${state}/data /downloads/incomplete /downloads/complete && chown 1000:1000 ${state} ${state}/postgres ${state}/data /downloads /downloads/incomplete /downloads/complete && chmod 700 ${state}/postgres`,
                 ],
                 securityContext: {
                   runAsUser: 0,
@@ -180,7 +237,10 @@ export function createSlsk(
                   capabilities: { drop: ["ALL"], add: ["CHOWN", "FOWNER", "DAC_OVERRIDE"] },
                 },
                 resources: { requests: { cpu: "5m", memory: "8Mi" }, limits: { memory: "32Mi" } },
-                volumeMounts: [{ name: "state", mountPath: state }],
+                volumeMounts: [
+                  { name: "state", mountPath: state },
+                  { name: "downloads", mountPath: "/downloads" },
+                ],
               },
             ],
             containers: [
@@ -230,7 +290,8 @@ export function createSlsk(
                   { name: "LIBRARY_DIR", value: conf.library },
                   { name: "SHARE_DIRS", value: shares.join(",") },
                   { name: "STATE_DIR", value: `${state}/data` },
-                  { name: "STAGING_DIR", value: `${state}/staging` },
+                  { name: "STAGING_DIR", value: `${downloads}/incomplete` },
+                  { name: "COMPLETE_DIR", value: `${downloads}/complete` },
                   { name: "LISTEN_PORT", value: String(conf.listenPort) },
                   { name: "UPLOAD_SLOTS", value: String(conf.uploadSlots) },
                   { name: "UPLOAD_LIMIT", value: String(conf.uploadLimit) },
@@ -265,29 +326,22 @@ export function createSlsk(
                   capabilities: { drop: ["ALL"] },
                 },
                 volumeMounts: [
-                  { name: "library", mountPath: conf.library },
+                  ...mediaMounts,
                   { name: "state", mountPath: state },
-                  ...shareMounts.map(({ name, path }) => ({ name, mountPath: path, readOnly: true })),
                   ...(beets ? [{ name: "beets", mountPath: "/etc/slsk/beets", readOnly: true }] : []),
                 ],
               },
             ],
             volumes: [
-              // `Directory`: an unmounted media drive leaves the pod Pending
-              // rather than filing albums onto the root filesystem.
-              { name: "library", hostPath: { path: conf.library, type: "Directory" } },
+              ...claims.map(({ key, claim }) => ({ name: key, persistentVolumeClaim: { claimName: claim.metadata.name } })),
               { name: "state", hostPath: { path: state, type: "DirectoryOrCreate" } },
-              ...shareMounts.map(({ name, path }) => ({
-                name,
-                hostPath: { path, type: "Directory" },
-              })),
               ...(beets ? [{ name: "beets", configMap: { name: "slsk-beets" } }] : []),
             ],
           },
         },
       },
     },
-    { dependsOn: [secret, ...(beets ? [beets] : [])], deleteBeforeReplace: true, provider },
+    { dependsOn: [secret, ...claims.map((c) => c.claim), ...(beets ? [beets] : [])], deleteBeforeReplace: true, provider },
   );
 
   if (conf.upnp) {
@@ -309,7 +363,7 @@ export function createSlsk(
               hostNetwork: true,
               dnsPolicy: "None",
               dnsConfig: { nameservers: ["1.1.1.1", "9.9.9.9"] },
-              nodeSelector: { [opts.nodeLabel]: "true" },
+              nodeSelector: { "kubernetes.io/hostname": opts.node },
               containers: [
                 {
                   name: "portmap",
