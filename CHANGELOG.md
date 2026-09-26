@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.12
+
+- Stopping waits for an import in progress (the chart allows ten minutes). Moving an album into the library is not atomic, and a restart partway through left it split between the staging folder and the library. Imports still queued stay `importing` and resume at the next start.
+- An import that finds its job already imported does nothing. Imports queue on one lock, so a second request (a double tap, or Retry beside Use) ran after the first had filed the album and marked the job failed.
+- A folder holding an album in two formats, or with `(1)` duplicates, imports one copy of each track, FLAC first (sift).
+- `slsk-mcp analyse FILE…` prints the transcode analysis of any files as JSON lines.
+
 ## 0.1.11
 
 - Failed files are asked for again from the same peer, after a minute and then two more, before another source is tried. The fallback started the album again from nothing, so one dropped connection late in a download threw away everything already fetched; retries resume from the partial files. The errors behind a fallback are logged.

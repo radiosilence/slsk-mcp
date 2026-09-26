@@ -46,6 +46,9 @@ pub struct Jobs {
     /// Rounds of retrying a job's failed files from the same peer, and when
     /// the next may start.
     retried: std::sync::Mutex<HashMap<Uuid, (u32, tokio::time::Instant)>>,
+    /// Set on shutdown: imports still waiting for the lock leave the job
+    /// `importing` for the next start to resume.
+    closing: std::sync::atomic::AtomicBool,
     wake: Notify,
 }
 
@@ -68,6 +71,7 @@ impl Jobs {
             import_lock: Mutex::new(()),
             deferred: Default::default(),
             retried: Default::default(),
+            closing: Default::default(),
             wake: Notify::new(),
         })
     }
@@ -305,6 +309,15 @@ impl Jobs {
         Ok(())
     }
 
+    /// Let an import in progress finish. Moving an album into the library is
+    /// not atomic, and a process stopped halfway leaves it split between the
+    /// staging folder and the library.
+    pub async fn drain(&self) {
+        self.closing
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let _lock = self.import_lock.lock().await;
+    }
+
     pub fn spawn(self: &Arc<Self>) {
         let jobs = self.clone();
         tokio::spawn(async move {
@@ -469,7 +482,16 @@ impl Jobs {
     /// MusicBrainz release, which is how a job in review is resolved.
     pub async fn import(self: &Arc<Self>, id: Uuid, release: Option<String>) -> Result<()> {
         let _lock = self.import_lock.lock().await;
+        if self.closing.load(std::sync::atomic::Ordering::SeqCst) {
+            return Ok(());
+        }
         let job = db::job(&self.db, id).await?.context("no such job")?;
+        // Imports queue on the lock, so a second request for the same job
+        // (a double tap, Retry beside Use) arrives after the first has
+        // filed the album and cleared its folder.
+        if job.status == "imported" {
+            return Ok(());
+        }
         // Out of incomplete/ and into complete/ first, so what is left for a
         // person to look at is in one findable place whatever happens next.
         // A fresh download replaces what an earlier attempt left there.

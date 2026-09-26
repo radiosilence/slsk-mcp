@@ -182,6 +182,9 @@ export function createSlsk(
             },
           },
           spec: {
+            // Stopping waits for an import in progress: moving an album into
+            // the library is not atomic.
+            terminationGracePeriodSeconds: 600,
             automountServiceAccountToken: false,
             enableServiceLinks: false,
             // Every name this resolves is public — the Soulseek server, peers,

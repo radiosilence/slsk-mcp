@@ -40,9 +40,23 @@ async fn main() -> anyhow::Result<()> {
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
-    if std::env::args().nth(1).as_deref() == Some("schema") {
-        println!("{}", graphql::sdl());
-        return Ok(());
+    match std::env::args().nth(1).as_deref() {
+        Some("schema") => {
+            println!("{}", graphql::sdl());
+            return Ok(());
+        }
+        // The transcode check the importer runs, on any files, one JSON line
+        // each.
+        Some("analyse") => {
+            for path in std::env::args().skip(2) {
+                match analysis::analyse(std::path::Path::new(&path), None) {
+                    Ok(a) => println!("{}", serde_json::to_string(&a)?),
+                    Err(e) => eprintln!("{path}: {e:#}"),
+                }
+            }
+            return Ok(());
+        }
+        _ => {}
     }
 
     let cfg = Arc::new(Config::from_env()?);
@@ -120,6 +134,8 @@ async fn main() -> anyhow::Result<()> {
                 .await
         },
     )?;
+    tracing::info!("stopping; waiting for any import in progress");
+    jobs.drain().await;
     Ok(())
 }
 
