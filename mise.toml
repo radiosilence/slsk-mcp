@@ -7,6 +7,7 @@ node = "24"
 [tasks.check]
 description = "What CI checks: format, lint with warnings as errors, tests, the chart"
 run = [
+  "git diff --quiet Cargo.lock || { echo 'Cargo.lock has uncommitted changes'; exit 1; }",
   "cargo fmt --all -- --check",
   "cargo clippy --workspace --all-targets -- -D warnings",
   "cargo test --workspace --locked",

@@ -4,6 +4,8 @@
 
 - MusicBrainz pacing adapts to the service's global budget, and server errors, timeouts and dropped connections are retried as beets retries them (sift).
 - An import that MusicBrainz cannot serve stays `importing` and is tried again every five minutes, rather than failing and waiting for someone to press Retry.
+- Albums with many pressings match the one with the folder's track count, rather than whichever MusicBrainz lists first (sift).
+- Remove asks first when the album has not been imported, since it deletes the downloaded files.
 - A download that lands where an earlier attempt left the same album replaces it, rather than being imported from the old copy and left behind in `incomplete/`.
 
 ## 0.1.8
