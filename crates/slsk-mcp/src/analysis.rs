@@ -89,8 +89,10 @@ pub fn analyse(path: &Path, spectrogram: Option<&Path>) -> Result<TrackAnalysis>
     Ok(analysis)
 }
 
-/// Album-level reading: the album is suspect if any track is confidently
-/// lossy or upsampled, or if most of them are.
+/// Album-level reading: the album is suspect if a quarter of its tracks are
+/// confidently lossy or upsampled, or if most of them are at all. Albums are
+/// transcoded whole, so one odd track among clean ones is far more often a
+/// quiet or band-limited master than a lossy source.
 pub fn album_verdict(tracks: &[TrackAnalysis]) -> (Verdict, f64) {
     let decided: Vec<_> = tracks
         .iter()
@@ -102,7 +104,7 @@ pub fn album_verdict(tracks: &[TrackAnalysis]) -> (Verdict, f64) {
     for bad in [Verdict::Lossy, Verdict::Upsampled] {
         let hits: Vec<_> = decided.iter().filter(|t| t.verdict == bad).collect();
         let max = hits.iter().map(|t| t.confidence).fold(0.0, f64::max);
-        if max >= 0.8 || hits.len() * 2 > decided.len() {
+        if (max >= 0.8 && hits.len() * 4 >= decided.len()) || hits.len() * 2 > decided.len() {
             return (bad, max);
         }
     }
@@ -563,5 +565,28 @@ mod tests {
             track(Verdict::Lossy, 0.6),
         ];
         assert_eq!(album_verdict(&tracks).0, Verdict::Lossless);
+    }
+
+    #[test]
+    fn one_odd_track_in_a_long_album_is_not_enough() {
+        let track = |verdict| TrackAnalysis {
+            file: String::new(),
+            sample_rate: RATE,
+            bits_per_sample: Some(16),
+            effective_bits: Some(16),
+            duration_secs: 1.0,
+            cutoff_hz: None,
+            drop_db: None,
+            verdict,
+            confidence: 0.9,
+            estimate: None,
+            spectrogram: None,
+        };
+        let mut tracks = vec![track(Verdict::Lossless); 10];
+        tracks.push(track(Verdict::Lossy));
+        assert_eq!(album_verdict(&tracks).0, Verdict::Lossless);
+        tracks[0] = track(Verdict::Lossy);
+        tracks[1] = track(Verdict::Lossy);
+        assert_eq!(album_verdict(&tracks).0, Verdict::Lossy);
     }
 }

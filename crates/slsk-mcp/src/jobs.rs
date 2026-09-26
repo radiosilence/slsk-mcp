@@ -25,6 +25,10 @@ use crate::db::{self, Alternate, Job, JobFile, Source};
 use crate::folders::Folder;
 use crate::session::Session;
 
+/// Times a job's failed files are asked for again from the same peer before
+/// another source is tried.
+const RETRY_ROUNDS: u32 = 2;
+
 pub struct Jobs {
     db: PgPool,
     session: Arc<Session>,
@@ -39,6 +43,9 @@ pub struct Jobs {
     /// Imports put off while MusicBrainz is unavailable: when to try again,
     /// and the release a person chose, if any.
     deferred: std::sync::Mutex<HashMap<Uuid, (tokio::time::Instant, Option<String>)>>,
+    /// Rounds of retrying a job's failed files from the same peer, and when
+    /// the next may start.
+    retried: std::sync::Mutex<HashMap<Uuid, (u32, tokio::time::Instant)>>,
     wake: Notify,
 }
 
@@ -60,6 +67,7 @@ impl Jobs {
             tagger,
             import_lock: Mutex::new(()),
             deferred: Default::default(),
+            retried: Default::default(),
             wake: Notify::new(),
         })
     }
@@ -374,11 +382,44 @@ impl Jobs {
                 continue;
             }
             if failed.is_none() && done.is_some() {
+                self.retried.lock().expect("retried").remove(&job.id);
                 db::set_status(&self.db, job.id, "importing", None).await?;
                 let jobs = self.clone();
                 tokio::spawn(async move { jobs.import(job.id, None).await });
             } else if failed.is_some() {
-                self.fall_back(&engine, &job, &rows).await?;
+                // Most failures are a peer dropping off for a moment. Asking
+                // the same peer again, spaced out, resumes from the partial
+                // files; a new source would start the album from nothing.
+                let now = tokio::time::Instant::now();
+                let round = {
+                    let mut retried = self.retried.lock().expect("retried");
+                    let (rounds, next) = retried.entry(job.id).or_insert((0, now));
+                    if *rounds >= RETRY_ROUNDS {
+                        retried.remove(&job.id);
+                        None
+                    } else if now < *next {
+                        Some(false)
+                    } else {
+                        *rounds += 1;
+                        *next = now + Duration::from_secs(60 * u64::from(*rounds));
+                        Some(true)
+                    }
+                };
+                match round {
+                    Some(true) => {
+                        for f in rows
+                            .iter()
+                            .filter(|f| matches!(f.state.as_str(), "failed" | "cancelled"))
+                        {
+                            let remote = RawStr(f.remote.clone().into());
+                            if !engine.retry_download(&f.peer, &remote) {
+                                engine.download(&f.peer, remote, f.size as u64, self.dest(f));
+                            }
+                        }
+                    }
+                    Some(false) => {}
+                    None => self.fall_back(&engine, &job, &rows).await?,
+                }
             }
         }
         Ok(())
@@ -401,7 +442,7 @@ impl Jobs {
             let folder = RawStr(alt.folder_raw.clone().into());
             match self.listing(engine, &alt.username, &folder, None).await {
                 Ok(files) if !files.is_empty() => {
-                    tracing::info!(job = %job.id, user = %alt.username, "falling back to another source");
+                    tracing::info!(job = %job.id, user = %alt.username, ?errors, "falling back to another source");
                     let _ = tokio::fs::remove_dir_all(self.dir(job.id)).await;
                     let source = Source::Soulseek {
                         username: alt.username.clone(),

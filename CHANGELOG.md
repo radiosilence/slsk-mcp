@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.11
+
+- Failed files are asked for again from the same peer, after a minute and then two more, before another source is tried. The fallback started the album again from nothing, so one dropped connection late in a download threw away everything already fetched; retries resume from the partial files. The errors behind a fallback are logged.
+- An album is held as suspect only when at least a quarter of its tracks confidently look lossy or upsampled (or most do at all). Albums are transcoded whole, so one odd track among clean ones is far more often a quiet or band-limited master.
+
 ## 0.1.10
 
 - Grab ranks folders by how well they answer the query, not only by quality. Peers match words anywhere in a path, so any folder under an artist's directory used to qualify: a query's words must now each appear as often as the query repeats them (a self-titled album needs the name twice), and live, demo, B-side and remix folders rank behind the album unless the query names them.
