@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>slsk</title>
+<meta name="theme-color" content="#101214">
+<link rel="stylesheet" href="/assets/app.css">
+<script type="module" src="/assets/datastar.js"></script>
+</head>
+<body data-init="@get('/stream')"
+  data-on-interval__duration.20s="@get('/stream')"
+  data-on:visibilitychange__document="!document.hidden && @get('/stream')"
+  data-signals="{q: '', lossless: true, busy: false}">
+<header>
+  {{ status|safe }}
+</header>
+<main>
+  <section class="finder">
+    <form id="finder" data-on:submit__prevent="@post('/search', {contentType: 'form', selector: '#finder'})">
+      <input name="q" data-bind:q placeholder="Artist album" autocomplete="off" autofocus>
+      <label class="toggle"><input type="checkbox" name="lossless" value="true" data-bind:lossless> lossless</label>
+      <button type="submit">Search</button>
+      <button type="button" class="primary" data-indicator:busy data-attr:disabled="$busy || !$q"
+        data-on:click="@post('/grab', {contentType: 'form', selector: '#finder'})">Grab best</button>
+    </form>
+    <div id="flash"></div>
+    <div id="results"></div>
+  </section>
+  <section>
+    <h2>Albums</h2>
+    {{ jobs|safe }}
+  </section>
+  <section>
+    {{ transfers|safe }}
+  </section>
+</main>
+</body>
+</html>

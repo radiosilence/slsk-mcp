@@ -1,7 +1,8 @@
 //! Errors log their cause in full and tell the client almost nothing.
 //!
-//! This sits in front of aria2's RPC and the media tree, so an upstream message
-//! quoted back to the browser is a description of the filesystem behind it.
+//! This sits in front of the Soulseek session and the media tree, so an
+//! upstream message quoted back to the browser can describe the filesystem
+//! behind it.
 
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -12,7 +13,7 @@ pub enum AppError {
     Unauthorized,
     #[error("bad request: {0}")]
     BadRequest(String),
-    #[error("aria2: {0}")]
+    #[error("upstream: {0}")]
     Upstream(String),
     #[error(transparent)]
     Internal(#[from] anyhow::Error),

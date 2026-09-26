@@ -22,8 +22,11 @@ CREATE TABLE jobs (
     alternates  JSONB NOT NULL DEFAULT '[]',
     status      TEXT NOT NULL,
     error       TEXT,
-    analysis    JSONB,
     import_log  TEXT,
+    -- Releases the tagger offered when it could not decide; importing with
+    -- one of their ids resolves the job.
+    candidates  JSONB,
+    library_path TEXT,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -33,8 +36,9 @@ CREATE INDEX jobs_status ON jobs (status);
 CREATE TABLE job_files (
     job_id  UUID NOT NULL REFERENCES jobs (id) ON DELETE CASCADE,
     peer    TEXT NOT NULL,
-    -- The peer's full virtual path, as the network knows the file.
-    remote  TEXT NOT NULL,
+    -- The peer's full virtual path, byte for byte: peers may send Latin-1,
+    -- and a path re-encoded as UTF-8 names nothing on their side.
+    remote  BYTEA NOT NULL,
     size    BIGINT NOT NULL,
     -- Directory under the job's staging dir the file lands in.
     subdir  TEXT NOT NULL DEFAULT '',

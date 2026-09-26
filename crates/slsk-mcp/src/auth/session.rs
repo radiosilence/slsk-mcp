@@ -16,7 +16,6 @@ use tokio::sync::RwLock;
 
 #[derive(Clone, Debug)]
 pub struct Session {
-    pub id: String,
     /// Hydra's subject. Not shown anywhere; it is what makes a session an
     /// identity rather than a bare permit.
     pub sub: String,
@@ -53,7 +52,6 @@ impl Sessions {
     pub async fn create(&self, sub: &str, ttl: Duration) -> String {
         let id = Self::token();
         let session = Session {
-            id: id.clone(),
             sub: sub.to_string(),
             expires: Instant::now() + ttl,
         };

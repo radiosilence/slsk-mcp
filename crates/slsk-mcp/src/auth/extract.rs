@@ -11,16 +11,14 @@
 //! [`CurrentSession`] then only reads what the layer already put in the request,
 //! so it cannot disagree with the check.
 
-use axum::extract::{FromRequestParts, Request, State};
+use axum::extract::{Request, State};
 use axum::http::StatusCode;
-use axum::http::request::Parts;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Redirect, Response};
 
 use crate::auth::cookie::{SESSION_COOKIE, read_cookie};
 use crate::auth::session::Session;
-use crate::error::AppError;
-use crate::state::AppState;
+use crate::ui::UiState as AppState;
 
 /// Whether an unauthenticated request should be redirected or refused.
 ///
@@ -51,11 +49,17 @@ pub async fn require_session(
 
     let session = match session {
         Some(id) => state.sessions.get(&id).await,
+        // Local development without an identity provider: everyone is "dev".
+        None if state.config.oidc.is_none() => Some(Session {
+            sub: "dev".into(),
+            expires: std::time::Instant::now() + std::time::Duration::from_secs(3600),
+        }),
         None => None,
     };
 
     match session {
         Some(session) => {
+            tracing::debug!(sub = %session.sub, path = %request.uri().path(), "request");
             request.extensions_mut().insert(session);
             next.run(request).await
         }
@@ -65,25 +69,6 @@ pub async fn require_session(
 }
 
 /// The signed-in session, put here by [`require_session`].
-pub struct CurrentSession(pub Session);
-
-impl FromRequestParts<AppState> for CurrentSession {
-    type Rejection = AppError;
-
-    async fn from_request_parts(parts: &mut Parts, _state: &AppState) -> Result<Self, AppError> {
-        // Absent only if this route was mounted outside the layer, which is a
-        // wiring mistake rather than an unauthenticated caller.
-        parts
-            .extensions
-            .get::<Session>()
-            .cloned()
-            .map(Self)
-            .ok_or_else(|| {
-                AppError::Internal(anyhow::anyhow!("route mounted outside the auth layer"))
-            })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use axum::http::HeaderMap;

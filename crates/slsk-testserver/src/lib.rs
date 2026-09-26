@@ -154,10 +154,10 @@ fn handle(
         }
         2 => {
             let port = r.u32()?;
-            if let Some((name, _)) = me {
-                if let Some(u) = s.online.get_mut(name) {
-                    u.port = port;
-                }
+            if let Some((name, _)) = me
+                && let Some(u) = s.online.get_mut(name)
+            {
+                u.port = port;
             }
         }
         3 => {

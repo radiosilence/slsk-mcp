@@ -1,0 +1,42 @@
+:root { --bg: #101214; --panel: #181b1f; --line: #262a30; --text: #e6e6e6; --dim: #8b9099; --accent: #7dd3a7; --warn: #e6b450; --bad: #ef6b73; color-scheme: dark; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, sans-serif; }
+header { position: sticky; top: 0; z-index: 2; background: var(--panel); border-bottom: 1px solid var(--line); padding: 10px 16px; padding-top: max(10px, env(safe-area-inset-top)); }
+main { max-width: 1100px; margin: 0 auto; padding: 16px; display: grid; gap: 24px; }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--dim); margin: 16px 0 8px; }
+.count { color: var(--text); }
+.status { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.pill { font-size: 11px; padding: 2px 8px; border-radius: 99px; background: var(--line); color: var(--dim); text-transform: uppercase; letter-spacing: .05em; }
+.connected .pill, .imported .pill { background: #1c3a2d; color: var(--accent); }
+.displaced .pill, .rejected .pill, .failed .pill { background: #3d1f23; color: var(--bad); }
+.review .pill, .downloading .pill, .importing .pill { background: #3b3220; color: var(--warn); }
+.stats, .detail, .meta, .note { color: var(--dim); font-size: 13px; }
+input, button { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 7px 10px; }
+input:focus { outline: 1px solid var(--accent); }
+button { cursor: pointer; background: var(--line); }
+button.primary { background: var(--accent); color: #0b1a12; border-color: var(--accent); font-weight: 600; }
+button.quiet { background: transparent; color: var(--dim); }
+button:disabled { opacity: .5; cursor: default; }
+.finder form { display: flex; gap: 8px; flex-wrap: wrap; }
+.finder input[name=q] { flex: 1 1 260px; }
+.toggle { display: flex; align-items: center; gap: 6px; color: var(--dim); }
+.account { display: flex; gap: 6px; flex-wrap: wrap; width: 100%; }
+.row { display: flex; gap: 8px; align-items: center; min-width: 0; }
+.grow { flex: 1; }
+.job, .folder { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
+.folder.lossless { border-left: 3px solid var(--accent); }
+.path, .title, .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.bar { height: 4px; background: var(--line); border-radius: 2px; margin-top: 8px; overflow: hidden; }
+.bar span { display: block; height: 100%; background: var(--accent); transition: width .5s; }
+.error { color: var(--bad); font-size: 13px; }
+.ok { color: var(--accent); }
+.flash.error { padding: 8px 0; }
+.candidates { list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 6px; }
+.candidates li { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+td { padding: 5px 6px; border-bottom: 1px solid var(--line); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+td.name { width: 45%; }
+td.num { text-align: right; width: 80px; }
+td.actions { width: 140px; text-align: right; }
+td.actions form { display: none; }
+@media (max-width: 640px) { td:nth-child(2), td.num:nth-child(4) { display: none; } td.name { width: 60%; } }

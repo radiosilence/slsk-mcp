@@ -1,0 +1,17 @@
+<div id="results" class="results">
+  <p class="note">{% if searching %}Searching “{{ query }}”… {% endif %}{{ responses }} peers answered, {{ folders.len() }} folders.</p>
+  {% for f in folders %}
+  <article class="folder{% if f.lossless %} lossless{% endif %}">
+    <form id="dl-{{ loop.index }}"><input type="hidden" name="username" value="{{ f.username }}"><input type="hidden" name="key" value="{{ self.key(f) }}"><input type="hidden" name="title" value="{{ query }}"></form>
+    <div class="row">
+      <span class="path" title="{{ f.path }}">{{ f.path }}</span>
+      <span class="grow"></span>
+      <button class="primary" data-on:click="@post('/download', {contentType: 'form', selector: '#dl-{{ loop.index }}'})">Download</button>
+    </div>
+    <div class="meta">
+      {{ f.username }} · {{ f.audio_files }} tracks · {{ self.quality(f) }} · {{ self.size(f.total_size) }} ·
+      {% if f.free_slot %}<span class="ok">free slot</span>{% else %}queue {{ f.queue_length }}{% endif %} · {{ self.size(f.speed as u64) }}/s
+    </div>
+  </article>
+  {% endfor %}
+</div>

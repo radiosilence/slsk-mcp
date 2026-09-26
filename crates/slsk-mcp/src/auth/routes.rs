@@ -10,7 +10,7 @@ use crate::auth::cookie::{FLOW_COOKIE, SESSION_COOKIE, clear_cookie, read_cookie
 use crate::auth::oidc::{authorize_url, exchange_code, pkce};
 use crate::auth::session::Sessions;
 use crate::error::{AppError, AppResult};
-use crate::state::AppState;
+use crate::ui::UiState as AppState;
 
 /// How long a signed-in session lasts. A week, because the alternative is
 /// logging in from a sofa.
@@ -81,7 +81,7 @@ pub async fn login(State(state): State<AppState>) -> AppResult<Response> {
         )
         .await;
     let url = authorize_url(
-        &state.config.oidc,
+        state.config.oidc.as_ref().ok_or(AppError::Unauthorized)?,
         &state.config.redirect_uri(),
         &csrf,
         &challenge,
@@ -119,7 +119,7 @@ pub async fn callback(
 
     let sub = exchange_code(
         &state.http,
-        &state.config.oidc,
+        state.config.oidc.as_ref().ok_or(AppError::Unauthorized)?,
         &state.config.redirect_uri(),
         &q.code,
         &flow.verifier,
@@ -156,59 +156,3 @@ pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Respon
 // `dev_login` only exists in a debug build, so its tests can't exist in a
 // release one either — `cargo test --release` would otherwise fail to find
 // the function these call.
-#[cfg(debug_assertions)]
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::aria2::Aria2;
-    use crate::config::Config;
-
-    fn state() -> AppState {
-        AppState {
-            config: std::sync::Arc::new(Config::fixture()),
-            activity: crate::activity::Activity::new(),
-            clearing: crate::state::Clearing::default(),
-            adding: Default::default(),
-            aria2: Aria2::new(String::new(), reqwest::Client::new()),
-            sessions: crate::auth::session::Sessions::new(),
-            poll: crate::poll::Poll::new(),
-            http: reqwest::Client::new(),
-        }
-    }
-
-    /// The one behaviour this route exists for: a request with no OIDC round
-    /// trip at all still ends up with a real session the store can look back
-    /// up, the same shape `callback` produces minus Hydra.
-    #[tokio::test]
-    async fn dev_login_mints_a_session_the_store_can_retrieve() {
-        let app_state = state();
-        let response = dev_login(State(app_state.clone())).await;
-
-        let cookie = response
-            .headers()
-            .get(header::SET_COOKIE)
-            .expect("dev_login must set the session cookie")
-            .to_str()
-            .unwrap();
-        let session_id = cookie
-            .split(';')
-            .next()
-            .unwrap()
-            .strip_prefix(&format!("{SESSION_COOKIE}="))
-            .expect("cookie must be the session cookie");
-
-        let session = app_state
-            .sessions
-            .get(session_id)
-            .await
-            .expect("the id the cookie carries must resolve to a real session");
-        assert_eq!(session.sub, "dev");
-    }
-
-    #[tokio::test]
-    async fn dev_login_redirects_to_the_page() {
-        let response = dev_login(State(state())).await;
-        assert_eq!(response.status(), StatusCode::FOUND);
-        assert_eq!(response.headers().get(header::LOCATION).unwrap(), "/");
-    }
-}

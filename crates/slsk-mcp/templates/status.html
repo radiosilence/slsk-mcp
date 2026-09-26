@@ -1,0 +1,14 @@
+<div id="status" class="status {{ state }}">
+  {% match username %}{% when Some with (u) %}<strong>{{ u }}</strong>{% when None %}{% endmatch %}
+  <span class="pill">{{ state }}</span>
+  {% match detail %}{% when Some with (d) %}<span class="detail">{{ d }}</span>{% when None %}{% endmatch %}
+  {% if state == "displaced" || state == "disconnected" %}<button data-on:click="@post('/reconnect')">Reconnect</button>{% endif %}
+  {% if state == "connected" %}<span class="stats">sharing {{ files }} files · ↑ {{ up }} · ↓ {{ down }} · {{ children }} children</span>{% endif %}
+  {% if state == "no-account" || state == "rejected" %}
+  <form id="account" class="account" data-on:submit__prevent="@post('/account', {contentType: 'form', selector: '#account'})">
+    <input name="username" placeholder="Soulseek username" autocomplete="username">
+    <input name="password" type="password" placeholder="password" autocomplete="current-password">
+    <button type="submit">Sign in</button>
+  </form>
+  {% endif %}
+</div>
