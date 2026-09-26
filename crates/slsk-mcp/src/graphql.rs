@@ -230,6 +230,61 @@ struct PeerInfo {
     slots_free: bool,
 }
 
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+enum SendAction {
+    /// Returns a token and sends nothing.
+    Preview,
+    /// Sends, given the token PREVIEW returned for exactly this message.
+    Confirm,
+}
+
+#[derive(SimpleObject)]
+struct Sent {
+    /// For PREVIEW: pass to the CONFIRM call.
+    confirmation_token: Option<String>,
+    /// What would be, or was, sent, as the recipient will see it.
+    preview: String,
+    sent: bool,
+}
+
+#[derive(SimpleObject)]
+struct Room {
+    name: String,
+    members: Vec<String>,
+    messages: Vec<crate::social::RoomLine>,
+}
+
+#[derive(SimpleObject)]
+struct PublicRoom {
+    name: String,
+    users: u32,
+}
+
+#[derive(SimpleObject)]
+struct Conversation {
+    username: String,
+    last_message: String,
+    last_was_ours: bool,
+    at: chrono::DateTime<chrono::Utc>,
+    unread: i64,
+}
+
+#[derive(SimpleObject)]
+struct Message {
+    body: String,
+    outgoing: bool,
+    at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(SimpleObject)]
+struct Buddy {
+    username: String,
+    note: String,
+    /// online, away, offline; unknown until the server has said.
+    status: Option<String>,
+    privileged: bool,
+}
+
 pub struct Query;
 
 #[Object]
@@ -387,6 +442,93 @@ impl Query {
             queue_size: info.queue_size,
             slots_free: info.slots_free,
         })
+    }
+
+    /// Rooms we are in, with members and the most recent lines.
+    async fn rooms(&self, ctx: &Context<'_>, #[graphql(default = 50)] tail: usize) -> Vec<Room> {
+        app(ctx)
+            .social
+            .rooms(tail.min(500))
+            .into_iter()
+            .map(|(name, members, messages)| Room {
+                name,
+                members,
+                messages,
+            })
+            .collect()
+    }
+
+    /// Public rooms and how many are in each, busiest first.
+    async fn room_list(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(default = 50)] first: usize,
+    ) -> Vec<PublicRoom> {
+        app(ctx)
+            .social
+            .room_list()
+            .into_iter()
+            .take(first)
+            .map(|(name, users)| PublicRoom { name, users })
+            .collect()
+    }
+
+    /// Private conversations, one row per user.
+    async fn conversations(&self, ctx: &Context<'_>) -> Result<Vec<Conversation>> {
+        Ok(app(ctx)
+            .social
+            .conversations()
+            .await?
+            .into_iter()
+            .map(
+                |(username, last_message, last_was_ours, at, unread)| Conversation {
+                    username,
+                    last_message,
+                    last_was_ours,
+                    at,
+                    unread,
+                },
+            )
+            .collect())
+    }
+
+    async fn messages(
+        &self,
+        ctx: &Context<'_>,
+        username: String,
+        #[graphql(default = 50)] last: i64,
+    ) -> Result<Vec<Message>> {
+        Ok(app(ctx)
+            .social
+            .messages(&username, last.clamp(1, 1000))
+            .await?
+            .into_iter()
+            .map(|(body, outgoing, at)| Message { body, outgoing, at })
+            .collect())
+    }
+
+    async fn buddies(&self, ctx: &Context<'_>) -> Result<Vec<Buddy>> {
+        Ok(app(ctx)
+            .social
+            .buddies()
+            .await?
+            .into_iter()
+            .map(|(username, note, status, privileged)| Buddy {
+                username,
+                note,
+                status: status.map(|s| match s {
+                    slsk_engine::slsk_proto::server::UserStatus::Online => "online".into(),
+                    slsk_engine::slsk_proto::server::UserStatus::Away => "away".into(),
+                    slsk_engine::slsk_proto::server::UserStatus::Offline => "offline".into(),
+                }),
+                privileged,
+            })
+            .collect())
+    }
+
+    /// Searches repeated on the server's wishlist interval until found.
+    async fn wishlist(&self, ctx: &Context<'_>) -> Result<Vec<crate::social::Wish>> {
+        Ok(app(ctx).social.wishes().await?)
     }
 
     async fn bans(&self, ctx: &Context<'_>) -> Result<Vec<String>> {
@@ -613,6 +755,131 @@ impl Mutation {
         download: u64,
     ) -> Result<bool> {
         app(ctx).session.require()?.set_limits(upload, download);
+        Ok(true)
+    }
+
+    /// Send a private message. Messages go to a person: call with PREVIEW,
+    /// show the user the preview, and only then call with CONFIRM and the
+    /// token, unchanged.
+    async fn send_message(
+        &self,
+        ctx: &Context<'_>,
+        username: String,
+        message: String,
+        action: SendAction,
+        confirmation_token: Option<String>,
+    ) -> Result<Sent> {
+        let social = &app(ctx).social;
+        match action {
+            SendAction::Preview => Ok(Sent {
+                confirmation_token: Some(social.preview("pm", &username, &message)),
+                preview: format!("To {username}: {message}"),
+                sent: false,
+            }),
+            SendAction::Confirm => {
+                let token = confirmation_token
+                    .ok_or_else(|| Error::new("CONFIRM needs the token PREVIEW returned"))?;
+                social.send_message(&token, &username, &message).await?;
+                Ok(Sent {
+                    confirmation_token: None,
+                    preview: format!("To {username}: {message}"),
+                    sent: true,
+                })
+            }
+        }
+    }
+
+    /// Say something in a room, with the same PREVIEW/CONFIRM steps.
+    async fn say(
+        &self,
+        ctx: &Context<'_>,
+        room: String,
+        message: String,
+        action: SendAction,
+        confirmation_token: Option<String>,
+    ) -> Result<Sent> {
+        let social = &app(ctx).social;
+        match action {
+            SendAction::Preview => Ok(Sent {
+                confirmation_token: Some(social.preview("room", &room, &message)),
+                preview: format!("In {room}: {message}"),
+                sent: false,
+            }),
+            SendAction::Confirm => {
+                let token = confirmation_token
+                    .ok_or_else(|| Error::new("CONFIRM needs the token PREVIEW returned"))?;
+                social.say(&token, &room, &message)?;
+                Ok(Sent {
+                    confirmation_token: None,
+                    preview: format!("In {room}: {message}"),
+                    sent: true,
+                })
+            }
+        }
+    }
+
+    async fn mark_read(&self, ctx: &Context<'_>, username: String) -> Result<bool> {
+        app(ctx).social.mark_read(&username).await?;
+        Ok(true)
+    }
+
+    /// Join a room; it is rejoined after every reconnect until left.
+    async fn join_room(&self, ctx: &Context<'_>, room: String) -> Result<bool> {
+        app(ctx).social.join_room(&room).await?;
+        Ok(true)
+    }
+
+    async fn leave_room(&self, ctx: &Context<'_>, room: String) -> Result<bool> {
+        app(ctx).social.leave_room(&room).await?;
+        Ok(true)
+    }
+
+    /// Watch a user: their status is followed while we are online.
+    async fn add_buddy(
+        &self,
+        ctx: &Context<'_>,
+        username: String,
+        #[graphql(default)] note: String,
+    ) -> Result<bool> {
+        app(ctx).social.add_buddy(&username, &note).await?;
+        Ok(true)
+    }
+
+    async fn remove_buddy(&self, ctx: &Context<'_>, username: String) -> Result<bool> {
+        app(ctx).social.remove_buddy(&username).await?;
+        Ok(true)
+    }
+
+    /// Keep searching for something nobody has shared yet. With `grab`, the
+    /// first relevant folder found becomes a job, as `grab` would.
+    async fn add_wish(
+        &self,
+        ctx: &Context<'_>,
+        query: String,
+        #[graphql(default = true)] lossless: bool,
+        #[graphql(default)] grab: bool,
+    ) -> Result<ID> {
+        Ok(ID(app(ctx)
+            .social
+            .add_wish(&query, lossless, grab)
+            .await?
+            .to_string()))
+    }
+
+    async fn remove_wish(&self, ctx: &Context<'_>, id: ID) -> Result<bool> {
+        app(ctx).social.remove_wish(parse_id(&id)?).await?;
+        Ok(true)
+    }
+
+    /// Like (true), dislike (false) or forget (null) an interest. Interests
+    /// drive the server's recommendations and similar users.
+    async fn set_interest(
+        &self,
+        ctx: &Context<'_>,
+        item: String,
+        liked: Option<bool>,
+    ) -> Result<bool> {
+        app(ctx).social.set_interest(&item, liked).await?;
         Ok(true)
     }
 

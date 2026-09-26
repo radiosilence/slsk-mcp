@@ -143,8 +143,14 @@ impl ServerHandler for SlskMcp {
                  are MusicBrainz releases with a distance (0 is perfect); pick the right one, asking the user if it \
                  is not obvious, and call `resolveJob(id, releaseId)`.\n\n\
                  `search` returns folders grouped by user, best first, for when the user wants to choose. Searching \
-                 waits several seconds for peers to answer. Other people's files are theirs: do not ban, message or \
-                 cancel uploads unless asked.",
+                 waits several seconds for peers to answer.\n\n\
+                 For something nobody has yet, `addWish(query, grab: true)` keeps searching on the server's \
+                 wishlist interval and starts a job when it turns up.\n\n\
+                 The client is also a chat client: rooms, private messages (`conversations`, `messages`), \
+                 buddies and interests. `sendMessage` and `say` reach real people, so they take two calls: \
+                 PREVIEW returns a token and sends nothing; show the user the preview, and only after they agree \
+                 call CONFIRM with the token and the message unchanged. Other people's files and conversations \
+                 are theirs: do not ban, message or cancel uploads unless asked.",
             )
     }
 }

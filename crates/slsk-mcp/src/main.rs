@@ -12,6 +12,7 @@ mod graphql;
 mod jobs;
 mod mcp;
 mod session;
+mod social;
 mod ui;
 
 use std::sync::Arc;
@@ -28,6 +29,7 @@ pub struct App {
     pub db: sqlx::PgPool,
     pub session: Arc<Session>,
     pub jobs: Arc<jobs::Jobs>,
+    pub social: Arc<social::Social>,
 }
 
 #[tokio::main]
@@ -71,13 +73,16 @@ async fn main() -> anyhow::Result<()> {
         cfg.complete_dir.clone(),
         importer,
     );
+    let social = social::Social::new(db.clone(), session.clone(), jobs.clone());
     let app = Arc::new(App {
         cfg: cfg.clone(),
         db,
         session,
         jobs: jobs.clone(),
+        social: social.clone(),
     });
     jobs.spawn();
+    social.spawn();
     if app.session.engine().is_some()
         && let Err(e) = jobs.resume().await
     {
