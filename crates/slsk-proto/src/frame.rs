@@ -46,7 +46,11 @@ pub fn encode(width: CodeWidth, code: u32, body: &[u8]) -> Bytes {
 ///
 /// `max` bounds a single frame. It is what stops a peer announcing a
 /// four-gigabyte message and the reader buffering towards it.
-pub fn decode(buf: &mut BytesMut, width: CodeWidth, max: usize) -> Result<Option<Frame>, DecodeError> {
+pub fn decode(
+    buf: &mut BytesMut,
+    width: CodeWidth,
+    max: usize,
+) -> Result<Option<Frame>, DecodeError> {
     if buf.len() < 4 {
         return Ok(None);
     }
@@ -88,10 +92,19 @@ mod tests {
                 out.push(f);
             }
         }
-        assert_eq!(out, [
-            Frame { code: 26, body: Bytes::from_static(b"hello") },
-            Frame { code: 1, body: Bytes::new() },
-        ]);
+        assert_eq!(
+            out,
+            [
+                Frame {
+                    code: 26,
+                    body: Bytes::from_static(b"hello")
+                },
+                Frame {
+                    code: 1,
+                    body: Bytes::new()
+                },
+            ]
+        );
     }
 
     #[test]

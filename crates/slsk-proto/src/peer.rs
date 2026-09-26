@@ -2,9 +2,9 @@
 
 use bytes::Bytes;
 
+use crate::ConnKind;
 use crate::frame::{CodeWidth, encode};
 use crate::wire::{DecodeError, RawStr, Reader, Result, Writer, deflate, inflate};
-use crate::ConnKind;
 
 /// Largest inflated payload accepted from a peer. A browse of a very large
 /// collection inflates to tens of megabytes; this leaves room for that and
@@ -18,7 +18,11 @@ pub enum PeerInit {
     /// ConnectToPeer.
     PierceFirewall { token: u32 },
     /// A direct connection. The token is always zero on today's network.
-    PeerInit { username: String, kind: ConnKind, token: u32 },
+    PeerInit {
+        username: String,
+        kind: ConnKind,
+        token: u32,
+    },
 }
 
 impl PeerInit {
@@ -29,7 +33,11 @@ impl PeerInit {
                 w.u32(*token);
                 encode(CodeWidth::U8, 0, &w.finish())
             }
-            Self::PeerInit { username, kind, token } => {
+            Self::PeerInit {
+                username,
+                kind,
+                token,
+            } => {
                 w.str(username).str(kind.as_str()).u32(*token);
                 encode(CodeWidth::U8, 1, &w.finish())
             }
@@ -42,7 +50,8 @@ impl PeerInit {
             0 => Ok(Self::PierceFirewall { token: r.u32()? }),
             1 => Ok(Self::PeerInit {
                 username: r.string()?,
-                kind: ConnKind::parse(&r.string()?).ok_or(DecodeError::Invalid("connection type"))?,
+                kind: ConnKind::parse(&r.string()?)
+                    .ok_or(DecodeError::Invalid("connection type"))?,
                 token: r.u32().unwrap_or(0),
             }),
             _ => Err(DecodeError::Invalid("peer init code")),
@@ -76,11 +85,20 @@ impl FileEntry {
         let size = r.u64()?;
         let extension = r.string()?;
         let attrs = r.list(8, |r| Ok((r.u32()?, r.u32()?)))?;
-        Ok(Self { name, size, extension, attrs })
+        Ok(Self {
+            name,
+            size,
+            extension,
+            attrs,
+        })
     }
 
     pub fn write(&self, w: &mut Writer) {
-        w.u8(1).raw(&self.name).u64(self.size).str(&self.extension).u32(self.attrs.len() as u32);
+        w.u8(1)
+            .raw(&self.name)
+            .u64(self.size)
+            .str(&self.extension)
+            .u32(self.attrs.len() as u32);
         for (c, v) in &self.attrs {
             w.u32(*c).u32(*v);
         }
@@ -98,7 +116,10 @@ pub struct Directory {
 
 impl Directory {
     fn read(r: &mut Reader) -> Result<Self> {
-        Ok(Self { name: r.raw()?, files: r.list(MIN_FILE, FileEntry::read)? })
+        Ok(Self {
+            name: r.raw()?,
+            files: r.list(MIN_FILE, FileEntry::read)?,
+        })
     }
 
     pub fn write(&self, w: &mut Writer) {
@@ -137,23 +158,58 @@ pub struct UserInfo {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PeerMessage {
     GetSharedFileList,
-    SharedFileList { dirs: Vec<Directory>, private_dirs: Vec<Directory> },
+    SharedFileList {
+        dirs: Vec<Directory>,
+        private_dirs: Vec<Directory>,
+    },
     SearchResponse(SearchResponse),
     UserInfoRequest,
     UserInfoResponse(UserInfo),
-    FolderContentsRequest { token: u32, folder: RawStr },
-    FolderContentsResponse { token: u32, folder: RawStr, dirs: Vec<Directory> },
+    FolderContentsRequest {
+        token: u32,
+        folder: RawStr,
+    },
+    FolderContentsResponse {
+        token: u32,
+        folder: RawStr,
+        dirs: Vec<Directory>,
+    },
     /// direction 0: a (legacy) download request; 1: the peer is ready to
     /// upload to us, and `size` is set.
-    TransferRequest { direction: u32, token: u32, filename: RawStr, size: Option<u64> },
+    TransferRequest {
+        direction: u32,
+        token: u32,
+        filename: RawStr,
+        size: Option<u64>,
+    },
     /// `size` only appears when accepting a legacy download request.
-    TransferResponse { token: u32, allowed: bool, size: Option<u64>, reason: Option<String> },
-    QueueUpload { filename: RawStr },
-    PlaceInQueueResponse { filename: RawStr, place: u32 },
-    UploadFailed { filename: RawStr },
-    UploadDenied { filename: RawStr, reason: String },
-    PlaceInQueueRequest { filename: RawStr },
-    Unknown { code: u32, body: Bytes },
+    TransferResponse {
+        token: u32,
+        allowed: bool,
+        size: Option<u64>,
+        reason: Option<String>,
+    },
+    QueueUpload {
+        filename: RawStr,
+    },
+    PlaceInQueueResponse {
+        filename: RawStr,
+        place: u32,
+    },
+    UploadFailed {
+        filename: RawStr,
+    },
+    UploadDenied {
+        filename: RawStr,
+        reason: String,
+    },
+    PlaceInQueueRequest {
+        filename: RawStr,
+    },
+    Unknown {
+        code: u32,
+        body: Bytes,
+    },
 }
 
 impl PeerMessage {
@@ -186,14 +242,24 @@ impl PeerMessage {
         let mut w = Writer::new();
         match self {
             GetSharedFileList | UserInfoRequest => {}
-            SharedFileList { dirs, private_dirs } => return shared_file_list_frame(dirs, private_dirs),
+            SharedFileList { dirs, private_dirs } => {
+                return shared_file_list_frame(dirs, private_dirs);
+            }
             SearchResponse(s) => {
                 let mut inner = Writer::new();
-                inner.str(&s.username).u32(s.token).u32(s.files.len() as u32);
+                inner
+                    .str(&s.username)
+                    .u32(s.token)
+                    .u32(s.files.len() as u32);
                 for f in &s.files {
                     f.write(&mut inner);
                 }
-                inner.bool(s.slot_free).u32(s.avg_speed).u32(s.queue_length).u32(0).u32(s.private_files.len() as u32);
+                inner
+                    .bool(s.slot_free)
+                    .u32(s.avg_speed)
+                    .u32(s.queue_length)
+                    .u32(0)
+                    .u32(s.private_files.len() as u32);
                 for f in &s.private_files {
                     f.write(&mut inner);
                 }
@@ -217,7 +283,11 @@ impl PeerMessage {
             FolderContentsRequest { token, folder } => {
                 w.u32(*token).raw(folder);
             }
-            FolderContentsResponse { token, folder, dirs } => {
+            FolderContentsResponse {
+                token,
+                folder,
+                dirs,
+            } => {
                 let mut inner = Writer::new();
                 inner.u32(*token).raw(folder).u32(dirs.len() as u32);
                 for d in dirs {
@@ -225,13 +295,23 @@ impl PeerMessage {
                 }
                 w.put(&deflate(&inner.finish()));
             }
-            TransferRequest { direction, token, filename, size } => {
+            TransferRequest {
+                direction,
+                token,
+                filename,
+                size,
+            } => {
                 w.u32(*direction).u32(*token).raw(filename);
                 if let (1, Some(size)) = (direction, size) {
                     w.u64(*size);
                 }
             }
-            TransferResponse { token, allowed, size, reason } => {
+            TransferResponse {
+                token,
+                allowed,
+                size,
+                reason,
+            } => {
                 w.u32(*token).bool(*allowed);
                 if *allowed {
                     if let Some(size) = size {
@@ -241,7 +321,9 @@ impl PeerMessage {
                     w.str(reason.as_deref().unwrap_or("Cancelled"));
                 }
             }
-            QueueUpload { filename } | UploadFailed { filename } | PlaceInQueueRequest { filename } => {
+            QueueUpload { filename }
+            | UploadFailed { filename }
+            | PlaceInQueueRequest { filename } => {
                 w.raw(filename);
             }
             PlaceInQueueResponse { filename, place } => {
@@ -288,7 +370,15 @@ impl PeerMessage {
                 } else {
                     Vec::new()
                 };
-                P::SearchResponse(SearchResponse { username, token, files, slot_free, avg_speed, queue_length, private_files })
+                P::SearchResponse(SearchResponse {
+                    username,
+                    token,
+                    files,
+                    slot_free,
+                    avg_speed,
+                    queue_length,
+                    private_files,
+                })
             }
             15 => P::UserInfoRequest,
             16 => {
@@ -304,10 +394,17 @@ impl PeerMessage {
                     upload_permitted: r.u32().ok(),
                 })
             }
-            36 => P::FolderContentsRequest { token: outer.u32()?, folder: outer.raw()? },
+            36 => P::FolderContentsRequest {
+                token: outer.u32()?,
+                folder: outer.raw()?,
+            },
             37 => {
                 let mut r = Reader::new(inflate(&outer.rest(), MAX_INFLATED)?);
-                P::FolderContentsResponse { token: r.u32()?, folder: r.raw()?, dirs: read_dirs(&mut r)? }
+                P::FolderContentsResponse {
+                    token: r.u32()?,
+                    folder: r.raw()?,
+                    dirs: read_dirs(&mut r)?,
+                }
             }
             40 => {
                 let r = &mut outer;
@@ -315,23 +412,50 @@ impl PeerMessage {
                 let token = r.u32()?;
                 let filename = r.raw()?;
                 let size = if direction == 1 { Some(r.u64()?) } else { None };
-                P::TransferRequest { direction, token, filename, size }
+                P::TransferRequest {
+                    direction,
+                    token,
+                    filename,
+                    size,
+                }
             }
             41 => {
                 let r = &mut outer;
                 let token = r.u32()?;
                 let allowed = r.bool()?;
                 if allowed {
-                    P::TransferResponse { token, allowed, size: r.u64().ok(), reason: None }
+                    P::TransferResponse {
+                        token,
+                        allowed,
+                        size: r.u64().ok(),
+                        reason: None,
+                    }
                 } else {
-                    P::TransferResponse { token, allowed, size: None, reason: r.string().ok() }
+                    P::TransferResponse {
+                        token,
+                        allowed,
+                        size: None,
+                        reason: r.string().ok(),
+                    }
                 }
             }
-            43 => P::QueueUpload { filename: outer.raw()? },
-            44 => P::PlaceInQueueResponse { filename: outer.raw()?, place: outer.u32()? },
-            46 => P::UploadFailed { filename: outer.raw()? },
-            50 => P::UploadDenied { filename: outer.raw()?, reason: outer.string()? },
-            51 => P::PlaceInQueueRequest { filename: outer.raw()? },
+            43 => P::QueueUpload {
+                filename: outer.raw()?,
+            },
+            44 => P::PlaceInQueueResponse {
+                filename: outer.raw()?,
+                place: outer.u32()?,
+            },
+            46 => P::UploadFailed {
+                filename: outer.raw()?,
+            },
+            50 => P::UploadDenied {
+                filename: outer.raw()?,
+                reason: outer.string()?,
+            },
+            51 => P::PlaceInQueueRequest {
+                filename: outer.raw()?,
+            },
             _ => P::Unknown { code, body },
         })
     }
@@ -370,12 +494,29 @@ pub enum DistribMessage {
     Ping,
     /// The raw body is kept so it can be forwarded to children untouched,
     /// including anything a newer client appended.
-    Search { username: String, token: u32, query: String, raw: Bytes },
-    BranchLevel { level: i32 },
-    BranchRoot { root: String },
-    ChildDepth { depth: u32 },
-    Embedded { code: u8, payload: Bytes },
-    Unknown { code: u32, body: Bytes },
+    Search {
+        username: String,
+        token: u32,
+        query: String,
+        raw: Bytes,
+    },
+    BranchLevel {
+        level: i32,
+    },
+    BranchRoot {
+        root: String,
+    },
+    ChildDepth {
+        depth: u32,
+    },
+    Embedded {
+        code: u8,
+        payload: Bytes,
+    },
+    Unknown {
+        code: u32,
+        body: Bytes,
+    },
 }
 
 impl DistribMessage {
@@ -387,12 +528,20 @@ impl DistribMessage {
                 if r.u32()? != 49 {
                     return Err(DecodeError::Invalid("distributed search identifier"));
                 }
-                Self::Search { username: r.string()?, token: r.u32()?, query: r.string()?, raw: body }
+                Self::Search {
+                    username: r.string()?,
+                    token: r.u32()?,
+                    query: r.string()?,
+                    raw: body,
+                }
             }
             4 => Self::BranchLevel { level: r.i32()? },
             5 => Self::BranchRoot { root: r.string()? },
             7 => Self::ChildDepth { depth: r.u32()? },
-            93 => Self::Embedded { code: r.u8()?, payload: r.rest() },
+            93 => Self::Embedded {
+                code: r.u8()?,
+                payload: r.rest(),
+            },
             _ => Self::Unknown { code, body },
         })
     }
@@ -444,15 +593,26 @@ mod tests {
     }
 
     fn file(name: &str) -> FileEntry {
-        FileEntry { name: name.into(), size: 1234, extension: "flac".into(), attrs: vec![(1, 200), (4, 44100), (5, 16)] }
+        FileEntry {
+            name: name.into(),
+            size: 1234,
+            extension: "flac".into(),
+            attrs: vec![(1, 200), (4, 44100), (5, 16)],
+        }
     }
 
     #[test]
     fn peer_messages_round_trip() {
-        let dirs = vec![Directory { name: "music\\A".into(), files: vec![file("01.flac"), file("02.flac")] }];
+        let dirs = vec![Directory {
+            name: "music\\A".into(),
+            files: vec![file("01.flac"), file("02.flac")],
+        }];
         for m in [
             PeerMessage::GetSharedFileList,
-            PeerMessage::SharedFileList { dirs: dirs.clone(), private_dirs: vec![] },
+            PeerMessage::SharedFileList {
+                dirs: dirs.clone(),
+                private_dirs: vec![],
+            },
             PeerMessage::SearchResponse(SearchResponse {
                 username: "me".into(),
                 token: 7,
@@ -470,14 +630,46 @@ mod tests {
                 slots_free: true,
                 upload_permitted: Some(1),
             }),
-            PeerMessage::FolderContentsResponse { token: 3, folder: "music\\A".into(), dirs },
-            PeerMessage::TransferRequest { direction: 1, token: 9, filename: "x".into(), size: Some(10) },
-            PeerMessage::TransferRequest { direction: 0, token: 9, filename: "x".into(), size: None },
-            PeerMessage::TransferResponse { token: 9, allowed: false, size: None, reason: Some("Queued".into()) },
-            PeerMessage::TransferResponse { token: 9, allowed: true, size: None, reason: None },
-            PeerMessage::QueueUpload { filename: "x".into() },
-            PeerMessage::PlaceInQueueResponse { filename: "x".into(), place: 4 },
-            PeerMessage::UploadDenied { filename: "x".into(), reason: "Banned".into() },
+            PeerMessage::FolderContentsResponse {
+                token: 3,
+                folder: "music\\A".into(),
+                dirs,
+            },
+            PeerMessage::TransferRequest {
+                direction: 1,
+                token: 9,
+                filename: "x".into(),
+                size: Some(10),
+            },
+            PeerMessage::TransferRequest {
+                direction: 0,
+                token: 9,
+                filename: "x".into(),
+                size: None,
+            },
+            PeerMessage::TransferResponse {
+                token: 9,
+                allowed: false,
+                size: None,
+                reason: Some("Queued".into()),
+            },
+            PeerMessage::TransferResponse {
+                token: 9,
+                allowed: true,
+                size: None,
+                reason: None,
+            },
+            PeerMessage::QueueUpload {
+                filename: "x".into(),
+            },
+            PeerMessage::PlaceInQueueResponse {
+                filename: "x".into(),
+                place: 4,
+            },
+            PeerMessage::UploadDenied {
+                filename: "x".into(),
+                reason: "Banned".into(),
+            },
         ] {
             assert_eq!(peer_roundtrip(&m), m);
         }
@@ -493,15 +685,28 @@ mod tests {
         let f = decode(&mut buf, CodeWidth::U8, 1 << 16).unwrap().unwrap();
         let m = DistribMessage::decode(f.code, f.body).unwrap();
         match &m {
-            DistribMessage::Search { username, query, .. } => assert_eq!((username.as_str(), query.as_str()), ("alice", "aphex twin")),
+            DistribMessage::Search {
+                username, query, ..
+            } => assert_eq!((username.as_str(), query.as_str()), ("alice", "aphex twin")),
             other => panic!("{other:?}"),
         }
-        assert_eq!(m.encode(), frame, "the trailing field must survive forwarding");
+        assert_eq!(
+            m.encode(),
+            frame,
+            "the trailing field must survive forwarding"
+        );
     }
 
     #[test]
     fn peer_init_round_trips() {
-        for m in [PeerInit::PierceFirewall { token: 5 }, PeerInit::PeerInit { username: "bob".into(), kind: ConnKind::Distributed, token: 0 }] {
+        for m in [
+            PeerInit::PierceFirewall { token: 5 },
+            PeerInit::PeerInit {
+                username: "bob".into(),
+                kind: ConnKind::Distributed,
+                token: 0,
+            },
+        ] {
             let frame = m.encode();
             let mut buf = BytesMut::from(&frame[..]);
             let f = decode(&mut buf, CodeWidth::U8, 1024).unwrap().unwrap();

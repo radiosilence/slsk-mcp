@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/*"]
+members = ["crates/slsk-proto", "crates/slsk-engine"]
 resolver = "3"
 
 [workspace.package]

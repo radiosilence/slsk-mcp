@@ -9,7 +9,11 @@ use bytes::{BufMut, Bytes, BytesMut};
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum DecodeError {
     #[error("message truncated: wanted {wanted} bytes at offset {at}, {left} left")]
-    Truncated { at: usize, wanted: usize, left: usize },
+    Truncated {
+        at: usize,
+        wanted: usize,
+        left: usize,
+    },
     #[error("count {0} exceeds what the message can hold")]
     Count(u32),
     #[error("zlib: {0}")]
@@ -89,7 +93,11 @@ impl Reader {
 
     fn take(&mut self, n: usize) -> Result<Bytes> {
         if n > self.remaining() {
-            return Err(DecodeError::Truncated { at: self.pos, wanted: n, left: self.remaining() });
+            return Err(DecodeError::Truncated {
+                at: self.pos,
+                wanted: n,
+                left: self.remaining(),
+            });
         }
         let out = self.buf.slice(self.pos..self.pos + n);
         self.pos += n;
@@ -155,7 +163,11 @@ impl Reader {
         Ok(n as usize)
     }
 
-    pub fn list<T>(&mut self, min_item: usize, mut item: impl FnMut(&mut Self) -> Result<T>) -> Result<Vec<T>> {
+    pub fn list<T>(
+        &mut self,
+        min_item: usize,
+        mut item: impl FnMut(&mut Self) -> Result<T>,
+    ) -> Result<Vec<T>> {
         let n = self.count(min_item)?;
         let mut out = Vec::with_capacity(n);
         for _ in 0..n {
@@ -266,7 +278,10 @@ pub fn inflate(data: &[u8], limit: usize) -> Result<Bytes> {
 
 pub fn deflate(data: &[u8]) -> Bytes {
     use std::io::Write;
-    let mut enc = flate2::write::ZlibEncoder::new(Vec::with_capacity(data.len() / 3), flate2::Compression::fast());
+    let mut enc = flate2::write::ZlibEncoder::new(
+        Vec::with_capacity(data.len() / 3),
+        flate2::Compression::fast(),
+    );
     enc.write_all(data).expect("writing to a Vec cannot fail");
     Bytes::from(enc.finish().expect("writing to a Vec cannot fail"))
 }
