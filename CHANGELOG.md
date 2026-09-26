@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.26
+
+- A download counts as stalled when no bytes have arrived for twenty minutes, rather than when none ever have. A peer that sent the first file and queued the rest behind hundreds of others was treated as sending, so the album never moved to another copy.
+- A download waiting in the peer's upload queue shows its place ("place 535 in larsinio's queue") instead of 0%.
+- UI sign-ins are kept in Postgres, so a deploy no longer signs everyone out. Only the SHA-256 of each session id is stored.
+
 ## 0.1.25
 
 - Grab ranks a folder named close to the query ahead of one carrying much else in its name: a leaf folder with more than three words beyond the query is treated like a variant. Scene-style release names ("Artist-Album-(CAT001)-WEB-FLAC-2019-GROUP") had ranked alongside the plain album folder.

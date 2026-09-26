@@ -11,7 +11,7 @@
     </div>
     <div class="meta">
       {% match j.username %}{% when Some with (u) %}from {{ u }}{% when None %}{% endmatch %}
-      {% if j.status == "downloading" %} · {% if j.downloaded_bytes == 0 %}waiting for the peer{% else %}{{ self.size(j.downloaded_bytes) }} of {{ self.size(j.total_bytes) }} ({{ self.pct(j) }}%){% endif %}{% endif %}
+      {% if j.status == "downloading" %} · {{ self.progress(j) }}{% endif %}
       {% if j.status == "importing" %} · tagging and filing{% endif %}
     </div>
     {% if j.status == "downloading" %}<progress class="bar" max="100" value="{{ self.pct(j) }}">{{ self.pct(j) }}%</progress>{% endif %}
@@ -71,7 +71,7 @@
     </div>
     <div class="meta">
       {% match j.username %}{% when Some with (u) %}from {{ u }}{% when None %}{% endmatch %}
-      {% if j.status == "downloading" %} · {% if j.downloaded_bytes == 0 %}waiting for the peer{% else %}{{ self.size(j.downloaded_bytes) }} of {{ self.size(j.total_bytes) }} ({{ self.pct(j) }}%){% endif %}{% endif %}
+      {% if j.status == "downloading" %} · {{ self.progress(j) }}{% endif %}
       {% if j.status == "importing" %} · tagging and filing{% endif %}
     </div>
     {% if j.status == "downloading" %}<progress class="bar" max="100" value="{{ self.pct(j) }}">{{ self.pct(j) }}%</progress>{% endif %}

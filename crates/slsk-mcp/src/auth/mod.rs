@@ -6,11 +6,8 @@
 //! is no second allowlist here — a copy would be a second thing to keep in
 //! step, and the one that drifted would be this one.
 //!
-//! Sessions live in memory and do not survive a restart. That is the one
-//! deliberate difference from mcp-gateway, which keeps them in Postgres: this
-//! has no database, and logging in again is a smaller cost than a datastore.
-//! Written down because "why am I logged out after every deploy" is otherwise a
-//! mystery rather than a decision.
+//! Sessions are kept in Postgres, as mcp-gateway keeps its own, so a deploy
+//! does not sign anyone out.
 
 pub mod cookie;
 pub mod extract;

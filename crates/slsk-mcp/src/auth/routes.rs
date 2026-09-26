@@ -41,18 +41,19 @@ pub fn router() -> Router<AppState> {
 /// function and the route that reaches it are simply not present in the
 /// binary. There is nothing to bypass because there is nothing there.
 #[cfg(debug_assertions)]
-async fn dev_login(State(state): State<AppState>) -> Response {
+async fn dev_login(State(state): State<AppState>) -> AppResult<Response> {
     let session_id = state
         .sessions
         .create(
             "dev",
             std::time::Duration::from_secs(SESSION_TTL_SECS as u64),
         )
-        .await;
-    redirect(
+        .await
+        .map_err(anyhow::Error::from)?;
+    Ok(redirect(
         "/",
         &[set_cookie(SESSION_COOKIE, &session_id, SESSION_TTL_SECS)],
-    )
+    ))
 }
 
 /// Build a redirect response, appending each cookie as its own `Set-Cookie`
@@ -131,7 +132,8 @@ pub async fn callback(
             &sub,
             std::time::Duration::from_secs(SESSION_TTL_SECS as u64),
         )
-        .await;
+        .await
+        .map_err(anyhow::Error::from)?;
 
     Ok(redirect(
         "/",

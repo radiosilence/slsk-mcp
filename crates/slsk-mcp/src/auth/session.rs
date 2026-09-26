@@ -1,9 +1,10 @@
 //! Server-side sessions and login flows, keyed by opaque ids.
 //!
 //! Cookies carry an id and nothing else — no JWT, nothing forgeable, nothing
-//! claim-bearing on the client. The store is a map behind a lock because there
-//! is one pod and no database; that is the whole design, and it is why a
-//! restart signs everyone out.
+//! claim-bearing on the client. Sessions are rows in Postgres, keyed by the
+//! id's SHA-256, so a deploy signs no one out and the table alone signs no one
+//! in. A login flow lasts minutes and is used once, so it stays in memory: a
+//! restart mid-login costs one retry.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -12,6 +13,8 @@ use std::time::{Duration, Instant};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use rand::Rng as _;
+use sha2::{Digest, Sha256};
+use sqlx::PgPool;
 use tokio::sync::RwLock;
 
 #[derive(Clone, Debug)]
@@ -19,7 +22,6 @@ pub struct Session {
     /// Hydra's subject. Not shown anywhere; it is what makes a session an
     /// identity rather than a bare permit.
     pub sub: String,
-    pub expires: Instant,
 }
 
 /// A login round-trip in progress: the PKCE verifier and the CSRF state, held
@@ -31,15 +33,22 @@ pub struct Flow {
     pub expires: Instant,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct Sessions {
-    sessions: Arc<RwLock<HashMap<String, Session>>>,
+    db: PgPool,
     flows: Arc<RwLock<HashMap<String, Flow>>>,
 }
 
+fn hash(id: &str) -> Vec<u8> {
+    Sha256::digest(id.as_bytes()).to_vec()
+}
+
 impl Sessions {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(db: PgPool) -> Self {
+        Self {
+            db,
+            flows: Arc::default(),
+        }
     }
 
     /// A URL-safe opaque id with 128 bits behind it.
@@ -49,33 +58,47 @@ impl Sessions {
         URL_SAFE_NO_PAD.encode(bytes)
     }
 
-    pub async fn create(&self, sub: &str, ttl: Duration) -> String {
+    pub async fn create(&self, sub: &str, ttl: Duration) -> sqlx::Result<String> {
         let id = Self::token();
-        let session = Session {
-            sub: sub.to_string(),
-            expires: Instant::now() + ttl,
-        };
-        self.sessions.write().await.insert(id.clone(), session);
-        id
+        // Expired rows go on each sign-in; there are too few to need a sweeper.
+        sqlx::query("DELETE FROM ui_sessions WHERE expires_at < now()")
+            .execute(&self.db)
+            .await?;
+        sqlx::query(
+            "INSERT INTO ui_sessions (id_hash, sub, expires_at) \
+             VALUES ($1, $2, now() + make_interval(secs => $3))",
+        )
+        .bind(hash(&id))
+        .bind(sub)
+        .bind(ttl.as_secs_f64())
+        .execute(&self.db)
+        .await?;
+        Ok(id)
     }
 
-    /// `None` for an unknown or expired id. Expiry is checked on read rather
-    /// than swept on a timer: the map is small, and a sweeper is a task to keep
-    /// alive for no benefit at this size.
+    /// `None` for an unknown or expired id, and when the database cannot be
+    /// asked: a sign-in page is the safe answer to not knowing.
     pub async fn get(&self, id: &str) -> Option<Session> {
-        let mut sessions = self.sessions.write().await;
-        match sessions.get(id) {
-            Some(session) if Instant::now() < session.expires => Some(session.clone()),
-            Some(_) => {
-                sessions.remove(id);
-                None
-            }
-            None => None,
-        }
+        sqlx::query_scalar::<_, String>(
+            "SELECT sub FROM ui_sessions WHERE id_hash = $1 AND expires_at > now()",
+        )
+        .bind(hash(id))
+        .fetch_optional(&self.db)
+        .await
+        .inspect_err(|e| tracing::warn!(error = %e, "session lookup failed"))
+        .ok()
+        .flatten()
+        .map(|sub| Session { sub })
     }
 
     pub async fn delete(&self, id: &str) {
-        self.sessions.write().await.remove(id);
+        if let Err(e) = sqlx::query("DELETE FROM ui_sessions WHERE id_hash = $1")
+            .bind(hash(id))
+            .execute(&self.db)
+            .await
+        {
+            tracing::warn!(error = %e, "session delete failed");
+        }
     }
 
     pub async fn begin_flow(&self, verifier: &str, csrf: &str, ttl: Duration) -> String {
@@ -100,31 +123,13 @@ impl Sessions {
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn a_created_session_is_retrievable_by_its_id() {
-        let sessions = Sessions::new();
-        let id = sessions.create("alice", Duration::from_secs(60)).await;
-        let session = sessions.get(&id).await.expect("session should exist");
-        assert_eq!(session.sub, "alice");
-    }
-
-    #[tokio::test]
-    async fn an_unknown_id_is_none() {
-        let sessions = Sessions::new();
-        assert!(sessions.get("nope").await.is_none());
-    }
-
-    #[tokio::test]
-    async fn a_session_with_a_near_zero_ttl_is_none_on_read() {
-        let sessions = Sessions::new();
-        let id = sessions.create("alice", Duration::from_millis(1)).await;
-        tokio::time::sleep(Duration::from_millis(20)).await;
-        assert!(sessions.get(&id).await.is_none());
+    fn sessions() -> Sessions {
+        Sessions::new(PgPool::connect_lazy("postgres://unused").unwrap())
     }
 
     #[tokio::test]
     async fn take_flow_returns_once_then_none() {
-        let sessions = Sessions::new();
+        let sessions = sessions();
         let id = sessions
             .begin_flow("verifier", "csrf", Duration::from_secs(60))
             .await;
@@ -135,5 +140,12 @@ mod tests {
     #[test]
     fn two_tokens_differ() {
         assert_ne!(Sessions::token(), Sessions::token());
+    }
+
+    #[test]
+    fn the_stored_key_is_not_the_cookie() {
+        let id = Sessions::token();
+        assert_ne!(hash(&id), id.as_bytes());
+        assert_eq!(hash(&id), hash(&id));
     }
 }

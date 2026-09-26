@@ -98,8 +98,13 @@ pub struct Jobs {
     /// Set on shutdown: imports still waiting for the lock leave the job
     /// `importing` for the next start to resume.
     closing: std::sync::atomic::AtomicBool,
-    /// When each downloading job was first seen with nothing arriving.
-    stalled: std::sync::Mutex<HashMap<Uuid, tokio::time::Instant>>,
+    /// Per downloading job, when bytes last arrived and how many had then.
+    /// A file finishing and the rest never starting is a stall, so this
+    /// tracks progress rather than whether anything ever arrived.
+    stalled: std::sync::Mutex<HashMap<Uuid, (tokio::time::Instant, u64)>>,
+    /// Per downloading job, its best place in the peer's upload queue while
+    /// nothing is transferring, for the UI.
+    places: std::sync::Mutex<HashMap<Uuid, u32>>,
     /// When this process started: stalls are not judged until the session
     /// has had time to reach the network again.
     started: tokio::time::Instant,
@@ -131,6 +136,7 @@ impl Jobs {
             retried: Default::default(),
             closing: Default::default(),
             stalled: Default::default(),
+            places: Default::default(),
             started: tokio::time::Instant::now(),
             stalled_peers: Default::default(),
             wake: Notify::new(),
@@ -389,6 +395,11 @@ impl Jobs {
         Ok(())
     }
 
+    /// The job's place in its peer's upload queue, while it is waiting in one.
+    pub fn place(&self, id: Uuid) -> Option<u32> {
+        self.places.lock().expect("places").get(&id).copied()
+    }
+
     /// Peers that stalled a download in the last day.
     pub fn recently_stalled(&self) -> std::collections::HashSet<String> {
         let mut peers = self.stalled_peers.lock().expect("stalled peers");
@@ -443,12 +454,19 @@ impl Jobs {
         for job in db::jobs(&self.db, Some("downloading"), 10_000).await? {
             let rows = db::job_files(&self.db, job.id).await?;
             let mut states: HashMap<&str, usize> = HashMap::new();
-            let mut moving = false;
+            let mut received = 0u64;
+            let mut place: Option<u32> = None;
+            let mut transferring = false;
             for f in &rows {
                 let remote = RawStr(f.remote.clone().into());
                 let (state, error) = match engine.download_view(&f.peer, &remote) {
                     Some(v) => {
-                        moving |= v.bytes > 0 || v.state == "completed";
+                        received += v.bytes;
+                        transferring |= v.state == "transferring";
+                        place = match (place, v.place) {
+                            (Some(a), Some(b)) => Some(a.min(b)),
+                            (a, b) => a.or(b),
+                        };
                         (v.state.to_string(), v.error)
                     }
                     // Not in the engine: completed before a restart, or lost.
@@ -487,31 +505,31 @@ impl Jobs {
                 // slot for strangers, or a queue it never works through)
                 // would hold the album forever while other sources sit
                 // untried. A slow peer that is sending is left alone.
+                {
+                    let mut places = self.places.lock().expect("places");
+                    match place.filter(|_| !transferring) {
+                        Some(p) => places.insert(job.id, p),
+                        None => places.remove(&job.id),
+                    };
+                }
                 let now = tokio::time::Instant::now();
-                let since = if moving {
-                    self.stalled.lock().expect("stalled").remove(&job.id);
-                    None
-                } else {
-                    {
-                        // From when this source was taken on, which the job row
-                        // records, so a restart does not forgive a peer that has
-                        // sent nothing.
+                let since = {
+                    let mut stalled = self.stalled.lock().expect("stalled");
+                    let entry = stalled.entry(job.id).or_insert_with(|| {
+                        // From when this source was taken on, which the job
+                        // row records, so a restart does not forgive a peer
+                        // that has sent nothing.
                         let waited = (chrono::Utc::now() - job.updated_at)
                             .to_std()
                             .unwrap_or_default();
-                        let started = now.checked_sub(waited).unwrap_or(now);
-                        Some(
-                            *self
-                                .stalled
-                                .lock()
-                                .expect("stalled")
-                                .entry(job.id)
-                                .or_insert(started),
-                        )
+                        (now.checked_sub(waited).unwrap_or(now), received)
+                    });
+                    if received > entry.1 {
+                        *entry = (now, received);
                     }
+                    entry.0
                 };
-                if let Some(since) = since
-                    && now.duration_since(self.started) >= STARTUP_GRACE
+                if now.duration_since(self.started) >= STARTUP_GRACE
                     && now.duration_since(since) >= STALL
                     && !job.alternates.0.is_empty()
                 {
@@ -529,6 +547,7 @@ impl Jobs {
                 continue;
             }
             self.stalled.lock().expect("stalled").remove(&job.id);
+            self.places.lock().expect("places").remove(&job.id);
             if failed.is_none() && done.is_some() {
                 self.retried.lock().expect("retried").remove(&job.id);
                 db::set_status(&self.db, job.id, "importing", None).await?;

@@ -50,10 +50,7 @@ pub async fn require_session(
     let session = match session {
         Some(id) => state.sessions.get(&id).await,
         // Local development without an identity provider: everyone is "dev".
-        None if state.config.oidc.is_none() => Some(Session {
-            sub: "dev".into(),
-            expires: std::time::Instant::now() + std::time::Duration::from_secs(3600),
-        }),
+        None if state.config.oidc.is_none() => Some(Session { sub: "dev".into() }),
         None => None,
     };
 

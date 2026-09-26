@@ -6,6 +6,7 @@
 //! session layer, which wraps the router whole so a route added later is
 //! protected by construction.
 
+use std::collections::HashMap;
 use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::Duration;
@@ -44,8 +45,8 @@ const CSP: &str = "default-src 'self'; script-src 'self' 'unsafe-eval'; style-sr
 pub fn router(app: Arc<App>) -> Router {
     let state = UiState {
         config: app.cfg.clone(),
+        sessions: Sessions::new(app.db.clone()),
         app,
-        sessions: Sessions::new(),
         http: reqwest::Client::new(),
     };
     let protected = Router::new()
@@ -250,6 +251,8 @@ struct JobsView {
     underway: Vec<Job>,
     /// Imported, or cancelled by someone.
     settled: Vec<Job>,
+    /// Queue places by job id, for those waiting in a peer's queue.
+    places: HashMap<String, u32>,
 }
 
 impl JobsView {
@@ -266,13 +269,30 @@ impl JobsView {
     fn pct(&self, j: &Job) -> u64 {
         percent(j.downloaded_bytes, j.total_bytes)
     }
+    /// Where the download stands, in the terms that explain a wait: nothing
+    /// yet, a place in the peer's queue, or how much has arrived.
+    fn progress(&self, j: &Job) -> String {
+        let peer = j.username.as_deref().unwrap_or("the peer");
+        match self.places.get(j.id.as_str()) {
+            Some(p) if j.downloaded_bytes == 0 => format!("place {p} in {peer}'s queue"),
+            Some(p) => format!(
+                "{} of {}, rest at place {p} in {peer}'s queue",
+                human(j.downloaded_bytes),
+                human(j.total_bytes)
+            ),
+            None if j.downloaded_bytes == 0 => "waiting for the peer".to_string(),
+            None => format!(
+                "{} of {} ({}%)",
+                human(j.downloaded_bytes),
+                human(j.total_bytes),
+                self.pct(j)
+            ),
+        }
+    }
     /// The signal that is true while a request from this job's card is in
     /// flight. Local (leading underscore), so it is never sent back.
     fn sig(&self, j: &Job) -> String {
         format!("_busy_{}", j.id.as_str().replace('-', ""))
-    }
-    fn size(&self, b: &u64) -> String {
-        human(*b)
     }
     /// What landed, as filed ("Artist — (Year) Album"), which is the
     /// confirmation a person wants; the query that asked for it otherwise.
@@ -448,10 +468,18 @@ async fn jobs_html(app: &App) -> String {
         }
         Err(e) => tracing::warn!(error = %e, "could not list jobs"),
     }
+    let places = jobs
+        .iter()
+        .filter_map(|j| {
+            let id = uuid::Uuid::parse_str(j.id.as_str()).ok()?;
+            Some((j.id.to_string(), app.jobs.place(id)?))
+        })
+        .collect();
     let mut view = JobsView {
         attention: Vec::new(),
         underway: Vec::new(),
         settled: Vec::new(),
+        places,
     };
     for j in jobs {
         match j.status.as_str() {
