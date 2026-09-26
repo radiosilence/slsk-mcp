@@ -69,6 +69,16 @@ band and are not detected
 
 `slsk-mcp analyse FILE…` prints the check's reading of any files.
 
+### When something goes wrong
+
+Every outcome other than a clean import is recorded with a cause from a fixed
+set (`stalled_peer`, `corrupt_copy`, `no_audio`, `no_candidates`,
+`weak_match`, `incomplete`, `lossy_source`, `upsampled`, …) and the version
+that produced it, in a history kept after the job itself is gone. The
+`triage` query groups them by cause with examples, and
+`slsk_job_outcomes_total` counts them for the dashboard. A cause that recurs
+is a fix to make in code; the version then identifies the jobs to repair.
+
 ## Running it
 
 It is a long-running daemon: it holds one Soulseek login, shares the library

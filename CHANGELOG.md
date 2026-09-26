@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.19
+
+- Every outcome a job reaches is recorded with a cause and the version that produced it (`job_events`), and kept after the job is retried or removed. The `triage` query groups them by cause with recent examples, and `slsk_job_outcomes_total{outcome,cause}` counts them: a cause that keeps recurring is a fix to make, and the version says which jobs to repair once it is made.
+- The UI and MCP keep serving while a stopping pod finishes its import. The listeners closed at the stop signal, so a deploy during an import left the UI unreachable for as long as the import ran.
+
 ## 0.1.18
 
 - A copy whose files will not parse (a truncated or corrupt FLAC) moves to the next source by itself. It stopped as `failed`, waiting for someone to ask for another copy, though the fault was the copy's and not the album's.

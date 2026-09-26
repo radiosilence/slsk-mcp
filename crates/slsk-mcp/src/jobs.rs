@@ -25,6 +25,34 @@ use crate::db::{self, Alternate, Job, JobFile, Source};
 use crate::folders::Folder;
 use crate::session::Session;
 
+/// Why a job did not land cleanly: a fixed set, so outcomes can be counted
+/// and a cause traced to a fix.
+pub mod cause {
+    /// Every file failed from the peer, after retries.
+    pub const PEER_FAILED: &str = "peer_failed";
+    /// Queued with the peer, nothing received for the stall limit.
+    pub const STALLED_PEER: &str = "stalled_peer";
+    /// Files that do not parse as audio.
+    pub const CORRUPT_COPY: &str = "corrupt_copy";
+    /// No audio files where the download should be: the peer's folder held
+    /// none, or they went missing here, which is a bug worth chasing.
+    pub const NO_AUDIO: &str = "no_audio";
+    /// A person or assistant asked for another copy.
+    pub const REQUESTED: &str = "requested";
+    /// MusicBrainz offered nothing.
+    pub const NO_CANDIDATES: &str = "no_candidates";
+    /// The closest release lacks tracks the files have, or the files lack
+    /// tracks it has.
+    pub const INCOMPLETE: &str = "incomplete";
+    pub const EXTRA_FILES: &str = "extra_files";
+    /// Complete, but not close enough to apply unasked.
+    pub const WEAK_MATCH: &str = "weak_match";
+    pub const LOSSY_SOURCE: &str = "lossy_source";
+    pub const UPSAMPLED: &str = "upsampled";
+    pub const MB_UNAVAILABLE: &str = "mb_unavailable";
+    pub const IMPORT_ERROR: &str = "import_error";
+}
+
 /// Times a job's failed files are asked for again from the same peer before
 /// another source is tried.
 const RETRY_ROUNDS: u32 = 2;
@@ -427,7 +455,8 @@ impl Jobs {
                 {
                     self.stalled.lock().expect("stalled").remove(&job.id);
                     tracing::info!(job = %job.id, "no data from the peer; trying another source");
-                    self.fall_back(&engine, &job, &rows).await?;
+                    self.fall_back(&engine, &job, &rows, cause::STALLED_PEER)
+                        .await?;
                 }
                 continue;
             }
@@ -469,22 +498,28 @@ impl Jobs {
                         }
                     }
                     Some(false) => {}
-                    None => self.fall_back(&engine, &job, &rows).await?,
+                    None => {
+                        self.fall_back(&engine, &job, &rows, cause::PEER_FAILED)
+                            .await?
+                    }
                 }
             }
         }
         Ok(())
     }
 
-    /// The folder failed; move to the next candidate, or give up.
+    /// The folder failed; move to the next candidate, or give up. `cause` is
+    /// why this source is being left, for the job's history.
     async fn fall_back(
         self: &Arc<Self>,
         engine: &Engine,
         job: &Job,
         rows: &[JobFile],
+        cause: &str,
     ) -> Result<()> {
         let mut alternates = job.alternates.0.clone();
         let errors: Vec<String> = rows.iter().filter_map(|f| f.error.clone()).collect();
+        let left = rows.first().map(|r| r.peer.clone()).unwrap_or_default();
         for f in rows {
             engine.remove_download(&f.peer, &RawStr(f.remote.clone().into()));
         }
@@ -503,6 +538,9 @@ impl Jobs {
                     let rows = self.rows(job.id, &alt.username, &files);
                     db::replace_files(&self.db, job.id, &source, &alternates, &rows).await?;
                     self.start(engine, job.id, &rows);
+                    let detail = format!("to {}; left {left}: {}", alt.username, errors.join("; "));
+                    self.event(job, "fallback", Some(cause), Some(&detail))
+                        .await;
                     return Ok(());
                 }
                 _ => continue,
@@ -513,7 +551,17 @@ impl Jobs {
             .cloned()
             .unwrap_or_else(|| "download failed".into());
         db::set_status(&self.db, job.id, "failed", Some(&error)).await?;
+        self.event(job, "failed", Some(cause), Some(&error)).await;
         Ok(())
+    }
+
+    /// Record an outcome in the job's history. A failure to record is
+    /// logged, never allowed to fail the work it describes.
+    async fn event(&self, job: &Job, outcome: &str, cause: Option<&str>, detail: Option<&str>) {
+        if let Err(e) = db::record_event(&self.db, job.id, &job.title, outcome, cause, detail).await
+        {
+            tracing::warn!(job = %job.id, error = %e, "could not record job event");
+        }
     }
 
     /// Tag and move into the library. `release` forces a specific
@@ -576,6 +624,12 @@ impl Jobs {
                     },
                 );
                 db::set_status(&self.db, id, "suspect", Some(&reason)).await?;
+                let c = if verdict == crate::analysis::Verdict::Lossy {
+                    cause::LOSSY_SOURCE
+                } else {
+                    cause::UPSAMPLED
+                };
+                self.event(&job, "suspect", Some(c), Some(&reason)).await;
                 return Ok(());
             }
         }
@@ -584,6 +638,8 @@ impl Jobs {
             Ok(sift::Outcome::Imported { dir: path, log, .. }) => {
                 db::set_import_log(&self.db, id, &log).await?;
                 db::set_imported(&self.db, id, &path.to_string_lossy()).await?;
+                self.event(&job, "imported", None, Some(&path.to_string_lossy()))
+                    .await;
                 let _ = tokio::fs::remove_dir_all(&dir).await;
                 if let Some(engine) = self.session.engine().cloned() {
                     tokio::spawn(async move { engine.rescan().await });
@@ -596,6 +652,13 @@ impl Jobs {
             }) => {
                 db::set_import_log(&self.db, id, &log).await?;
                 db::set_review(&self.db, id, &reason, &candidates).await?;
+                let c = match candidates.first() {
+                    None => cause::NO_CANDIDATES,
+                    Some(b) if b.missing > 0 => cause::INCOMPLETE,
+                    Some(b) if b.extra > 0 => cause::EXTRA_FILES,
+                    Some(_) => cause::WEAK_MATCH,
+                };
+                self.event(&job, "review", Some(c), Some(&reason)).await;
             }
             // MusicBrainz being busy says nothing about the files, so the job
             // waits rather than asking a person to retry it.
@@ -607,6 +670,13 @@ impl Jobs {
                     Some(&format!("{e:#}; trying again in 5 minutes")),
                 )
                 .await?;
+                self.event(
+                    &job,
+                    "deferred",
+                    Some(cause::MB_UNAVAILABLE),
+                    Some(&format!("{e:#}")),
+                )
+                .await;
                 self.deferred.lock().expect("deferred imports").insert(
                     id,
                     (
@@ -620,17 +690,31 @@ impl Jobs {
             Err(e @ (sift::ImportError::Meta(_) | sift::ImportError::Empty(_)))
                 if !job.alternates.0.is_empty() =>
             {
+                let c = if matches!(e, sift::ImportError::Empty(_)) {
+                    cause::NO_AUDIO
+                } else {
+                    cause::CORRUPT_COPY
+                };
                 db::set_status(&self.db, id, "failed", Some(&format!("{e:#}"))).await?;
+                self.event(&job, "failed", Some(c), Some(&format!("{e:#}")))
+                    .await;
                 tracing::info!(%id, error = %e, "unreadable copy; trying another source");
                 let jobs = self.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = jobs.next_source(id).await {
+                    if let Err(e) = jobs.next_source(id, c).await {
                         tracing::warn!(%id, error = %e, "could not move to another source");
                     }
                 });
             }
             Err(e) => {
                 db::set_status(&self.db, id, "failed", Some(&format!("{e:#}"))).await?;
+                let c = match e {
+                    sift::ImportError::Meta(_) => cause::CORRUPT_COPY,
+                    sift::ImportError::Empty(_) => cause::NO_AUDIO,
+                    _ => cause::IMPORT_ERROR,
+                };
+                self.event(&job, "failed", Some(c), Some(&format!("{e:#}")))
+                    .await;
             }
         }
         Ok(())
@@ -755,7 +839,7 @@ impl Jobs {
     }
 
     /// Drop this copy and download the next source found for the request.
-    pub async fn next_source(self: &Arc<Self>, id: Uuid) -> Result<()> {
+    pub async fn next_source(self: &Arc<Self>, id: Uuid, cause: &str) -> Result<()> {
         let engine = self.session.require()?.clone();
         let job = db::job(&self.db, id).await?.context("no such job")?;
         if !matches!(job.status.as_str(), "review" | "suspect" | "failed") {
@@ -769,7 +853,7 @@ impl Jobs {
         }
         let rows = db::job_files(&self.db, id).await?;
         let _ = tokio::fs::remove_dir_all(self.complete_dir(&job)).await;
-        self.fall_back(&engine, &job, &rows).await
+        self.fall_back(&engine, &job, &rows, cause).await
     }
 
     /// Retry a failed or cancelled job from its current source.

@@ -238,6 +238,63 @@ pub async fn set_ban(db: &PgPool, account: &str, username: &str, banned: bool) -
         .map(|_| ())
 }
 
+/// Append an outcome to the job's history. See `0004_events.sql`.
+pub async fn record_event(
+    db: &PgPool,
+    job_id: Uuid,
+    title: &str,
+    outcome: &str,
+    cause: Option<&str>,
+    detail: Option<&str>,
+) -> sqlx::Result<()> {
+    sqlx::query(
+        "INSERT INTO job_events (job_id, title, version, outcome, cause, detail) \
+         VALUES ($1, $2, $3, $4, $5, $6)",
+    )
+    .bind(job_id)
+    .bind(title)
+    .bind(env!("CARGO_PKG_VERSION"))
+    .bind(outcome)
+    .bind(cause)
+    .bind(detail)
+    .execute(db)
+    .await
+    .map(|_| ())
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct JobEvent {
+    pub job_id: Uuid,
+    pub title: String,
+    pub at: chrono::DateTime<chrono::Utc>,
+    pub version: String,
+    pub outcome: String,
+    pub cause: Option<String>,
+    pub detail: Option<String>,
+}
+
+/// Events with a cause since `since`, newest first.
+pub async fn events_since(
+    db: &PgPool,
+    since: chrono::DateTime<chrono::Utc>,
+) -> sqlx::Result<Vec<JobEvent>> {
+    sqlx::query_as(
+        "SELECT job_id, title, at, version, outcome, cause, detail FROM job_events \
+         WHERE cause IS NOT NULL AND at >= $1 ORDER BY at DESC LIMIT 5000",
+    )
+    .bind(since)
+    .fetch_all(db)
+    .await
+}
+
+/// Every event ever recorded, by outcome and cause: monotonic, so it serves
+/// as a counter.
+pub async fn event_counts(db: &PgPool) -> sqlx::Result<Vec<(String, Option<String>, i64)>> {
+    sqlx::query_as("SELECT outcome, cause, count(*) FROM job_events GROUP BY 1, 2")
+        .fetch_all(db)
+        .await
+}
+
 pub async fn set_imported(db: &PgPool, id: Uuid, path: &str) -> sqlx::Result<()> {
     sqlx::query("UPDATE jobs SET status = 'imported', library_path = $2, error = NULL, candidates = NULL, updated_at = now() WHERE id = $1")
         .bind(id)

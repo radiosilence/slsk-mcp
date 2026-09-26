@@ -125,25 +125,40 @@ async fn main() -> anyhow::Result<()> {
     let ui_listener = tokio::net::TcpListener::bind(&cfg.ui_addr).await?;
     tracing::info!(addr = %cfg.ui_addr, "web UI");
     let ui = ui::router(app.clone());
+    // On a stop signal no new import starts, but the listeners keep serving
+    // until the one in progress has finished: the UI and MCP stay up through
+    // a drain that can take minutes, rather than going dark for it.
+    let (stopped, _) = tokio::sync::watch::channel(false);
+    let stop = stopped.clone();
+    tokio::spawn(async move {
+        shutdown().await;
+        tracing::info!("stopping; waiting for any import in progress");
+        jobs.drain().await;
+        let _ = stop.send(true);
+    });
+    let when_drained = || {
+        let mut rx = stopped.subscribe();
+        async move {
+            let _ = rx.wait_for(|done| *done).await;
+        }
+    };
     tokio::try_join!(
         async {
             axum::serve(internal_listener, internal)
-                .with_graceful_shutdown(shutdown())
+                .with_graceful_shutdown(when_drained())
                 .await
         },
         async {
             axum::serve(ui_listener, ui)
-                .with_graceful_shutdown(shutdown())
+                .with_graceful_shutdown(when_drained())
                 .await
         },
         async {
             axum::serve(metrics_listener, metrics)
-                .with_graceful_shutdown(shutdown())
+                .with_graceful_shutdown(when_drained())
                 .await
         },
     )?;
-    tracing::info!("stopping; waiting for any import in progress");
-    jobs.drain().await;
     Ok(())
 }
 
@@ -289,6 +304,19 @@ async fn state_metrics(app: &App, out: &mut String) {
         &[(String::new(), wishes)],
         "",
     );
+    // The history only grows, so its counts are counters: rate() over them
+    // is how often each thing goes wrong.
+    let _ = writeln!(
+        out,
+        "# HELP slsk_job_outcomes_total Outcomes jobs reached, by outcome and why.\n# TYPE slsk_job_outcomes_total counter"
+    );
+    for (outcome, cause, n) in db::event_counts(&app.db).await.unwrap_or_default() {
+        let _ = writeln!(
+            out,
+            "slsk_job_outcomes_total{{outcome=\"{outcome}\",cause=\"{}\"}} {n}",
+            cause.as_deref().unwrap_or("")
+        );
+    }
 }
 
 /// Kubernetes stops a pod with SIGTERM; a terminal with Ctrl-C.

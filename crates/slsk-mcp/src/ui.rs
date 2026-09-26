@@ -524,7 +524,7 @@ async fn job_action(
         "cancel" => jobs.cancel(id).await,
         "remove" => jobs.remove(id).await,
         "approve" => jobs.import_soon(id, true, None).await,
-        "next" => jobs.next_source(id).await,
+        "next" => jobs.next_source(id, crate::jobs::cause::REQUESTED).await,
         _ => return StatusCode::NOT_FOUND.into_response(),
     };
     match result {

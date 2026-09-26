@@ -100,6 +100,28 @@ pub(crate) struct JobFile {
 }
 
 #[derive(SimpleObject)]
+pub(crate) struct TriageCause {
+    /// peer_failed, stalled_peer, corrupt_copy, no_audio, requested, no_candidates,
+    /// incomplete, extra_files, weak_match, lossy_source, upsampled,
+    /// mb_unavailable or import_error.
+    pub cause: String,
+    pub count: usize,
+    pub examples: Vec<TriageEvent>,
+}
+
+#[derive(SimpleObject)]
+pub(crate) struct TriageEvent {
+    /// The job, if it still exists; its history outlives it.
+    pub job_id: ID,
+    pub title: String,
+    pub at: chrono::DateTime<chrono::Utc>,
+    /// The release that produced this outcome.
+    pub version: String,
+    pub outcome: String,
+    pub detail: Option<String>,
+}
+
+#[derive(SimpleObject)]
 pub(crate) struct Job {
     pub id: ID,
     pub title: String,
@@ -537,6 +559,48 @@ impl Query {
         Ok(app(ctx).social.wishes().await?)
     }
 
+    /// Why albums did not land cleanly, grouped by cause, most frequent
+    /// first, each with its most recent examples. A cause that keeps
+    /// recurring is a fix to make in code; `version` says which release
+    /// produced each, so jobs mishandled before a fix can be found and
+    /// repaired after it.
+    async fn triage(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(default = 7)] days: i64,
+        #[graphql(default = 5)] examples: usize,
+    ) -> Result<Vec<TriageCause>> {
+        let since = chrono::Utc::now() - chrono::Duration::days(days.clamp(1, 365));
+        let events = db::events_since(&app(ctx).db, since).await?;
+        let mut by_cause: std::collections::BTreeMap<String, TriageCause> = Default::default();
+        for e in events {
+            let Some(cause) = e.cause.clone() else {
+                continue;
+            };
+            let entry = by_cause
+                .entry(cause.clone())
+                .or_insert_with(|| TriageCause {
+                    cause,
+                    count: 0,
+                    examples: Vec::new(),
+                });
+            entry.count += 1;
+            if entry.examples.len() < examples {
+                entry.examples.push(TriageEvent {
+                    job_id: ID(e.job_id.to_string()),
+                    title: e.title,
+                    at: e.at,
+                    version: e.version,
+                    outcome: e.outcome,
+                    detail: e.detail,
+                });
+            }
+        }
+        let mut causes: Vec<TriageCause> = by_cause.into_values().collect();
+        causes.sort_by_key(|c| std::cmp::Reverse(c.count));
+        Ok(causes)
+    }
+
     async fn bans(&self, ctx: &Context<'_>) -> Result<Vec<String>> {
         let app = app(ctx);
         let engine = app.session.require()?;
@@ -734,7 +798,10 @@ impl Mutation {
     /// the next folder found for the same request: for a transcode, or a rip
     /// no release fits.
     async fn next_source(&self, ctx: &Context<'_>, id: ID) -> Result<bool> {
-        app(ctx).jobs.next_source(parse_id(&id)?).await?;
+        app(ctx)
+            .jobs
+            .next_source(parse_id(&id)?, crate::jobs::cause::REQUESTED)
+            .await?;
         Ok(true)
     }
 
