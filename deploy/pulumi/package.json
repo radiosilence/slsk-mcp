@@ -1,6 +1,6 @@
 {
   "name": "@radiosilence/slsk-mcp-pulumi",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Pulumi component that deploys slsk-mcp, a Soulseek client service, into Kubernetes",
   "license": "MIT",
   "author": "James Cleveland <jc@blit.cc>",

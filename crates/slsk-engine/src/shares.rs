@@ -280,9 +280,20 @@ impl ProbeCache {
     }
 }
 
-/// Walk `roots` and build an index. Blocking and CPU-heavy on a cold cache;
-/// run it on a blocking thread.
-pub fn scan(roots: &[PathBuf], cache: &mut ProbeCache) -> ShareIndex {
+/// Walk `roots` and build an index. Blocking; run it on a blocking thread.
+///
+/// With `probe` unset, files the cache does not know are shared without
+/// audio attributes — a walk of a large library takes seconds, where reading
+/// every file's headers off a spinning disk takes an hour, and peers can
+/// search and download a file whose bitrate they cannot see. With it set,
+/// unknown files are probed in chunks, and `checkpoint` is called with the
+/// cache after each, so a restart part-way keeps what was read.
+pub fn scan(
+    roots: &[PathBuf],
+    cache: &mut ProbeCache,
+    probe_new: bool,
+    mut checkpoint: impl FnMut(&ProbeCache),
+) -> ShareIndex {
     struct Found {
         path: PathBuf,
         virtual_path: String,
@@ -340,24 +351,30 @@ pub fn scan(roots: &[PathBuf], cache: &mut ProbeCache) -> ShareIndex {
         }
     }
 
-    let fresh: Vec<(PathBuf, Probed)> = found
-        .par_iter()
-        .filter(|f| AUDIO.contains(&f.extension.as_str()))
-        .filter(
-            |f| !matches!(cache.0.get(&f.path), Some(p) if p.size == f.size && p.mtime == f.mtime),
-        )
-        .map(|f| {
-            (
-                f.path.clone(),
-                Probed {
-                    size: f.size,
-                    mtime: f.mtime,
-                    attrs: probe(&f.path),
-                },
-            )
-        })
-        .collect();
-    cache.0.extend(fresh);
+    if probe_new {
+        let unknown: Vec<&Found> = found
+            .iter()
+            .filter(|f| AUDIO.contains(&f.extension.as_str()))
+            .filter(|f| !matches!(cache.0.get(&f.path), Some(p) if p.size == f.size && p.mtime == f.mtime))
+            .collect();
+        for chunk in unknown.chunks(2000) {
+            let fresh: Vec<(PathBuf, Probed)> = chunk
+                .par_iter()
+                .map(|f| {
+                    (
+                        f.path.clone(),
+                        Probed {
+                            size: f.size,
+                            mtime: f.mtime,
+                            attrs: probe(&f.path),
+                        },
+                    )
+                })
+                .collect();
+            cache.0.extend(fresh);
+            checkpoint(cache);
+        }
+    }
     let live: std::collections::HashSet<&Path> = found.iter().map(|f| f.path.as_path()).collect();
     cache.0.retain(|p, _| live.contains(p.as_path()));
 
@@ -513,7 +530,7 @@ mod tests {
         std::fs::write(root.join("Artist/Album/01 Song.flac"), b"not really flac").unwrap();
         std::fs::write(root.join(".hidden"), b"x").unwrap();
         let mut cache = ProbeCache::default();
-        let idx = scan(std::slice::from_ref(&root), &mut cache);
+        let idx = scan(std::slice::from_ref(&root), &mut cache, true, |_| {});
         assert_eq!(idx.file_count(), 1);
         assert!(idx.get(b"music\\Artist\\Album\\01 Song.flac").is_some());
         let cache_file = dir.path().join("cache.bin");

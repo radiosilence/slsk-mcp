@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.5
+
+- Share the whole library within seconds of starting. A cold probe cache used to mean reading every file's headers before announcing anything — about an hour and a half for fifty thousand files on a USB disk, sharing nothing meanwhile. Now a walk shares everything at once, from the cache where it knows the file and without audio attributes where it does not, and a second pass fills those in, saving the cache every two thousand files so a restart keeps its progress.
+
 ## 0.1.4
 
 - Start with a beets config that has no `directory`. A shared base config leaves it to a per-machine file, and the library comes from `LIBRARY_DIR` anyway; loading it refused, and the service exited at boot.

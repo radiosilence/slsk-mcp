@@ -324,21 +324,35 @@ impl Engine {
     /// Rescan shared directories and announce the new counts. Only changed
     /// files are probed, so this is cheap to call after every import.
     pub async fn rescan(&self) {
+        // Twice when the cache is cold: once from what is already known, so
+        // everything is shared within seconds, then again once every new
+        // file's audio headers have been read.
+        self.scan_and_publish(false).await;
+        self.scan_and_publish(true).await;
+    }
+
+    async fn scan_and_publish(&self, probe: bool) {
         let inner = self.0.clone();
         let dirs = inner.cfg.share_dirs.clone();
         let cache_path = inner.cfg.state_dir.join("probe-cache.bin");
         let started = std::time::Instant::now();
         let index = tokio::task::spawn_blocking(move || {
             let mut cache = shares::ProbeCache::load(&cache_path);
-            let index = shares::scan(&dirs, &mut cache);
-            if let Err(e) = cache.save(&cache_path) {
-                tracing::warn!(error = %e, "could not save the probe cache");
-            }
+            let save = |c: &shares::ProbeCache| {
+                if let Err(e) = c.save(&cache_path) {
+                    tracing::warn!(error = %e, "could not save the probe cache");
+                }
+            };
+            let index = shares::scan(&dirs, &mut cache, probe, save);
+            save(&cache);
             index
         })
-        .await
-        .expect("scan panicked");
-        tracing::info!(files = index.file_count(), dirs = index.dir_count(), took = ?started.elapsed(), "shares scanned");
+        .await;
+        let Ok(index) = index else {
+            tracing::error!("share scan panicked; keeping the previous index");
+            return;
+        };
+        tracing::info!(files = index.file_count(), dirs = index.dir_count(), probed = probe, took = ?started.elapsed(), "shares scanned");
         let m = &self.0.metrics;
         m.shared_files
             .store(index.file_count() as u64, Ordering::Relaxed);
