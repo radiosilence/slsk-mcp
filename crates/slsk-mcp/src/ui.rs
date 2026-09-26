@@ -232,7 +232,12 @@ async fn status_html(app: &App) -> String {
 #[derive(Template)]
 #[template(path = "jobs.html")]
 struct JobsView {
-    jobs: Vec<Job>,
+    /// Waiting on a decision: review, suspect, failed.
+    attention: Vec<Job>,
+    /// Downloading or importing.
+    underway: Vec<Job>,
+    /// Imported, or cancelled by someone.
+    settled: Vec<Job>,
 }
 
 impl JobsView {
@@ -257,6 +262,35 @@ impl JobsView {
     fn size(&self, b: &u64) -> String {
         human(*b)
     }
+    /// What landed, as filed ("Artist — (Year) Album"), which is the
+    /// confirmation a person wants; the query that asked for it otherwise.
+    fn landed(&self, j: &Job) -> String {
+        let Some(path) = j.library_path.as_deref() else {
+            return j.title.clone();
+        };
+        let mut parts = path.rsplit('/');
+        match (parts.next(), parts.next()) {
+            (Some(album), Some(artist)) => format!("{artist} — {album}"),
+            _ => path.to_string(),
+        }
+    }
+    /// What the job needs from the person, in their terms; the reason
+    /// underneath is the machine's.
+    fn ask(&self, j: &Job) -> Option<&'static str> {
+        match j.status.as_str() {
+            "review" if j.candidates.is_empty() => {
+                Some("MusicBrainz has nothing that fits these files. Try another copy.")
+            }
+            "review" => Some(
+                "Not sure which release this is. Pick the one that matches, or try another copy.",
+            ),
+            "suspect" => Some(
+                "Some tracks may not be true lossless. Check the spectrograms, then import anyway or try another copy.",
+            ),
+            "failed" => Some("This one could not finish."),
+            _ => None,
+        }
+    }
 }
 
 async fn jobs_html(app: &App) -> String {
@@ -272,7 +306,19 @@ async fn jobs_html(app: &App) -> String {
         }
         Err(e) => tracing::warn!(error = %e, "could not list jobs"),
     }
-    JobsView { jobs }.render().unwrap_or_default()
+    let mut view = JobsView {
+        attention: Vec::new(),
+        underway: Vec::new(),
+        settled: Vec::new(),
+    };
+    for j in jobs {
+        match j.status.as_str() {
+            "review" | "suspect" | "failed" => view.attention.push(j),
+            "imported" | "cancelled" => view.settled.push(j),
+            _ => view.underway.push(j),
+        }
+    }
+    view.render().unwrap_or_default()
 }
 
 #[derive(Template)]
@@ -478,6 +524,7 @@ async fn job_action(
         "cancel" => jobs.cancel(id).await,
         "remove" => jobs.remove(id).await,
         "approve" => jobs.import_soon(id, true, None).await,
+        "next" => jobs.next_source(id).await,
         _ => return StatusCode::NOT_FOUND.into_response(),
     };
     match result {

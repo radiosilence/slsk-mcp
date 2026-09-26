@@ -1,26 +1,24 @@
 <div id="jobs" class="jobs">
-{% if jobs.is_empty() %}<p class="note">Nothing yet. Search for something, or ask your assistant to grab it.</p>{% endif %}
-{% for j in jobs %}
+{% if attention.is_empty() && underway.is_empty() && settled.is_empty() %}<p class="note">Nothing yet. Search for something, or ask your assistant to grab it.</p>{% endif %}
+{% if !attention.is_empty() %}
+<section class="group attention">
+  <h2>Needs you <span class="count">{{ attention.len() }}</span></h2>
+{% for j in attention %}
   <article class="job {{ j.status }}" data-class:busy="${{ self.sig(j) }}">
     <div class="row">
       <strong class="title">{{ j.title }}</strong>
       <span class="pill">{{ j.status }}</span>
-      <span class="grow"></span>
-      {% if j.status == "suspect" %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/approve')">Import anyway</button>{% endif %}
-      {% if j.status == "failed" || j.status == "cancelled" || j.status == "review" %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/retry')">Retry</button>{% endif %}
-      {% if j.status == "downloading" %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/cancel')">Cancel</button>{% endif %}
-      {% if j.status == "imported" %}<button class="quiet" data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/remove')">Remove</button>
-      {% else %}<button class="quiet" data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="confirm('Remove this album and delete its downloaded files?') && @post('/jobs/{{ j.id.as_str() }}/remove')">Remove</button>{% endif %}
     </div>
     <div class="meta">
       {% match j.username %}{% when Some with (u) %}from {{ u }}{% when None %}{% endmatch %}
       {% if j.status == "downloading" %} · {% if j.downloaded_bytes == 0 %}waiting for the peer{% else %}{{ self.size(j.downloaded_bytes) }} of {{ self.size(j.total_bytes) }} ({{ self.pct(j) }}%){% endif %}{% endif %}
-      {% match j.library_path %}{% when Some with (p) %} · {{ p }}{% when None %}{% endmatch %}
+      {% if j.status == "importing" %} · tagging and filing{% endif %}
     </div>
     {% if j.status == "downloading" %}<progress class="bar" max="100" value="{{ self.pct(j) }}">{{ self.pct(j) }}%</progress>{% endif %}
-    {% match j.error %}{% when Some with (e) %}<div class="error">{{ e }}</div>{% when None %}{% endmatch %}
+    {% match self.ask(j) %}{% when Some with (a) %}<p class="ask">{{ a }}</p>{% when None %}{% endmatch %}
+    {% match j.error %}{% when Some with (e) %}<p class="why{% if j.status == "failed" %} error{% endif %}">{{ e }}</p>{% when None %}{% endmatch %}
     {% if !j.analysis.is_empty() && (j.status == "suspect" || j.status == "review") %}
-    <details class="analysis">
+    <details class="analysis" data-ignore-morph>
       <summary>Spectral analysis</summary>
       <ul>
       {% for t in j.analysis %}
@@ -45,6 +43,88 @@
       {% endfor %}
     </ul>
     {% endif %}
+    <div class="actions">
+      {% if j.status == "suspect" %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/approve')">Import anyway</button>{% endif %}
+      {% if (j.status == "review" || j.status == "suspect" || j.status == "failed") && j.alternates > 0 %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/next')">Try another copy</button>{% endif %}
+      {% if j.status == "failed" %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/retry')">Retry</button>{% endif %}
+      {% if j.status == "review" %}<button class="quiet" data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/retry')" title="Run the tagger over these files again">Match again</button>{% endif %}
+      {% if j.status == "downloading" %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/cancel')">Cancel</button>{% endif %}
+      <span class="grow"></span>
+      {% if j.status != "importing" %}<button class="quiet" data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="confirm('Remove this album and delete its downloaded files?') && @post('/jobs/{{ j.id.as_str() }}/remove')">Remove</button>{% endif %}
+    </div>
   </article>
 {% endfor %}
+</section>
+{% endif %}
+{% if !underway.is_empty() %}
+<section class="group underway">
+  <h2>On the way <span class="count">{{ underway.len() }}</span></h2>
+{% for j in underway %}
+  <article class="job {{ j.status }}" data-class:busy="${{ self.sig(j) }}">
+    <div class="row">
+      <strong class="title">{{ j.title }}</strong>
+      <span class="pill">{{ j.status }}</span>
+    </div>
+    <div class="meta">
+      {% match j.username %}{% when Some with (u) %}from {{ u }}{% when None %}{% endmatch %}
+      {% if j.status == "downloading" %} · {% if j.downloaded_bytes == 0 %}waiting for the peer{% else %}{{ self.size(j.downloaded_bytes) }} of {{ self.size(j.total_bytes) }} ({{ self.pct(j) }}%){% endif %}{% endif %}
+      {% if j.status == "importing" %} · tagging and filing{% endif %}
+    </div>
+    {% if j.status == "downloading" %}<progress class="bar" max="100" value="{{ self.pct(j) }}">{{ self.pct(j) }}%</progress>{% endif %}
+    {% match self.ask(j) %}{% when Some with (a) %}<p class="ask">{{ a }}</p>{% when None %}{% endmatch %}
+    {% match j.error %}{% when Some with (e) %}<p class="why{% if j.status == "failed" %} error{% endif %}">{{ e }}</p>{% when None %}{% endmatch %}
+    {% if !j.analysis.is_empty() && (j.status == "suspect" || j.status == "review") %}
+    <details class="analysis" data-ignore-morph>
+      <summary>Spectral analysis</summary>
+      <ul>
+      {% for t in j.analysis %}
+        <li>
+          <span class="verdict {{ self.verdict(t) }}">{{ self.verdict(t) }}</span>
+          <span>{{ t.file }}</span>
+          <span class="meta">{% match t.cutoff_hz %}{% when Some with (c) %}ends at {{ c / 1000.0 }} kHz{% when None %}{% endmatch %}{% match t.estimate %}{% when Some with (e) %} · {{ e }}{% when None %}{% endmatch %}</span>
+          <a href="/jobs/{{ j.id.as_str() }}/spectrogram/{{ loop.index0 }}" target="_blank" rel="noopener">spectrogram</a>
+        </li>
+      {% endfor %}
+      </ul>
+    </details>
+    {% endif %}
+    {% if j.status == "review" %}
+    <ul class="candidates">
+      {% for c in j.candidates %}
+      <li>
+        <button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/resolve/{{ c.release_id }}')">Use</button>
+        <span>{{ c.artist }} — {{ c.title }}</span>
+        <span class="meta">{% match c.date %}{% when Some with (d) %}{{ d }}{% when None %}{% endmatch %} {% match c.country %}{% when Some with (x) %}{{ x }}{% when None %}{% endmatch %} {% match c.media %}{% when Some with (m) %}{{ m }}{% when None %}{% endmatch %} · {{ c.tracks }} tracks · distance {{ c.distance }}{% if c.missing > 0 %} · {{ c.missing }} missing{% endif %}{% if c.extra > 0 %} · {{ c.extra }} extra{% endif %}</span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+    <div class="actions">
+      {% if j.status == "suspect" %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/approve')">Import anyway</button>{% endif %}
+      {% if (j.status == "review" || j.status == "suspect" || j.status == "failed") && j.alternates > 0 %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/next')">Try another copy</button>{% endif %}
+      {% if j.status == "failed" %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/retry')">Retry</button>{% endif %}
+      {% if j.status == "review" %}<button class="quiet" data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/retry')" title="Run the tagger over these files again">Match again</button>{% endif %}
+      {% if j.status == "downloading" %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/cancel')">Cancel</button>{% endif %}
+      <span class="grow"></span>
+      {% if j.status != "importing" %}<button class="quiet" data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="confirm('Remove this album and delete its downloaded files?') && @post('/jobs/{{ j.id.as_str() }}/remove')">Remove</button>{% endif %}
+    </div>
+  </article>
+{% endfor %}
+</section>
+{% endif %}
+{% if !settled.is_empty() %}
+<section class="group settled">
+  <h2>In your library</h2>
+  <ul class="landed">
+  {% for j in settled %}
+    <li class="{{ j.status }}" data-class:busy="${{ self.sig(j) }}">
+      <span class="title">{{ self.landed(j) }}</span>
+      {% if j.status == "cancelled" %}<span class="meta">cancelled</span>{% endif %}
+      {% if j.status == "cancelled" %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/retry')">Retry</button>{% endif %}
+      <button class="quiet" data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="{% if j.status == "cancelled" %}confirm('Remove this album and delete its downloaded files?') && {% endif %}@post('/jobs/{{ j.id.as_str() }}/remove')" title="Forget this entry; the album stays in the library">Clear</button>
+    </li>
+  {% endfor %}
+  </ul>
+</section>
+{% endif %}
 </div>

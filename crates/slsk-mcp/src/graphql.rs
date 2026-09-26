@@ -109,7 +109,8 @@ pub(crate) struct Job {
     pub error: Option<String>,
     pub username: Option<String>,
     pub folder: Option<String>,
-    /// Other sources that matched the same request, tried if this one fails.
+    /// Other sources that matched the same request, tried if this one fails;
+    /// `nextSource` moves to the next one on request.
     pub alternates: usize,
     pub total_bytes: u64,
     pub downloaded_bytes: u64,
@@ -701,6 +702,14 @@ impl Mutation {
 
     async fn retry_job(&self, ctx: &Context<'_>, id: ID) -> Result<bool> {
         app(ctx).jobs.retry(parse_id(&id)?).await?;
+        Ok(true)
+    }
+
+    /// Drop the copy a job holds (in review, suspect or failed) and download
+    /// the next folder found for the same request: for a transcode, or a rip
+    /// no release fits.
+    async fn next_source(&self, ctx: &Context<'_>, id: ID) -> Result<bool> {
+        app(ctx).jobs.next_source(parse_id(&id)?).await?;
         Ok(true)
     }
 

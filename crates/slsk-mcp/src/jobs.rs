@@ -740,6 +740,24 @@ impl Jobs {
         Ok(())
     }
 
+    /// Drop this copy and download the next source found for the request.
+    pub async fn next_source(self: &Arc<Self>, id: Uuid) -> Result<()> {
+        let engine = self.session.require()?.clone();
+        let job = db::job(&self.db, id).await?.context("no such job")?;
+        if !matches!(job.status.as_str(), "review" | "suspect" | "failed") {
+            bail!(
+                "job is {}; only review, suspect and failed jobs change source",
+                job.status
+            );
+        }
+        if job.alternates.0.is_empty() {
+            bail!("no other copies were found for this; search again");
+        }
+        let rows = db::job_files(&self.db, id).await?;
+        let _ = tokio::fs::remove_dir_all(self.complete_dir(&job)).await;
+        self.fall_back(&engine, &job, &rows).await
+    }
+
     /// Retry a failed or cancelled job from its current source.
     pub async fn retry(self: &Arc<Self>, id: Uuid) -> Result<()> {
         let engine = self.session.require()?.clone();
@@ -773,6 +791,14 @@ impl Jobs {
     }
 
     pub async fn remove(&self, id: Uuid) -> Result<()> {
+        // Its files are on their way into the library; deleting the folder
+        // now would leave the album half there.
+        if db::job(&self.db, id)
+            .await?
+            .is_some_and(|j| j.status == "importing")
+        {
+            bail!("the album is being filed into the library; remove it once that finishes");
+        }
         if let Some(engine) = self.session.engine() {
             for f in db::job_files(&self.db, id).await? {
                 engine.remove_download(&f.peer, &RawStr(f.remote.clone().into()));

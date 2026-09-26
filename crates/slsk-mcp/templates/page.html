@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>slsk</title>
 <meta name="theme-color" content="#101214">
+<link rel="icon" href="data:,">
 <link rel="stylesheet" href="/assets/app.css">
 <script type="module" src="/assets/datastar.js"></script>
 </head>
@@ -27,13 +28,11 @@
     <div id="flash"></div>
     <div id="results"></div>
   </section>
-  <section>
-    <h2>Albums</h2>
-    {{ jobs|safe }}
-  </section>
-  <section>
+  {{ jobs|safe }}
+  <details class="transfers-wrap">
+    <summary>Transfers, file by file</summary>
     {{ transfers|safe }}
-  </section>
+  </details>
 </main>
 </body>
 </html>

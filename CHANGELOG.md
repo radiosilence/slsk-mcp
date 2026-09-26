@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.16
+
+- Albums are grouped by what they need: **Needs you** (review, suspect, failed) first, then **On the way**, then **In your library** as one line each, showing the artist and album as filed rather than the query. The file-by-file transfer tables are folded away; they restate the album cards at a level only useful for diagnosis.
+- Each card says in words what it needs ("Not sure which release this is…"), with the tagger's or analyser's reason in small print beneath and every action in one row at its foot. A note that an import will be tried again is no longer styled as an error.
+- **Try another copy** (`nextSource`) drops the files a job holds and downloads the next folder found for the same request, for a transcode or a rip no release fits. Retry on a review job, which re-runs the tagger over the same files, is now labelled **Match again**.
+- An album being imported cannot be removed, from the UI or the API: deleting its folder partway would leave it half in the library.
+- An open spectral analysis stays open while the page updates.
+
 ## 0.1.15
 
 - Long tracks get a length allowance in proportion to their length, so a twenty-minute side that differs by twenty seconds between editions still matches (sift).
