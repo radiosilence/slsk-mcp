@@ -217,10 +217,21 @@ impl Jobs {
                     tracing::debug!(%username, error = %e, "folder listing failed; using search results");
                 }
                 let folder = fallback.context("the peer did not list the folder")?;
+                // Disc folders are grouped under their album, so each file's
+                // own directory still decides where it lands.
                 Ok(folder
                     .files
                     .iter()
-                    .map(|f| (f.remote.clone(), f.size, String::new()))
+                    .map(|f| {
+                        let path = f.remote.to_string_lossy();
+                        let dir = path.rsplit_once('\\').map_or("", |(d, _)| d);
+                        let sub = dir
+                            .strip_prefix(&root)
+                            .unwrap_or("")
+                            .trim_start_matches('\\')
+                            .replace('\\', "/");
+                        (f.remote.clone(), f.size, sub)
+                    })
                     .collect())
             }
         }

@@ -31,7 +31,9 @@ tested for interoperability against the `soulseek-rs` client.
 ## How a request becomes an album
 
 1. `grab(query)` searches for a few seconds, groups results into folders per
-   user, keeps those whose path mentions every word of the query, and ranks
+   user (disc folders such as `CD 1` count as their album), keeps those whose
+   path mentions every word of the query as often as the query does, puts
+   live, demo and remix folders behind the album unless asked for, and ranks
    lossless first, then free upload slot, queue length and speed.
 2. The best folder's full listing is requested from the peer and each file is
    queued. The next four folders are kept as fallbacks if the peer fails.

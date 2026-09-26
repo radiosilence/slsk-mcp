@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.10
+
+- Grab ranks folders by how well they answer the query, not only by quality. Peers match words anywhere in a path, so any folder under an artist's directory used to qualify: a query's words must now each appear as often as the query repeats them (a self-titled album needs the name twice), and live, demo, B-side and remix folders rank behind the album unless the query names them.
+- An album split into `CD 1`, `CD 2` folders is grabbed as one job, each disc in its own subdirectory, rather than as whichever disc ranked first.
+- Download progress bars show real progress. They set their width inline, which the content security policy blocks, so every bar drew full; they are now `<progress>` elements. A job reads "waiting for the peer" until its first byte arrives.
+- The album list logs why it failed to load instead of rendering empty.
+
 ## 0.1.9
 
 - MusicBrainz pacing adapts to the service's global budget, and server errors, timeouts and dropped connections are retried as beets retries them (sift).

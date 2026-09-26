@@ -256,12 +256,16 @@ impl JobsView {
 
 async fn jobs_html(app: &App) -> String {
     let mut jobs = Vec::new();
-    if let Ok(rows) = crate::db::jobs(&app.db, None, 40).await {
-        for j in rows {
-            if let Ok(v) = graphql::job_view(app, j, false).await {
-                jobs.push(v);
+    match crate::db::jobs(&app.db, None, 40).await {
+        Ok(rows) => {
+            for j in rows {
+                match graphql::job_view(app, j, false).await {
+                    Ok(v) => jobs.push(v),
+                    Err(e) => tracing::warn!(error = ?e, "could not show a job"),
+                }
             }
         }
+        Err(e) => tracing::warn!(error = %e, "could not list jobs"),
     }
     JobsView { jobs }.render().unwrap_or_default()
 }
@@ -389,7 +393,7 @@ async fn search(State(s): State<UiState>, axum::Form(form): axum::Form<SearchFor
                 responses.push(r);
             }
             let done = tokio::time::Instant::now() >= deadline;
-            let folders = graphql::relevant(crate::folders::group(&responses, &filter), &query).into_iter().take(60).collect();
+            let folders = crate::folders::relevant(crate::folders::group(&responses, &filter), &query).into_iter().take(60).collect();
             let view = ResultsView { query: query.clone(), folders, searching: !done, responses: responses.len() };
             yield Ok(patch(&view.render().unwrap_or_default()));
             if done {

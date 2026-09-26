@@ -14,10 +14,10 @@
     </div>
     <div class="meta">
       {% match j.username %}{% when Some with (u) %}from {{ u }}{% when None %}{% endmatch %}
-      {% if j.status == "downloading" %} · {{ self.size(j.downloaded_bytes) }} of {{ self.size(j.total_bytes) }}{% endif %}
+      {% if j.status == "downloading" %} · {% if j.downloaded_bytes == 0 %}waiting for the peer{% else %}{{ self.size(j.downloaded_bytes) }} of {{ self.size(j.total_bytes) }} ({{ self.pct(j) }}%){% endif %}{% endif %}
       {% match j.library_path %}{% when Some with (p) %} · {{ p }}{% when None %}{% endmatch %}
     </div>
-    {% if j.status == "downloading" %}<div class="bar"><span style="width: {{ self.pct(j) }}%"></span></div>{% endif %}
+    {% if j.status == "downloading" %}<progress class="bar" max="100" value="{{ self.pct(j) }}">{{ self.pct(j) }}%</progress>{% endif %}
     {% match j.error %}{% when Some with (e) %}<div class="error">{{ e }}</div>{% when None %}{% endmatch %}
     {% if !j.analysis.is_empty() && (j.status == "suspect" || j.status == "review") %}
     <details class="analysis">

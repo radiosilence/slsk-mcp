@@ -559,22 +559,6 @@ pub(crate) async fn search(
     Ok(folders::group(&responses, filter))
 }
 
-/// Keep folders whose path mentions every word of the query. Peers match
-/// on any part of a path, so "boards of canada geogaddi" also returns every
-/// folder that merely sits under "Boards of Canada".
-pub(crate) fn relevant(folders: Vec<Folder>, query: &str) -> Vec<Folder> {
-    let words: Vec<String> = sift::matching::normalise(query)
-        .split(' ')
-        .filter(|w| w.len() > 1)
-        .map(str::to_string)
-        .collect();
-    let (hit, miss): (Vec<Folder>, Vec<Folder>) = folders.into_iter().partition(|f| {
-        let path = sift::matching::normalise(&f.path);
-        words.iter().all(|w| path.split(' ').any(|p| p == w))
-    });
-    if hit.is_empty() { miss } else { hit }
-}
-
 /// Search, pick the best relevant folder, keep four fallbacks, start a job.
 /// Without a filter it prefers lossless and settles for lossy only when
 /// there is no lossless copy at all.
@@ -589,9 +573,9 @@ pub(crate) async fn grab(
         lossless: true,
         ..Default::default()
     });
-    let mut found = relevant(search(app, query, wait, &filter).await?, query);
+    let mut found = folders::relevant(search(app, query, wait, &filter).await?, query);
     if found.is_empty() && !strict {
-        found = relevant(search(app, query, wait, &Filter::default()).await?, query);
+        found = folders::relevant(search(app, query, wait, &Filter::default()).await?, query);
     }
     let mut found = found.into_iter();
     let best = found

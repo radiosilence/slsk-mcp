@@ -80,7 +80,14 @@ pub fn group(responses: &[SearchResponse], filter: &Filter) -> Vec<Folder> {
     for r in responses {
         for entry in &r.files {
             let bytes = entry.name.as_bytes();
-            let split = bytes.iter().rposition(|&b| b == b'\\').unwrap_or(0);
+            let mut split = bytes.iter().rposition(|&b| b == b'\\').unwrap_or(0);
+            // "Album\CD 1" and "Album\CD 2" are one album; the job's listing
+            // of the parent brings every disc, each in its own subdirectory.
+            if let Some(parent) = bytes[..split].iter().rposition(|&b| b == b'\\')
+                && is_disc(&String::from_utf8_lossy(&bytes[parent + 1..split]))
+            {
+                split = parent;
+            }
             let dir = RawStr(entry.name.0.slice(..split));
             let full = entry.name.to_string_lossy();
             let name = full.rsplit('\\').next().unwrap_or(&full).to_string();
@@ -161,6 +168,88 @@ pub fn group(responses: &[SearchResponse], filter: &Filter) -> Vec<Folder> {
     folders
 }
 
+/// "CD 1", "Disc2", "cd1 - Mezzanine": one disc of an album split into
+/// folders.
+fn is_disc(name: &str) -> bool {
+    let norm = sift::matching::normalise(name);
+    let mut words = norm.split(' ');
+    let Some(first) = words.next() else {
+        return false;
+    };
+    ["cd", "disc", "disk"].iter().any(|p| {
+        first.strip_prefix(p).is_some_and(|n| match n {
+            "" => words
+                .next()
+                .is_some_and(|w| w.chars().all(|c| c.is_ascii_digit())),
+            n => n.chars().all(|c| c.is_ascii_digit()),
+        })
+    })
+}
+
+/// Words in a folder's own name that mark it as something other than the
+/// album: asked for by name, they are what was wanted; otherwise the plain
+/// release comes first.
+const VARIANTS: &[&str] = &[
+    "live",
+    "demo",
+    "demos",
+    "session",
+    "sessions",
+    "bsides",
+    "sides",
+    "peel",
+    "remix",
+    "remixes",
+    "remixed",
+    "instrumental",
+    "instrumentals",
+    "karaoke",
+    "acoustic",
+    "bootleg",
+    "rehearsal",
+    "rehearsals",
+    "outtakes",
+    "unplugged",
+    "tribute",
+    "covers",
+    "commentary",
+    "interview",
+];
+
+/// Folders that answer the query, best first, keeping each tier in the
+/// order it came in. Peers match words anywhere in a path, so a search for
+/// an album also returns every other folder under the artist's directory:
+/// every word of the query must appear, as often as the query repeats it
+/// ("portishead portishead" is the album in the artist's folder, not any
+/// folder under it), and a live or demos folder waits behind the album
+/// unless the query asks for one. With nothing that qualifies, everything
+/// is returned as it came.
+pub fn relevant(folders: Vec<Folder>, query: &str) -> Vec<Folder> {
+    let norm = sift::matching::normalise(query);
+    let wanted: Vec<&str> = norm.split(' ').filter(|w| w.len() > 1).collect();
+    let tier = |f: &Folder| -> Option<u8> {
+        let path = sift::matching::normalise(&f.path);
+        let mut have: Vec<&str> = path.split(' ').collect();
+        for w in &wanted {
+            let i = have.iter().position(|p| p == w)?;
+            have.swap_remove(i);
+        }
+        let leaf = f.path.rsplit('\\').next().unwrap_or(&f.path);
+        let leaf = sift::matching::normalise(leaf);
+        let variant = leaf
+            .split(' ')
+            .any(|w| VARIANTS.contains(&w) && !wanted.contains(&w));
+        Some(u8::from(variant))
+    };
+    let mut ranked: Vec<(Option<u8>, Folder)> =
+        folders.into_iter().map(|f| (tier(&f), f)).collect();
+    if ranked.iter().any(|(t, _)| t.is_some()) {
+        ranked.retain(|(t, _)| t.is_some());
+        ranked.sort_by_key(|(t, _)| *t);
+    }
+    ranked.into_iter().map(|(_, f)| f).collect()
+}
+
 /// Quality first, then how soon it will actually arrive. A free slot matters
 /// more than raw speed: a fast peer with forty people queued is hours away.
 fn score(f: &Folder) -> f64 {
@@ -236,5 +325,84 @@ mod tests {
             },
         );
         assert_eq!(lossless.len(), 2);
+    }
+
+    fn folder(user: &str, path: &str) -> Folder {
+        let flac = |n: &str| entry(n, "flac", vec![(4, 44100), (5, 16)]);
+        group(
+            &[response(user, true, vec![flac(&format!("{path}\\1.flac"))])],
+            &Filter::default(),
+        )
+        .remove(0)
+    }
+
+    fn paths(folders: Vec<Folder>) -> Vec<String> {
+        folders.into_iter().map(|f| f.path).collect()
+    }
+
+    #[test]
+    fn a_self_titled_album_needs_its_name_twice() {
+        let found = relevant(
+            vec![
+                folder("a", "music\\Portishead\\Roseland NYC Live (1998)"),
+                folder("b", "music\\Portishead\\Portishead (1997)"),
+            ],
+            "portishead portishead",
+        );
+        assert_eq!(paths(found), ["music\\Portishead\\Portishead (1997)"]);
+    }
+
+    #[test]
+    fn variants_wait_behind_the_album_unless_asked_for() {
+        let folders = || {
+            vec![
+                folder(
+                    "a",
+                    "m\\Pixies-Doolittle_25_B_Sides_Peel_Sessions_And_Demos-2014",
+                ),
+                folder("b", "m\\Pixies\\Doolittle"),
+            ]
+        };
+        assert_eq!(
+            paths(relevant(folders(), "pixies doolittle"))[0],
+            "m\\Pixies\\Doolittle"
+        );
+        assert_eq!(
+            paths(relevant(folders(), "pixies doolittle peel sessions"))[0],
+            "m\\Pixies-Doolittle_25_B_Sides_Peel_Sessions_And_Demos-2014"
+        );
+    }
+
+    #[test]
+    fn nothing_relevant_returns_everything() {
+        let found = relevant(vec![folder("a", "m\\Other")], "portishead dummy");
+        assert_eq!(found.len(), 1);
+    }
+
+    #[test]
+    fn disc_folders_are_one_album() {
+        let flac = |n: &str| entry(n, "flac", vec![(4, 44100), (5, 16)]);
+        let rs = vec![response(
+            "a",
+            true,
+            vec![
+                flac("m\\Massive Attack\\Mezzanine\\CD 1\\01.flac"),
+                flac("m\\Massive Attack\\Mezzanine\\CD 2\\01.flac"),
+            ],
+        )];
+        let all = group(&rs, &Filter::default());
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].path, "m\\Massive Attack\\Mezzanine");
+        assert_eq!(all[0].audio_files, 2);
+    }
+
+    #[test]
+    fn recognises_disc_folders() {
+        for yes in ["CD 1", "CD1", "Disc 2", "disk3", "cd1 - Mezzanine", "CD 01"] {
+            assert!(is_disc(yes), "{yes}");
+        }
+        for no in ["CDs", "Discovery", "Disco Inferno", "Mezzanine", ""] {
+            assert!(!is_disc(no), "{no}");
+        }
     }
 }

@@ -520,7 +520,7 @@ impl Social {
             ..Default::default()
         };
         let found =
-            crate::graphql::relevant(crate::folders::group(&responses, &filter), &wish.query);
+            crate::folders::relevant(crate::folders::group(&responses, &filter), &wish.query);
         tracing::info!(query = %wish.query, folders = found.len(), "wishlist search");
         if wish.grab {
             let mut found = found.into_iter();
