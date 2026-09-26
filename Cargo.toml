@@ -1,0 +1,21 @@
+[workspace]
+members = ["crates/*"]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/radiosilence/slsk-mcp"
+rust-version = "1.91"
+
+[workspace.dependencies]
+anyhow = "1"
+bytes = "1"
+thiserror = "2"
+tokio = { version = "1.53", features = ["full"] }
+tracing = "0.1"
+
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 1

@@ -1,0 +1,13 @@
+[package]
+name = "slsk-proto"
+version = "0.1.0"
+description = "Soulseek wire protocol: framing and every message the modern network speaks. No I/O."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+bytes.workspace = true
+thiserror.workspace = true
+flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
+md-5 = "0.11"

@@ -1,0 +1,40 @@
+[package]
+name = "slsk-mcp"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow = "1.0.104"
+askama = "0.16"
+async-graphql = { version = "7", features = ["uuid", "chrono"] }
+async-stream = "0.3.6"
+axum = { version = "0.8", features = ["macros"] }
+base64 = "0.23.1"
+chacha20poly1305 = "0.11.0"
+chrono = { version = "0.4.45", features = ["serde"] }
+clap = { version = "4.6.7", features = ["derive", "env"] }
+futures-util = "0.3.34"
+http = "1"
+png = "0.18.1"
+rand = "0.10.3"
+reqwest = { version = "0.13", default-features = false, features = ["json", "form", "rustls", "stream"] }
+rmcp = { version = "1", features = ["server", "transport-io", "transport-streamable-http-server"] }
+rustfft = "6.4.1"
+schemars = "1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+sha2 = "0.11.0"
+soulseek-rs-lib = "19"
+sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "postgres", "macros", "migrate", "uuid", "chrono", "json"] }
+symphonia = { version = "0.6.1", default-features = false, features = ["flac", "wav", "aiff", "pcm", "alac", "isomp4"] }
+thiserror = "2.0.21"
+tokio = { version = "1.53.1", features = ["full"] }
+tokio-stream = "0.1.19"
+tower-http = { version = "0.7.1", features = ["trace"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+url = "2.5.8"
+uuid = { version = "1.26.1", features = ["v4", "serde"] }
+zip = "8.6.0"
