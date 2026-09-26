@@ -1,0 +1,12 @@
+# Formatting is fixed before a commit; everything CI would refuse is checked
+# before a push, so a red main is a flaky test rather than a forgotten lint.
+pre-commit:
+  commands:
+    fmt:
+      glob: "*.rs"
+      run: cargo fmt --all
+      stage_fixed: true
+pre-push:
+  commands:
+    check:
+      run: mise run check

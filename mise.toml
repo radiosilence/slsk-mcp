@@ -1,0 +1,18 @@
+[tools]
+# rustfmt and clippy are not in the minimal profile.
+rust = { version = "1", components = "rustfmt,clippy" }
+lefthook = "latest"
+node = "24"
+
+[tasks.check]
+description = "What CI checks: format, lint with warnings as errors, tests, the chart"
+run = [
+  "cargo fmt --all -- --check",
+  "cargo clippy --workspace --all-targets -- -D warnings",
+  "cargo test --workspace --locked",
+  "cd deploy/pulumi && npm run -s check",
+]
+
+[tasks.hooks]
+description = "Install the git hooks"
+run = "lefthook install"
