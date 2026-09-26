@@ -38,7 +38,8 @@ tested for interoperability against the `soulseek-rs` client.
    speed.
 2. The best folder's full listing is requested from the peer and each file is
    queued. Failed files are asked for again from the same peer twice, resuming
-   from what arrived; after that the next of four fallback folders is tried.
+   from what arrived; after that, or after twenty minutes without a byte, the
+   next of four fallback folders is tried.
 3. Every lossless-labelled track is checked for a lossy or upsampled source
    (see below). An album where a quarter of the tracks confidently fail is
    held as `suspect` with per-track spectrograms, for a person or assistant to

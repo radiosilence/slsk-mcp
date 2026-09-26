@@ -29,6 +29,10 @@ use crate::session::Session;
 /// another source is tried.
 const RETRY_ROUNDS: u32 = 2;
 
+/// How long a download may go without a single byte before another source
+/// is tried.
+const STALL: Duration = Duration::from_secs(20 * 60);
+
 pub struct Jobs {
     db: PgPool,
     session: Arc<Session>,
@@ -49,6 +53,8 @@ pub struct Jobs {
     /// Set on shutdown: imports still waiting for the lock leave the job
     /// `importing` for the next start to resume.
     closing: std::sync::atomic::AtomicBool,
+    /// When each downloading job was first seen with nothing arriving.
+    stalled: std::sync::Mutex<HashMap<Uuid, tokio::time::Instant>>,
     wake: Notify,
 }
 
@@ -72,6 +78,7 @@ impl Jobs {
             deferred: Default::default(),
             retried: Default::default(),
             closing: Default::default(),
+            stalled: Default::default(),
             wake: Notify::new(),
         })
     }
@@ -356,10 +363,14 @@ impl Jobs {
         for job in db::jobs(&self.db, Some("downloading"), 10_000).await? {
             let rows = db::job_files(&self.db, job.id).await?;
             let mut states: HashMap<&str, usize> = HashMap::new();
+            let mut moving = false;
             for f in &rows {
                 let remote = RawStr(f.remote.clone().into());
                 let (state, error) = match engine.download_view(&f.peer, &remote) {
-                    Some(v) => (v.state.to_string(), v.error),
+                    Some(v) => {
+                        moving |= v.bytes > 0 || v.state == "completed";
+                        (v.state.to_string(), v.error)
+                    }
                     // Not in the engine: completed before a restart, or lost.
                     None if f.state == "completed" => ("completed".to_string(), None),
                     None => {
@@ -392,8 +403,35 @@ impl Jobs {
                 states.get("active"),
             );
             if active.is_some() {
+                // A peer that queues every file and never sends one (no free
+                // slot for strangers, or a queue it never works through)
+                // would hold the album forever while other sources sit
+                // untried. A slow peer that is sending is left alone.
+                let now = tokio::time::Instant::now();
+                let since = if moving {
+                    self.stalled.lock().expect("stalled").remove(&job.id);
+                    None
+                } else {
+                    Some(
+                        *self
+                            .stalled
+                            .lock()
+                            .expect("stalled")
+                            .entry(job.id)
+                            .or_insert(now),
+                    )
+                };
+                if let Some(since) = since
+                    && now.duration_since(since) >= STALL
+                    && !job.alternates.0.is_empty()
+                {
+                    self.stalled.lock().expect("stalled").remove(&job.id);
+                    tracing::info!(job = %job.id, "no data from the peer; trying another source");
+                    self.fall_back(&engine, &job, &rows).await?;
+                }
                 continue;
             }
+            self.stalled.lock().expect("stalled").remove(&job.id);
             if failed.is_none() && done.is_some() {
                 self.retried.lock().expect("retried").remove(&job.id);
                 db::set_status(&self.db, job.id, "importing", None).await?;

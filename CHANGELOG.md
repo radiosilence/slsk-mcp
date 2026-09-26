@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.14
+
+- A download that receives nothing for twenty minutes moves to its next source. Some peers queue every file and never send one (no free slot for strangers, or a queue they never work through), which held albums indefinitely while four other sources sat untried. A slow peer that is sending is left alone.
+
 ## 0.1.13
 
 - Hi-res files are judged upsampled by whether anything sits above 26 kHz, and genuine when something does. The edge-steepness rule missed resamplers with a gentle filter and flagged dark tracks on genuine 24/96 releases; on known transcodes the new measure separates the two by about 30 dB.
