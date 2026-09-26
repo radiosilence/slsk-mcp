@@ -20,9 +20,11 @@ dashmap = "6.2.1"
 futures-util = "0.3.34"
 http = "1"
 parking_lot = "0.12.5"
+png = "0.18.1"
 rand = "0.10.3"
 reqwest = { version = "0.13", default-features = false, features = ["json", "form", "rustls", "stream"] }
 rmcp = { version = "1", features = ["server", "transport-io", "transport-streamable-http-server"] }
+rustfft = "6.4.1"
 schemars = "1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
@@ -31,6 +33,7 @@ sift = { git = "https://github.com/radiosilence/sift", version = "0.1.0" }
 slsk-engine = { version = "0.1.0", path = "../slsk-engine" }
 soulseek-rs-lib = "19"
 sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "postgres", "macros", "migrate", "uuid", "chrono", "json"] }
+symphonia = { version = "0.6.1", default-features = false, features = ["flac", "wav", "aiff", "pcm", "alac", "isomp4"] }
 thiserror = "2.0.21"
 tokio = { version = "1.53.1", features = ["full"] }
 tokio-stream = "0.1.19"

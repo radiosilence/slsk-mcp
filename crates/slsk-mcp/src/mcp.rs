@@ -142,6 +142,10 @@ impl ServerHandler for SlskMcp {
                  A job in `review` downloaded fine but the tagger was not sure which release it is. Its `candidates` \
                  are MusicBrainz releases with a distance (0 is perfect); pick the right one, asking the user if it \
                  is not obvious, and call `resolveJob(id, releaseId)`.\n\n\
+                 A job in `suspect` downloaded fine but its spectrum says the \"lossless\" files came from a lossy \
+                 source, or were upsampled; `error` says why and `analysis` has the per-track evidence. Tell the \
+                 user, and prefer `retryJob`-ing a different source or grabbing again over `approveJob`, which \
+                 imports it anyway.\n\n\
                  `search` returns folders grouped by user, best first, for when the user wants to choose. Searching \
                  waits several seconds for peers to answer.\n\n\
                  For something nobody has yet, `addWish(query, grab: true)` keeps searching on the server's \

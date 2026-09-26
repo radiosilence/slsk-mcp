@@ -72,6 +72,8 @@ pub struct Job {
     pub import_log: Option<String>,
     pub candidates: Option<Json<Vec<sift::Candidate>>>,
     pub library_path: Option<String>,
+    pub analysis: Option<Json<Vec<crate::analysis::TrackAnalysis>>>,
+    pub approved: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -255,6 +257,27 @@ pub async fn set_review(
         .bind(id)
         .bind(reason)
         .bind(Json(candidates))
+        .execute(db)
+        .await
+        .map(|_| ())
+}
+
+pub async fn set_analysis(
+    db: &PgPool,
+    id: Uuid,
+    analysis: &[crate::analysis::TrackAnalysis],
+) -> sqlx::Result<()> {
+    sqlx::query("UPDATE jobs SET analysis = $2, updated_at = now() WHERE id = $1")
+        .bind(id)
+        .bind(Json(analysis))
+        .execute(db)
+        .await
+        .map(|_| ())
+}
+
+pub async fn set_approved(db: &PgPool, id: Uuid) -> sqlx::Result<()> {
+    sqlx::query("UPDATE jobs SET approved = TRUE, updated_at = now() WHERE id = $1")
+        .bind(id)
         .execute(db)
         .await
         .map(|_| ())

@@ -30,6 +30,8 @@ pub struct Jobs {
     session: Arc<Session>,
     staging: PathBuf,
     complete: PathBuf,
+    /// Spectrograms, one directory per job.
+    spectrograms: PathBuf,
     tagger: Arc<sift::Importer>,
     /// Imports touch the library tree; one at a time keeps two albums from
     /// racing for the same destination.
@@ -43,6 +45,7 @@ impl Jobs {
         session: Arc<Session>,
         staging: PathBuf,
         complete: PathBuf,
+        spectrograms: PathBuf,
         tagger: Arc<sift::Importer>,
     ) -> Arc<Self> {
         Arc::new(Self {
@@ -50,6 +53,7 @@ impl Jobs {
             session,
             staging,
             complete,
+            spectrograms,
             tagger,
             import_lock: Mutex::new(()),
             wake: Notify::new(),
@@ -124,6 +128,8 @@ impl Jobs {
             import_log: None,
             candidates: None,
             library_path: None,
+            analysis: None,
+            approved: false,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         };
@@ -160,6 +166,8 @@ impl Jobs {
             import_log: None,
             candidates: None,
             library_path: None,
+            analysis: None,
+            approved: false,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         };
@@ -406,6 +414,36 @@ impl Jobs {
             incoming
         };
         db::set_status(&self.db, id, "importing", None).await?;
+        // A person who looked at the analysis and approved, or who named the
+        // release, has already decided; everyone else gets the check.
+        if !job.approved && release.is_none() {
+            let tracks = self.analyse(id, &dir).await;
+            db::set_analysis(&self.db, id, &tracks).await?;
+            let (verdict, confidence) = crate::analysis::album_verdict(&tracks);
+            if matches!(
+                verdict,
+                crate::analysis::Verdict::Lossy | crate::analysis::Verdict::Upsampled
+            ) && confidence >= 0.8
+            {
+                let flagged: Vec<_> = tracks.iter().filter(|t| t.verdict == verdict).collect();
+                let example = flagged
+                    .iter()
+                    .find_map(|t| t.estimate.clone())
+                    .unwrap_or_default();
+                let reason = format!(
+                    "{} of {} lossless-labelled tracks look {}: {example}. Check the spectrograms; approveJob imports it anyway.",
+                    flagged.len(),
+                    tracks.len(),
+                    if verdict == crate::analysis::Verdict::Lossy {
+                        "like a lossy source"
+                    } else {
+                        "upsampled"
+                    },
+                );
+                db::set_status(&self.db, id, "suspect", Some(&reason)).await?;
+                return Ok(());
+            }
+        }
         let outcome = self.tagger.import(&dir, release.as_deref()).await;
         match outcome {
             Ok(sift::Outcome::Imported { dir: path, log, .. }) => {
@@ -431,6 +469,72 @@ impl Jobs {
         Ok(())
     }
 
+    /// Spectral analysis of every lossless file in `dir`, a few at a time:
+    /// decoding is CPU-bound, and the engine serving uploads on the same node
+    /// matters more than this finishing quickly.
+    async fn analyse(
+        &self,
+        id: Uuid,
+        dir: &std::path::Path,
+    ) -> Vec<crate::analysis::TrackAnalysis> {
+        const LOSSLESS: &[&str] = &["flac", "wav", "aiff", "aif", "alac", "m4a"];
+        let mut files = Vec::new();
+        let mut stack = vec![dir.to_path_buf()];
+        while let Some(d) = stack.pop() {
+            let Ok(mut rd) = tokio::fs::read_dir(&d).await else {
+                continue;
+            };
+            while let Ok(Some(e)) = rd.next_entry().await {
+                let p = e.path();
+                if p.is_dir() {
+                    stack.push(p);
+                } else if p
+                    .extension()
+                    .and_then(|x| x.to_str())
+                    .is_some_and(|x| LOSSLESS.contains(&x.to_ascii_lowercase().as_str()))
+                {
+                    files.push(p);
+                }
+            }
+        }
+        files.sort();
+        let out_dir = self.spectrograms.join(id.to_string());
+        let limit = Arc::new(tokio::sync::Semaphore::new(3));
+        let tasks: Vec<_> = files
+            .into_iter()
+            .enumerate()
+            .map(|(i, path)| {
+                let (limit, png) = (limit.clone(), out_dir.join(format!("{i:02}.png")));
+                tokio::spawn(async move {
+                    let _permit = limit.acquire_owned().await;
+                    tokio::task::spawn_blocking(move || crate::analysis::analyse(&path, Some(&png)))
+                        .await
+                        .ok()?
+                        .ok()
+                })
+            })
+            .collect();
+        let mut tracks = Vec::new();
+        for t in tasks {
+            if let Ok(Some(a)) = t.await {
+                tracks.push(a);
+            }
+        }
+        tracks
+    }
+
+    /// Import a suspect job anyway.
+    pub async fn approve(self: &Arc<Self>, id: Uuid) -> Result<()> {
+        db::set_approved(&self.db, id).await?;
+        self.import(id, None).await
+    }
+
+    pub fn spectrogram(&self, id: Uuid, n: u32) -> PathBuf {
+        self.spectrograms
+            .join(id.to_string())
+            .join(format!("{n:02}.png"))
+    }
+
     pub async fn cancel(&self, id: Uuid) -> Result<()> {
         let engine = self.session.require()?;
         for f in db::job_files(&self.db, id).await? {
@@ -446,7 +550,7 @@ impl Jobs {
         let job = db::job(&self.db, id).await?.context("no such job")?;
         match job.status.as_str() {
             "failed" | "cancelled" => {}
-            "review" => return self.import(id, None).await,
+            "review" | "suspect" => return self.import(id, None).await,
             s => bail!("job is {s}, not failed"),
         }
         let rows = db::job_files(&self.db, id).await?;

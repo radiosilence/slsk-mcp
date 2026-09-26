@@ -103,7 +103,8 @@ pub(crate) struct JobFile {
 pub(crate) struct Job {
     pub id: ID,
     pub title: String,
-    /// downloading, importing, imported, review, failed or cancelled.
+    /// downloading, importing, imported, review (the tagger could not choose a
+    /// release), suspect (the audio looks transcoded), failed or cancelled.
     pub status: String,
     pub error: Option<String>,
     pub username: Option<String>,
@@ -117,6 +118,9 @@ pub(crate) struct Job {
     /// `resolveJob(id, releaseId)`.
     pub candidates: Vec<Candidate>,
     pub library_path: Option<String>,
+    /// Per-track spectral analysis, taken before import. A job held as
+    /// `suspect` failed it; `approveJob` imports it anyway.
+    pub analysis: Vec<crate::analysis::TrackAnalysis>,
     pub import_log: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
@@ -172,6 +176,7 @@ pub(crate) async fn job_view(app: &App, job: db::Job, with_files: bool) -> Resul
             .map(|c| c.0.into_iter().map(Candidate::from).collect())
             .unwrap_or_default(),
         library_path: job.library_path,
+        analysis: job.analysis.map(|a| a.0).unwrap_or_default(),
         import_log: job.import_log,
         created_at: job.created_at,
         updated_at: job.updated_at,
@@ -685,6 +690,21 @@ impl Mutation {
         let app = app(ctx);
         let id = parse_id(&id)?;
         app.jobs.import(id, Some(release_id)).await?;
+        job_view(
+            app,
+            db::job(&app.db, id)
+                .await?
+                .ok_or_else(|| Error::new("no such job"))?,
+            true,
+        )
+        .await
+    }
+
+    /// Import a job held as `suspect` despite its analysis.
+    async fn approve_job(&self, ctx: &Context<'_>, id: ID) -> Result<Job> {
+        let app = app(ctx);
+        let id = parse_id(&id)?;
+        app.jobs.approve(id).await?;
         job_view(
             app,
             db::job(&app.db, id)

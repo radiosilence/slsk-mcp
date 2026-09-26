@@ -2,6 +2,7 @@
 //! album from a peer into the library, a web UI, and GraphQL/MCP for an
 //! assistant to drive it.
 
+mod analysis;
 mod auth;
 mod config;
 mod crypto;
@@ -71,6 +72,7 @@ async fn main() -> anyhow::Result<()> {
         session.clone(),
         cfg.staging_dir.clone(),
         cfg.complete_dir.clone(),
+        cfg.state_dir.join("spectrograms"),
         importer,
     );
     let social = social::Social::new(db.clone(), session.clone(), jobs.clone());

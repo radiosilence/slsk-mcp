@@ -40,3 +40,12 @@ td.num { text-align: right; width: 80px; }
 td.actions { width: 140px; text-align: right; }
 td.actions form { display: none; }
 @media (max-width: 640px) { td:nth-child(2), td.num:nth-child(4) { display: none; } td.name { width: 60%; } }
+.suspect .pill { background: #3d1f23; color: var(--bad); }
+.analysis { margin-top: 8px; }
+.analysis summary { cursor: pointer; color: var(--dim); }
+.analysis ul { list-style: none; padding: 0; margin: 6px 0 0; display: grid; gap: 4px; }
+.analysis li { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.verdict { font-size: 11px; padding: 1px 6px; border-radius: 4px; background: var(--line); }
+.verdict.lossy, .verdict.upsampled { background: #3d1f23; color: var(--bad); }
+.verdict.lossless { background: #1c3a2d; color: var(--accent); }
+a { color: var(--accent); }

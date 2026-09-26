@@ -56,6 +56,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/download", post(download))
         .route("/jobs/{id}/{action}", post(job_action))
         .route("/jobs/{id}/resolve/{release}", post(resolve))
+        .route("/jobs/{id}/spectrogram/{n}", get(spectrogram))
         .route("/uploads/cancel", post(cancel_upload))
         .route("/ban", post(ban))
         .route("/account", post(account))
@@ -235,6 +236,16 @@ struct JobsView {
 }
 
 impl JobsView {
+    fn verdict(&self, t: &crate::analysis::TrackAnalysis) -> &'static str {
+        use crate::analysis::Verdict as V;
+        match t.verdict {
+            V::Lossless => "lossless",
+            V::Lossy => "lossy",
+            V::Upsampled => "upsampled",
+            V::Uncertain => "uncertain",
+            V::Unknown => "unknown",
+        }
+    }
     fn pct(&self, j: &Job) -> u64 {
         percent(j.downloaded_bytes, j.total_bytes)
     }
@@ -447,6 +458,7 @@ async fn job_action(
         "retry" => jobs.retry(id).await,
         "cancel" => jobs.cancel(id).await,
         "remove" => jobs.remove(id).await,
+        "approve" => jobs.approve(id).await,
         _ => return StatusCode::NOT_FOUND.into_response(),
     };
     match result {
@@ -469,6 +481,22 @@ async fn resolve(State(s): State<UiState>, Path((id, release)): Path<(Uuid, Stri
         }
     });
     one(jobs_html(&s.app).await)
+}
+
+/// Behind the session layer like everything else: a spectrogram is a
+/// picture of someone's music.
+async fn spectrogram(State(s): State<UiState>, Path((id, n)): Path<(Uuid, u32)>) -> Response {
+    match tokio::fs::read(s.app.jobs.spectrogram(id, n)).await {
+        Ok(png) => (
+            [
+                (header::CONTENT_TYPE, "image/png"),
+                (header::CACHE_CONTROL, "private, max-age=3600"),
+            ],
+            png,
+        )
+            .into_response(),
+        Err(_) => StatusCode::NOT_FOUND.into_response(),
+    }
 }
 
 #[derive(serde::Deserialize)]
