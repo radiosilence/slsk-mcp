@@ -23,7 +23,7 @@ parking_lot = "0.12.5"
 png = "0.18.1"
 rand = "0.10.3"
 reqwest = { version = "0.13", default-features = false, features = ["json", "form", "rustls", "stream"] }
-rmcp = { version = "1", features = ["server", "transport-io", "transport-streamable-http-server"] }
+rmcp = { version = "3", features = ["server", "transport-io", "transport-streamable-http-server"] }
 rustfft = "6.4.1"
 schemars = "1"
 serde = { version = "1.0.229", features = ["derive"] }
