@@ -142,8 +142,17 @@ jobs:
       - run: cargo build --release --locked -p slsk-mcp --target ${{ matrix.target }}
       - name: Prepare binary
         run: |
-          mkdir -p dist
+          mkdir -p dist pkg
           cp target/${{ matrix.target }}/release/slsk-mcp dist/slsk-mcp-linux-${{ matrix.arch }}-musl
+          cp dist/slsk-mcp-linux-${{ matrix.arch }}-musl pkg/slsk-mcp
+          tar -czf slsk-mcp-linux-${{ matrix.arch }}.tar.gz -C pkg slsk-mcp
+      # The same static binary the image carries, for hosts without
+      # containers; attached to the release below.
+      - name: Upload binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: slsk-mcp-linux-${{ matrix.arch }}
+          path: slsk-mcp-linux-${{ matrix.arch }}.tar.gz
       - uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
       - name: Log in to Container Registry
         if: env.PUBLISH == 'true'
@@ -230,8 +239,12 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: artifacts
       - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: v${{ needs.version.outputs.version }}
           name: v${{ needs.version.outputs.version }}
+          files: artifacts/**/*.tar.gz
           generate_release_notes: true
