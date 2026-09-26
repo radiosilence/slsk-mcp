@@ -142,7 +142,9 @@ impl ServerHandler for SlskMcp {
                  A job in `review` downloaded fine but the tagger was not sure which release it is. Its `candidates` \
                  are MusicBrainz releases with a distance (0 is perfect); pick the right one, asking the user if it \
                  is not obvious, and call `resolveJob(id, releaseId)`. If no candidate fits these files (wrong \
-                 edition, missing discs), `nextSource(id)` drops them and downloads the next copy found.\n\n\
+                 edition, missing discs), `nextSource(id)` drops them and downloads the next copy found. When MusicBrainz has no such release \
+                 (no candidates, and the files' tags look right), `importAsIs(id)` files it by those tags; it is \
+                 refused, with the reason, when they do not describe one album.\n\n\
                  A job in `suspect` downloaded fine but its spectrum says the \"lossless\" files came from a lossy \
                  source, or were upsampled; `error` says why and `analysis` has the per-track evidence. Tell the \
                  user, and prefer `nextSource(id)` (while `alternates` > 0) or grabbing again over `approveJob`, \

@@ -166,6 +166,8 @@ struct Page {
     status: String,
     jobs: String,
     transfers: String,
+    uploads: String,
+    up_count: String,
 }
 
 async fn page(State(s): State<UiState>) -> Result<Html<String>, crate::error::AppError> {
@@ -173,6 +175,8 @@ async fn page(State(s): State<UiState>) -> Result<Html<String>, crate::error::Ap
         status: status_html(&s.app).await,
         jobs: jobs_html(&s.app).await,
         transfers: transfers_html(&s.app),
+        uploads: uploads_html(&s.app),
+        up_count: up_count_html(&s.app),
     };
     Ok(Html(page.render().map_err(anyhow::Error::from)?))
 }
@@ -278,9 +282,9 @@ impl JobsView {
     /// underneath is the machine's.
     fn ask(&self, j: &Job) -> Option<&'static str> {
         match j.status.as_str() {
-            "review" if j.candidates.is_empty() => {
-                Some("MusicBrainz has nothing that fits these files. Try another copy.")
-            }
+            "review" if j.candidates.is_empty() => Some(
+                "MusicBrainz has nothing that fits these files. Import them as they are tagged, or try another copy.",
+            ),
             "review" => Some(
                 "Not sure which release this is. Pick the one that matches, or try another copy.",
             ),
@@ -325,7 +329,6 @@ async fn jobs_html(app: &App) -> String {
 #[template(path = "transfers.html")]
 struct TransfersView {
     downloads: Vec<Transfer>,
-    uploads: Vec<Transfer>,
 }
 
 impl TransfersView {
@@ -351,23 +354,115 @@ impl TransfersView {
 }
 
 fn transfers_html(app: &App) -> String {
-    let (downloads, uploads) = match app.session.engine() {
-        Some(e) => {
-            let active = |v: Vec<slsk_engine::TransferView>| -> Vec<Transfer> {
-                v.into_iter()
-                    .filter(|t| !matches!(t.state, "completed" | "cancelled"))
-                    .rev()
-                    .take(100)
-                    .map(Transfer::from)
-                    .collect()
-            };
-            (active(e.downloads()), active(e.uploads()))
+    let downloads = app.session.engine().map_or_else(Vec::new, |e| {
+        e.downloads()
+            .into_iter()
+            .filter(|t| !matches!(t.state, "completed" | "cancelled"))
+            .rev()
+            .take(100)
+            .map(Transfer::from)
+            .collect()
+    });
+    TransfersView { downloads }.render().unwrap_or_default()
+}
+
+#[derive(Template)]
+#[template(path = "uploads.html")]
+struct UploadsView {
+    peers: Vec<Peer>,
+    sending: usize,
+    queued: usize,
+    sent: usize,
+    shared: usize,
+}
+
+/// One person taking files from us.
+struct Peer {
+    username: String,
+    files: Vec<Transfer>,
+    done: usize,
+    speed: u64,
+}
+
+impl UploadsView {
+    fn pct(&self, t: &Transfer) -> u64 {
+        percent(t.bytes, t.size)
+    }
+    fn size(&self, b: &u64) -> String {
+        human(*b)
+    }
+    fn label(&self, t: &Transfer) -> String {
+        match (t.state.as_str(), t.place) {
+            ("queued", Some(p)) => format!("queued #{p}"),
+            ("queued", None) => "queued".into(),
+            ("transferring", _) => "sending".into(),
+            (s, _) => s.into(),
         }
-        None => (Vec::new(), Vec::new()),
-    };
-    TransfersView { downloads, uploads }
-        .render()
-        .unwrap_or_default()
+    }
+    fn short<'a>(&self, name: &'a str) -> &'a str {
+        name.rsplit('\\').next().unwrap_or(name)
+    }
+}
+
+/// The Uploads tab's badge: files being sent or waiting to be.
+fn up_count_html(app: &App) -> String {
+    let n = app.session.engine().map_or(0, |e| {
+        e.uploads()
+            .iter()
+            .filter(|t| !matches!(t.state, "completed" | "cancelled" | "failed"))
+            .count()
+    });
+    let text = if n > 0 { n.to_string() } else { String::new() };
+    format!(r#"<span id="up-count" class="count">{text}</span>"#)
+}
+
+/// Who is taking what from us, grouped by person: those receiving now
+/// first, then those waiting in the queue.
+fn uploads_html(app: &App) -> String {
+    let mut peers: Vec<Peer> = Vec::new();
+    let (mut sending, mut queued, mut sent, mut shared) = (0, 0, 0, 0);
+    if let Some(e) = app.session.engine() {
+        shared = e.share_counts().1;
+        let mut by_user: std::collections::BTreeMap<String, Peer> = Default::default();
+        for t in e.uploads() {
+            let peer = by_user.entry(t.username.clone()).or_insert_with(|| Peer {
+                username: t.username.clone(),
+                files: Vec::new(),
+                done: 0,
+                speed: 0,
+            });
+            match t.state {
+                "completed" => {
+                    peer.done += 1;
+                    sent += 1;
+                }
+                "cancelled" | "failed" => {}
+                state => {
+                    if state == "transferring" {
+                        sending += 1;
+                    } else {
+                        queued += 1;
+                    }
+                    peer.speed += t.speed;
+                    peer.files.push(Transfer::from(t));
+                }
+            }
+        }
+        peers = by_user
+            .into_values()
+            .filter(|p| !p.files.is_empty())
+            .collect();
+        peers.sort_by_key(|p| std::cmp::Reverse(p.speed));
+    }
+    UploadsView {
+        peers,
+        sending,
+        queued,
+        sent,
+        shared,
+    }
+    .render()
+    .unwrap_or_default()
 }
 
 /// Re-render the live parts once a second. The stream ends itself after a
@@ -381,6 +476,8 @@ async fn stream(State(s): State<UiState>) -> impl IntoResponse {
             yield Ok(patch(&status_html(&app).await));
             yield Ok(patch(&jobs_html(&app).await));
             yield Ok(patch(&transfers_html(&app)));
+            yield Ok(patch(&uploads_html(&app)));
+            yield Ok(patch(&up_count_html(&app)));
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
     };
@@ -525,6 +622,7 @@ async fn job_action(
         "remove" => jobs.remove(id).await,
         "approve" => jobs.import_soon(id, true, None).await,
         "next" => jobs.next_source(id, crate::jobs::cause::REQUESTED).await,
+        "as-is" => jobs.import_as_is_soon(id).await,
         _ => return StatusCode::NOT_FOUND.into_response(),
     };
     match result {
@@ -588,7 +686,7 @@ async fn cancel_upload(
     if let (Some(e), Some(name)) = (s.app.session.engine(), f.filename) {
         e.cancel_upload(&f.username, &RawStr::from(name));
     }
-    one(transfers_html(&s.app))
+    one(uploads_html(&s.app))
 }
 
 async fn ban(State(s): State<UiState>, axum::Form(f): axum::Form<UserFileForm>) -> Response {
@@ -602,7 +700,7 @@ async fn ban(State(s): State<UiState>, axum::Form(f): axum::Form<UserFileForm>) 
             e.set_banned(bans);
         }
     }
-    one(transfers_html(&s.app))
+    one(uploads_html(&s.app))
 }
 
 #[derive(serde::Deserialize)]

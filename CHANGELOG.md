@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.20
+
+- **Import as-is** (`importAsIs`) files an album in review by its files' own tags, for a release MusicBrainz does not have. It is refused, and the album stays in review with the reason, unless the tags describe one album (sift).
+- An **Uploads** tab shows who is taking files from you, grouped by person, with progress, speed, cancel and ban; its badge counts files being sent or waiting to be. Downloads stay under Albums.
+- The stall limit counts from when a job took on its current source, as the job records it, rather than from when the process started, so a restart no longer gives a peer that has sent nothing another twenty minutes. Repeated deploys had kept albums queued behind such a peer for an hour.
+
 ## 0.1.19
 
 - Every outcome a job reaches is recorded with a cause and the version that produced it (`job_events`), and kept after the job is retried or removed. The `triage` query groups them by cause with recent examples, and `slsk_job_outcomes_total{outcome,cause}` counts them: a cause that keeps recurring is a fix to make, and the version says which jobs to repair once it is made.

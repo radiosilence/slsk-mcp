@@ -104,3 +104,14 @@ button.busy::after, .job.busy .pill::after {
 .job .why { margin: 2px 0; color: var(--dim); font-size: 13px; }
 .job .why.error { color: var(--bad); }
 .job .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
+
+/* Albums and uploads are separate places: what arrives and what is given. */
+.tabs { display: flex; gap: 4px; padding: 8px 16px 0; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: var(--header-h, 0); z-index: 1; }
+.tabs button { background: none; border: 0; border-bottom: 2px solid transparent; border-radius: 0; padding: 8px 12px; color: var(--dim); }
+.tabs button.active { color: var(--text); border-bottom-color: var(--accent); }
+.tabs .count:empty { display: none; }
+.uploads .files { list-style: none; margin: 8px 0 0; padding: 0; }
+.uploads .files li { display: flex; align-items: center; gap: 8px; padding: 4px 0; min-width: 0; }
+.uploads .files .name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.uploads .files .meta { flex: none; font-size: 13px; }
+.uploads .files button { flex: none; padding: 3px 8px; font-size: 13px; }

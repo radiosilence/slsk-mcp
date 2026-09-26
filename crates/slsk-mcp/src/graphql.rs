@@ -101,7 +101,7 @@ pub(crate) struct JobFile {
 
 #[derive(SimpleObject)]
 pub(crate) struct TriageCause {
-    /// peer_failed, stalled_peer, corrupt_copy, no_audio, requested, no_candidates,
+    /// peer_failed, stalled_peer, corrupt_copy, no_audio, requested, untagged, no_candidates,
     /// incomplete, extra_files, weak_match, lossy_source, upsampled,
     /// mb_unavailable or import_error.
     pub cause: String,
@@ -764,6 +764,23 @@ impl Mutation {
         let app = app(ctx);
         let id = parse_id(&id)?;
         app.jobs.resolve(id, release_id).await?;
+        job_view(
+            app,
+            db::job(&app.db, id)
+                .await?
+                .ok_or_else(|| Error::new("no such job"))?,
+            true,
+        )
+        .await
+    }
+
+    /// File a job in review by its files' own tags, without MusicBrainz: for
+    /// a release MusicBrainz does not have. Refused, and left in review with
+    /// the reason, unless the tags describe one album.
+    async fn import_as_is(&self, ctx: &Context<'_>, id: ID) -> Result<Job> {
+        let app = app(ctx);
+        let id = parse_id(&id)?;
+        app.jobs.import_as_is(id).await?;
         job_view(
             app,
             db::job(&app.db, id)

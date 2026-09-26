@@ -1,0 +1,28 @@
+<div id="uploads" class="uploads">
+  <p class="note">{{ sending }} sending · {{ queued }} queued · {{ sent }} sent recently · sharing {{ shared }} files</p>
+  {% if peers.is_empty() %}<p class="note">Nobody is taking anything from you right now.</p>{% endif %}
+  {% for p in peers %}
+  <article class="job peer">
+    <div class="row">
+      <strong class="title">{{ p.username }}</strong>
+      {% if p.speed > 0 %}<span class="meta">{{ self.size(p.speed) }}/s</span>{% endif %}
+    </div>
+    <div class="meta">{{ p.files.len() }} in progress or queued{% if p.done > 0 %} · {{ p.done }} sent{% endif %}</div>
+    <ul class="files">
+    {% for t in p.files %}
+      <li>
+        <span class="name" title="{{ t.filename }}">{{ self.short(t.filename) }}</span>
+        <span class="meta">{{ self.label(t) }}{% if t.state == "transferring" %} · {{ self.pct(t) }}%{% endif %}</span>
+        <form id="up-{{ t.id.as_str() }}"><input type="hidden" name="username" value="{{ t.username }}"><input type="hidden" name="filename" value="{{ t.filename }}"></form>
+        <button class="quiet" data-indicator="_up_{{ t.id.as_str() }}" data-attr:disabled="$_up_{{ t.id.as_str() }}" data-on:click="@post('/uploads/cancel', {contentType: 'form', selector: '#up-{{ t.id.as_str() }}'})">Cancel</button>
+      </li>
+    {% endfor %}
+    </ul>
+    <div class="actions">
+      <span class="grow"></span>
+      <form id="ban-{{ loop.index }}"><input type="hidden" name="username" value="{{ p.username }}"></form>
+      <button class="quiet" data-indicator="_ban_{{ loop.index }}" data-attr:disabled="$_ban_{{ loop.index }}" data-on:click="confirm('Ban this user? They will get nothing more from you.') && @post('/ban', {contentType: 'form', selector: '#ban-{{ loop.index }}'})">Ban</button>
+    </div>
+  </article>
+  {% endfor %}
+</div>

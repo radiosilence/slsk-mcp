@@ -12,11 +12,16 @@
 <body data-init="@get('/stream')"
   data-on-interval__duration.20s="@get('/stream')"
   data-on:visibilitychange__document="!document.hidden && @get('/stream')"
-  data-signals="{q: '', lossless: true, busy: false}">
+  data-signals="{q: '', lossless: true, busy: false, tab: 'albums'}">
 <header>
   {{ status|safe }}
 </header>
+<nav class="tabs">
+  <button type="button" data-class:active="$tab == 'albums'" data-on:click="$tab = 'albums'">Albums</button>
+  <button type="button" data-class:active="$tab == 'uploads'" data-on:click="$tab = 'uploads'">Uploads {{ up_count|safe }}</button>
+</nav>
 <main>
+  <div data-show="$tab == 'albums'">
   <section class="finder">
     <form id="finder" data-indicator="_searching" data-on:submit__prevent="@post('/search', {contentType: 'form', selector: '#finder'})">
       <input name="q" data-bind:q placeholder="Artist album" autocomplete="off" autofocus>
@@ -30,9 +35,13 @@
   </section>
   {{ jobs|safe }}
   <details class="transfers-wrap">
-    <summary>Transfers, file by file</summary>
+    <summary>Downloads, file by file</summary>
     {{ transfers|safe }}
   </details>
+  </div>
+  <div data-show="$tab == 'uploads'">
+    {{ uploads|safe }}
+  </div>
 </main>
 </body>
 </html>

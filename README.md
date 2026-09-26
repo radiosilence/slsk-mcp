@@ -48,7 +48,8 @@ tested for interoperability against the `soulseek-rs` client.
    A complete match below the distance threshold is tagged, given cover art
    and moved into the library by the configured template. Anything less
    certain stops in `review` with candidates for a person — or the assistant —
-   to choose from.
+   to choose from, or, for a release MusicBrainz lacks, to import as-is by the
+   files' own tags when those describe one album.
 
 ### The transcode check
 

@@ -51,6 +51,17 @@ pub mod cause {
     pub const UPSAMPLED: &str = "upsampled";
     pub const MB_UNAVAILABLE: &str = "mb_unavailable";
     pub const IMPORT_ERROR: &str = "import_error";
+    /// Import as-is refused: the files' tags do not describe one album.
+    pub const UNTAGGED: &str = "untagged";
+}
+
+/// How an import decides what the album is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum How {
+    /// Against MusicBrainz; with a release id, that release.
+    Match(Option<String>),
+    /// By the files' own tags.
+    AsIs,
 }
 
 /// Times a job's failed files are asked for again from the same peer before
@@ -440,14 +451,23 @@ impl Jobs {
                     self.stalled.lock().expect("stalled").remove(&job.id);
                     None
                 } else {
-                    Some(
-                        *self
-                            .stalled
-                            .lock()
-                            .expect("stalled")
-                            .entry(job.id)
-                            .or_insert(now),
-                    )
+                    {
+                        // From when this source was taken on, which the job row
+                        // records, so a restart does not forgive a peer that has
+                        // sent nothing.
+                        let waited = (chrono::Utc::now() - job.updated_at)
+                            .to_std()
+                            .unwrap_or_default();
+                        let started = now.checked_sub(waited).unwrap_or(now);
+                        Some(
+                            *self
+                                .stalled
+                                .lock()
+                                .expect("stalled")
+                                .entry(job.id)
+                                .or_insert(started),
+                        )
+                    }
                 };
                 if let Some(since) = since
                     && now.duration_since(since) >= STALL
@@ -567,6 +587,10 @@ impl Jobs {
     /// Tag and move into the library. `release` forces a specific
     /// MusicBrainz release, which is how a job in review is resolved.
     pub async fn import(self: &Arc<Self>, id: Uuid, release: Option<String>) -> Result<()> {
+        self.run_import(id, How::Match(release)).await
+    }
+
+    async fn run_import(self: &Arc<Self>, id: Uuid, how: How) -> Result<()> {
         let _lock = self.import_lock.lock().await;
         if self.closing.load(std::sync::atomic::Ordering::SeqCst) {
             return Ok(());
@@ -599,7 +623,8 @@ impl Jobs {
         db::set_status(&self.db, id, "importing", None).await?;
         // A person who looked at the analysis and approved, or who named the
         // release, has already decided; everyone else gets the check.
-        if !job.approved && release.is_none() {
+        // An album sent here as-is was checked on its way to review.
+        if !job.approved && how == How::Match(None) {
             let tracks = self.analyse(id, &dir).await;
             db::set_analysis(&self.db, id, &tracks).await?;
             let (verdict, confidence) = crate::analysis::album_verdict(&tracks);
@@ -633,7 +658,10 @@ impl Jobs {
                 return Ok(());
             }
         }
-        let outcome = self.tagger.import(&dir, release.as_deref()).await;
+        let outcome = match &how {
+            How::Match(release) => self.tagger.import(&dir, release.as_deref()).await,
+            How::AsIs => self.tagger.import_as_is(&dir).await,
+        };
         match outcome {
             Ok(sift::Outcome::Imported { dir: path, log, .. }) => {
                 db::set_import_log(&self.db, id, &log).await?;
@@ -677,6 +705,10 @@ impl Jobs {
                     Some(&format!("{e:#}")),
                 )
                 .await;
+                let release = match how {
+                    How::Match(release) => release,
+                    How::AsIs => None,
+                };
                 self.deferred.lock().expect("deferred imports").insert(
                     id,
                     (
@@ -684,6 +716,18 @@ impl Jobs {
                         release,
                     ),
                 );
+            }
+            // As-is refused: the tags are not good enough to file by, which
+            // leaves the album where it was, waiting on a decision.
+            Err(e @ sift::ImportError::Untagged(_)) => {
+                db::set_status(&self.db, id, "review", Some(&format!("{e:#}"))).await?;
+                self.event(
+                    &job,
+                    "review",
+                    Some(cause::UNTAGGED),
+                    Some(&format!("{e:#}")),
+                )
+                .await;
             }
             // Files that will not parse are this copy's fault, not the
             // album's: another source is worth trying without being asked.
@@ -794,6 +838,25 @@ impl Jobs {
         self.claim(id).await?;
         db::set_approved(&self.db, id).await?;
         self.import(id, None).await
+    }
+
+    /// File a job by its own tags, for a release MusicBrainz does not have,
+    /// waiting for the outcome.
+    pub async fn import_as_is(self: &Arc<Self>, id: Uuid) -> Result<()> {
+        self.claim(id).await?;
+        self.run_import(id, How::AsIs).await
+    }
+
+    /// `import_as_is` without waiting, for a person tapping a button.
+    pub async fn import_as_is_soon(self: &Arc<Self>, id: Uuid) -> Result<()> {
+        self.claim(id).await?;
+        let jobs = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = jobs.run_import(id, How::AsIs).await {
+                tracing::warn!(%id, error = %e, "import as-is failed");
+            }
+        });
+        Ok(())
     }
 
     /// Import a job as the given MusicBrainz release, waiting for the outcome.

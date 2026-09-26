@@ -11,21 +11,4 @@
     </tr>
   {% endfor %}
   </table>
-  <h2>Uploads <span class="count">{{ uploads.len() }}</span></h2>
-  <table>
-  {% for t in uploads %}
-    <tr class="{{ t.state }}">
-      <td class="name" title="{{ t.filename }}">{{ self.short(t.filename) }}</td>
-      <td>{{ t.username }}</td>
-      <td class="num">{{ self.pct(t) }}%</td>
-      <td class="num">{% if t.speed > 0 %}{{ self.size(t.speed) }}/s{% endif %}</td>
-      <td class="state">{{ self.label(t) }}</td>
-      <td class="actions">
-        <form id="up-{{ t.id.as_str() }}"><input type="hidden" name="username" value="{{ t.username }}"><input type="hidden" name="filename" value="{{ t.filename }}"></form>
-        <button class="quiet" data-indicator="_up_{{ loop.index }}" data-attr:disabled="$_up_{{ loop.index }}" data-on:click="@post('/uploads/cancel', {contentType: 'form', selector: '#up-{{ t.id.as_str() }}'})">Cancel</button>
-        <button class="quiet" data-indicator="_up_{{ loop.index }}" data-attr:disabled="$_up_{{ loop.index }}" data-on:click="@post('/ban', {contentType: 'form', selector: '#up-{{ t.id.as_str() }}'})">Ban</button>
-      </td>
-    </tr>
-  {% endfor %}
-  </table>
 </div>

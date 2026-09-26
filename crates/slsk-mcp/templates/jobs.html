@@ -46,6 +46,7 @@
     <div class="actions">
       {% if j.status == "suspect" %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/approve')">Import anyway</button>{% endif %}
       {% if (j.status == "review" || j.status == "suspect" || j.status == "failed") && j.alternates > 0 %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/next')">Try another copy</button>{% endif %}
+      {% if j.status == "review" %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/as-is')" title="File it by the tags already in the files, without MusicBrainz">Import as-is</button>{% endif %}
       {% if j.status == "failed" %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/retry')">Retry</button>{% endif %}
       {% if j.status == "review" %}<button class="quiet" data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/retry')" title="Run the tagger over these files again">Match again</button>{% endif %}
       {% if j.status == "downloading" %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/cancel')">Cancel</button>{% endif %}
@@ -102,6 +103,7 @@
     <div class="actions">
       {% if j.status == "suspect" %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/approve')">Import anyway</button>{% endif %}
       {% if (j.status == "review" || j.status == "suspect" || j.status == "failed") && j.alternates > 0 %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/next')">Try another copy</button>{% endif %}
+      {% if j.status == "review" %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/as-is')" title="File it by the tags already in the files, without MusicBrainz">Import as-is</button>{% endif %}
       {% if j.status == "failed" %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/retry')">Retry</button>{% endif %}
       {% if j.status == "review" %}<button class="quiet" data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/retry')" title="Run the tagger over these files again">Match again</button>{% endif %}
       {% if j.status == "downloading" %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/cancel')">Cancel</button>{% endif %}
