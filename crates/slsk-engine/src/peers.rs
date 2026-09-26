@@ -45,6 +45,11 @@ pub(crate) struct Peers {
     addresses: DashMap<String, (SocketAddrV4, Instant)>,
     address_waiters: DashMap<String, Vec<oneshot::Sender<SocketAddrV4>>>,
     pierce: DashMap<u32, oneshot::Sender<Option<Conn>>>,
+    /// Indirect requests we stopped waiting for because the direct route won.
+    /// The peer does not know that and pierces anyway; a pierce that arrives
+    /// for one of these is adopted rather than closed, because closing it
+    /// kills a socket the peer has already started sending on.
+    settled: DashMap<u32, (String, ConnKind, Instant)>,
     next_id: AtomicU64,
 }
 
@@ -148,7 +153,16 @@ pub(crate) async fn connect(inner: &Arc<Inner>, username: &str, kind: ConnKind) 
             Err(_) => direct.await,
         },
     };
-    inner.peers.pierce.remove(&token);
+    if inner.peers.pierce.remove(&token).is_some() && indirect_requested {
+        inner
+            .peers
+            .settled
+            .retain(|_, v| v.2.elapsed() < INDIRECT_TIMEOUT * 2);
+        inner
+            .peers
+            .settled
+            .insert(token, (username.to_string(), kind, Instant::now()));
+    }
     result.map_err(|e| match e {
         Error::TimedOut | Error::Io(_) => Error::Unreachable(username.to_string()),
         e => e,
@@ -416,7 +430,12 @@ async fn accept(inner: Arc<Inner>, stream: TcpStream, addr: SocketAddr) {
             Some((_, tx)) => {
                 let _ = tx.send(Some(conn));
             }
-            None => tracing::trace!(%addr, token, "pierce for an unknown token"),
+            None => match inner.peers.settled.remove(&token) {
+                Some((_, (username, ConnKind::Peer, _))) => {
+                    spawn_peer(inner, username, conn);
+                }
+                _ => tracing::trace!(%addr, token, "pierce for an unknown token"),
+            },
         },
         Err(e) => tracing::trace!(%addr, error = %e, "bad peer init"),
     }

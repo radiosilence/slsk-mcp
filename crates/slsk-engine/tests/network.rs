@@ -9,7 +9,11 @@ use slsk_engine::{Engine, EngineConfig, Status};
 use slsk_testserver::TestServer;
 
 fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
 }
 
 async fn server() -> Option<TestServer> {
@@ -17,6 +21,10 @@ async fn server() -> Option<TestServer> {
 }
 
 async fn engine(server: &TestServer, name: &str, shares: Vec<PathBuf>, state: &Path) -> Engine {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_test_writer()
+        .try_init();
     let mut cfg = EngineConfig::new(name, "hunter2");
     cfg.server = server.address();
     cfg.listen_port = 0;

@@ -100,7 +100,9 @@ async fn client(state: Arc<Mutex<State>>, stream: TcpStream, peer: SocketAddr) {
         };
         let Some(f) = f else { break };
         let mut r = Reader::new(f.body);
-        let Ok(()) = handle(&state, &tx, ip, &mut me, f.code, &mut r) else { continue };
+        let Ok(()) = handle(&state, &tx, ip, &mut me, f.code, &mut r) else {
+            continue;
+        };
     }
     if let Some((name, conn)) = me {
         let mut s = state.lock().unwrap();
@@ -123,7 +125,11 @@ fn handle(
         1 => {
             let username = r.string()?;
             let password = r.string()?;
-            let known = s.passwords.entry(username.clone()).or_insert_with(|| password.clone()).clone();
+            let known = s
+                .passwords
+                .entry(username.clone())
+                .or_insert_with(|| password.clone())
+                .clone();
             if known != password {
                 let _ = tx.send(frame(1, |w| {
                     w.bool(false).str("INVALIDPASS");
@@ -132,7 +138,15 @@ fn handle(
             }
             s.next += 1;
             let conn = s.next;
-            if let Some(old) = s.online.insert(username.clone(), User { conn, tx: tx.clone(), ip, port: 0 }) {
+            if let Some(old) = s.online.insert(
+                username.clone(),
+                User {
+                    conn,
+                    tx: tx.clone(),
+                    ip,
+                    port: 0,
+                },
+            ) {
                 let _ = old.tx.send(frame(41, |_| {}));
             }
             let _ = tx.send(mock::login_ok("welcome", ip));
@@ -157,9 +171,14 @@ fn handle(
         18 => {
             let token = r.u32()?;
             let target = r.string()?;
-            let kind = slsk_proto::ConnKind::parse(&r.string()?).unwrap_or(slsk_proto::ConnKind::Peer);
-            let Some((name, _)) = me.as_ref() else { return Ok(()) };
-            let Some(from) = s.online.get(name) else { return Ok(()) };
+            let kind =
+                slsk_proto::ConnKind::parse(&r.string()?).unwrap_or(slsk_proto::ConnKind::Peer);
+            let Some((name, _)) = me.as_ref() else {
+                return Ok(());
+            };
+            let Some(from) = s.online.get(name) else {
+                return Ok(());
+            };
             let msg = mock::connect_to_peer(name, kind, from.ip, from.port, token);
             match s.online.get(&target) {
                 Some(t) => {
@@ -175,7 +194,9 @@ fn handle(
         22 => {
             let to = r.string()?;
             let message = r.string()?;
-            let Some((from, _)) = me.as_ref() else { return Ok(()) };
+            let Some((from, _)) = me.as_ref() else {
+                return Ok(());
+            };
             if let Some(t) = s.online.get(&to) {
                 let _ = t.tx.send(frame(22, |w| {
                     w.u32(1).u32(0).str(from).str(&message).bool(true);
@@ -185,7 +206,9 @@ fn handle(
         26 => {
             let token = r.u32()?;
             let query = r.string()?;
-            let Some((from, _)) = me.as_ref() else { return Ok(()) };
+            let Some((from, _)) = me.as_ref() else {
+                return Ok(());
+            };
             for (name, u) in &s.online {
                 if name != from {
                     let _ = u.tx.send(mock::file_search(from, token, &query));
@@ -196,7 +219,9 @@ fn handle(
             let target = r.string()?;
             let token = r.u32()?;
             let query = r.string()?;
-            let Some((from, _)) = me.as_ref() else { return Ok(()) };
+            let Some((from, _)) = me.as_ref() else {
+                return Ok(());
+            };
             if let Some(t) = s.online.get(&target) {
                 let _ = t.tx.send(mock::file_search(from, token, &query));
             }
