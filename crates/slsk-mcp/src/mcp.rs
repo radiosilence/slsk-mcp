@@ -145,6 +145,14 @@ impl ServerHandler for SlskMcp {
                  edition, missing discs), `nextSource(id)` drops them and downloads the next copy found. When MusicBrainz has no such release \
                  (no candidates, and the files' tags look right), `importAsIs(id)` files it by those tags; it is \
                  refused, with the reason, when they do not describe one album.\n\n\
+                 Working the review queue, when the user asks you to deal with what is waiting: for each job in \
+                 `review`, read `jobTracks(id)` (the files' tags) and `compareRelease(id, releaseId)` for the best \
+                 candidate (track by track: title and length differences, missing tracks, extra files). A candidate \
+                 whose titles and lengths line up and differs only in how the artist is credited is right: \
+                 `resolveJob`. Missing tracks or lossy tracks mean a bad copy: `nextSource` while `alternates` > 0. \
+                 A release MusicBrainz lacks, with sensible tags, is `importAsIs`; pass `edits` to correct a wrong \
+                 album name, artist, title or track number first (file names as `jobTracks` gives them). Decide the \
+                 clear cases yourself, ask about the rest, and tell the user what you did and why.\n\n\
                  A job in `suspect` downloaded fine but its spectrum says the \"lossless\" files came from a lossy \
                  source, or were upsampled; `error` says why and `analysis` has the per-track evidence. Tell the \
                  user, and prefer `nextSource(id)` (while `alternates` > 0) or grabbing again over `approveJob`, \

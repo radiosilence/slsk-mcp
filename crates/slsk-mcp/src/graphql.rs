@@ -206,6 +206,160 @@ pub(crate) async fn job_view(app: &App, job: db::Job, with_files: bool) -> Resul
     })
 }
 
+/// A file in a job and the tags it carries now.
+#[derive(SimpleObject)]
+pub(crate) struct FileTags {
+    /// The name to use in `TagEdits.tracks.file`.
+    pub file: String,
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub album_artist: Option<String>,
+    pub track: Option<u32>,
+    pub disc: Option<u32>,
+    pub date: Option<String>,
+    pub duration_secs: f64,
+    pub format: String,
+    pub bit_depth: Option<u8>,
+    pub sample_rate: Option<u32>,
+}
+
+impl From<sift::meta::Track> for FileTags {
+    fn from(t: sift::meta::Track) -> Self {
+        Self {
+            file: t
+                .path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            title: t.title,
+            artist: t.artist,
+            album: t.album,
+            album_artist: t.album_artist,
+            track: t.track,
+            disc: t.disc,
+            date: t.date,
+            duration_secs: t.duration.as_secs_f64().round(),
+            format: t.format,
+            bit_depth: t.bit_depth,
+            sample_rate: t.sample_rate,
+        }
+    }
+}
+
+/// Corrections for `importAsIs`: album-wide fields, and per-file fields
+/// keyed by the file names `jobTracks` gives. Checked by the same rules as
+/// the files' own tags.
+#[derive(async_graphql::InputObject, Default)]
+pub(crate) struct TagEdits {
+    pub album: Option<String>,
+    pub album_artist: Option<String>,
+    pub date: Option<String>,
+    #[graphql(default)]
+    pub tracks: Vec<TrackEditInput>,
+}
+
+#[derive(async_graphql::InputObject)]
+pub(crate) struct TrackEditInput {
+    pub file: String,
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub track: Option<u32>,
+    pub disc: Option<u32>,
+}
+
+impl From<TagEdits> for sift::Edits {
+    fn from(e: TagEdits) -> Self {
+        Self {
+            album: e.album,
+            album_artist: e.album_artist,
+            date: e.date,
+            tracks: e
+                .tracks
+                .into_iter()
+                .map(|t| sift::TrackEdit {
+                    file: t.file,
+                    title: t.title,
+                    artist: t.artist,
+                    track: t.track,
+                    disc: t.disc,
+                })
+                .collect(),
+        }
+    }
+}
+
+/// A job's files against one release. `pairs` are matched file and track;
+/// `missing` are release tracks with no file, `extra` files with no track.
+#[derive(SimpleObject)]
+pub(crate) struct Comparison {
+    pub release: Candidate,
+    /// What the distance is made of, each 0 (same) to 1.
+    pub album_distance: f64,
+    pub artist_distance: f64,
+    pub titles_distance: f64,
+    pub lengths_distance: f64,
+    pub pairs: Vec<Pair>,
+    pub missing: Vec<ReleaseTrack>,
+    pub extra: Vec<String>,
+}
+
+#[derive(SimpleObject)]
+pub(crate) struct Pair {
+    pub file: String,
+    pub file_title: Option<String>,
+    pub disc: u32,
+    pub position: u32,
+    pub title: String,
+    pub title_distance: f64,
+    /// The file's length less the release's.
+    pub length_delta_secs: Option<f64>,
+}
+
+#[derive(SimpleObject)]
+pub(crate) struct ReleaseTrack {
+    pub disc: u32,
+    pub position: u32,
+    pub title: String,
+    pub length_secs: Option<u64>,
+}
+
+impl From<sift::Comparison> for Comparison {
+    fn from(c: sift::Comparison) -> Self {
+        Self {
+            release: c.release.into(),
+            album_distance: c.parts.album,
+            artist_distance: c.parts.artist,
+            titles_distance: c.parts.titles,
+            lengths_distance: c.parts.lengths,
+            pairs: c
+                .pairs
+                .into_iter()
+                .map(|p| Pair {
+                    file: p.file,
+                    file_title: p.file_title,
+                    disc: p.disc,
+                    position: p.position,
+                    title: p.title,
+                    title_distance: p.title_distance,
+                    length_delta_secs: p.length_delta_secs,
+                })
+                .collect(),
+            missing: c
+                .missing
+                .into_iter()
+                .map(|m| ReleaseTrack {
+                    disc: m.disc,
+                    position: m.position,
+                    title: m.title,
+                    length_secs: m.length_secs,
+                })
+                .collect(),
+            extra: c.extra,
+        }
+    }
+}
+
 /// A MusicBrainz release the tagger considered.
 #[derive(SimpleObject)]
 pub(crate) struct Candidate {
@@ -601,6 +755,33 @@ impl Query {
         Ok(causes)
     }
 
+    /// A job's files and the tags they carry now: the evidence for a
+    /// review, and the file names `importAsIs` edits refer to.
+    async fn job_tracks(&self, ctx: &Context<'_>, id: ID) -> Result<Vec<FileTags>> {
+        Ok(app(ctx)
+            .jobs
+            .tracks(parse_id(&id)?)
+            .await?
+            .into_iter()
+            .map(FileTags::from)
+            .collect())
+    }
+
+    /// How a job's files line up against one MusicBrainz release, track by
+    /// track: whether it is the right release, and what differs if nearly.
+    async fn compare_release(
+        &self,
+        ctx: &Context<'_>,
+        id: ID,
+        release_id: String,
+    ) -> Result<Comparison> {
+        Ok(app(ctx)
+            .jobs
+            .compare(parse_id(&id)?, &release_id)
+            .await?
+            .into())
+    }
+
     async fn bans(&self, ctx: &Context<'_>) -> Result<Vec<String>> {
         let app = app(ctx);
         let engine = app.session.require()?;
@@ -772,10 +953,17 @@ impl Mutation {
     /// File a job in review by its files' own tags, without MusicBrainz: for
     /// a release MusicBrainz does not have. Refused, and left in review with
     /// the reason, unless the tags describe one album.
-    async fn import_as_is(&self, ctx: &Context<'_>, id: ID) -> Result<Job> {
+    async fn import_as_is(
+        &self,
+        ctx: &Context<'_>,
+        id: ID,
+        edits: Option<TagEdits>,
+    ) -> Result<Job> {
         let app = app(ctx);
         let id = parse_id(&id)?;
-        app.jobs.import_as_is(id).await?;
+        app.jobs
+            .import_as_is(id, edits.map(Into::into).unwrap_or_default())
+            .await?;
         job_view(
             app,
             db::job(&app.db, id)

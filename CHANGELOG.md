@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.23
+
+- An assistant can work the review queue end to end. `jobTracks(id)` gives a job's files and their tags; `compareRelease(id, releaseId)` lines them up against a release track by track, with title and length differences and missing and extra tracks; `importAsIs(id, edits)` corrects album, artist, title or track numbers before filing, under the same coherence check as the files' own tags. The MCP guidance describes when each applies (sift).
+
 ## 0.1.22
 
 - Fallback sources keep the file list the search found, and use it when the peer will not list the folder, as the first choice already did. A fallback kept only its folder name, so a peer that did not answer a folder listing was no fallback at all.

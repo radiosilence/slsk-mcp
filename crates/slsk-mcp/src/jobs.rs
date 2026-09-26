@@ -56,12 +56,12 @@ pub mod cause {
 }
 
 /// How an import decides what the album is.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 enum How {
     /// Against MusicBrainz; with a release id, that release.
     Match(Option<String>),
-    /// By the files' own tags.
-    AsIs,
+    /// By the files' own tags, with any corrections.
+    AsIs(sift::Edits),
 }
 
 /// Times a job's failed files are asked for again from the same peer before
@@ -691,7 +691,7 @@ impl Jobs {
         // A person who looked at the analysis and approved, or who named the
         // release, has already decided; everyone else gets the check.
         // An album sent here as-is was checked on its way to review.
-        if !job.approved && how == How::Match(None) {
+        if !job.approved && matches!(how, How::Match(None)) {
             let tracks = self.analyse(id, &dir).await;
             db::set_analysis(&self.db, id, &tracks).await?;
             let (verdict, confidence) = crate::analysis::album_verdict(&tracks);
@@ -727,7 +727,7 @@ impl Jobs {
         }
         let outcome = match &how {
             How::Match(release) => self.tagger.import(&dir, release.as_deref()).await,
-            How::AsIs => self.tagger.import_as_is(&dir).await,
+            How::AsIs(edits) => self.tagger.import_as_is(&dir, edits).await,
         };
         match outcome {
             Ok(sift::Outcome::Imported { dir: path, log, .. }) => {
@@ -774,7 +774,7 @@ impl Jobs {
                 .await;
                 let release = match how {
                     How::Match(release) => release,
-                    How::AsIs => None,
+                    How::AsIs(_) => None,
                 };
                 self.deferred.lock().expect("deferred imports").insert(
                     id,
@@ -909,9 +909,34 @@ impl Jobs {
 
     /// File a job by its own tags, for a release MusicBrainz does not have,
     /// waiting for the outcome.
-    pub async fn import_as_is(self: &Arc<Self>, id: Uuid) -> Result<()> {
+    pub async fn import_as_is(self: &Arc<Self>, id: Uuid, edits: sift::Edits) -> Result<()> {
         self.claim(id).await?;
-        self.run_import(id, How::AsIs).await
+        self.run_import(id, How::AsIs(edits)).await
+    }
+
+    /// Where a job's files are now: filed for a decision once they have
+    /// all arrived, in staging while they are still coming.
+    async fn files_dir(&self, id: Uuid) -> Result<PathBuf> {
+        let job = db::job(&self.db, id).await?.context("no such job")?;
+        let done = self.complete_dir(&job);
+        Ok(if tokio::fs::try_exists(&done).await.unwrap_or(false) {
+            done
+        } else {
+            self.dir(id)
+        })
+    }
+
+    /// The job's files and the tags they carry.
+    pub async fn tracks(&self, id: Uuid) -> Result<Vec<sift::meta::Track>> {
+        Ok(self.tagger.tracks(&self.files_dir(id).await?).await?)
+    }
+
+    /// The job's files against one release, track by track.
+    pub async fn compare(&self, id: Uuid, release: &str) -> Result<sift::Comparison> {
+        Ok(self
+            .tagger
+            .compare(&self.files_dir(id).await?, release)
+            .await?)
     }
 
     /// `import_as_is` without waiting, for a person tapping a button.
@@ -919,7 +944,7 @@ impl Jobs {
         self.claim(id).await?;
         let jobs = self.clone();
         tokio::spawn(async move {
-            if let Err(e) = jobs.run_import(id, How::AsIs).await {
+            if let Err(e) = jobs.run_import(id, How::AsIs(sift::Edits::default())).await {
                 tracing::warn!(%id, error = %e, "import as-is failed");
             }
         });
