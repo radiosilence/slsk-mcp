@@ -1,82 +1,24 @@
-//! End to end against a real server: soulfind, the open-source Soulseek
-//! server implementation. Skipped when the binary is not installed; set
-//! `SOULFIND_BIN` or put it at `~/.local/share/soulfind/soulfind`.
+//! End to end over real sockets, against an in-process test server
+//! (`slsk-testserver`): peers find each other through it and then speak the
+//! peer protocol to each other directly, as on the real network.
 
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
 use slsk_engine::{Engine, EngineConfig, Status};
-
-struct Server {
-    child: Child,
-    port: u16,
-    _dir: tempfile::TempDir,
-}
-
-impl Drop for Server {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-    }
-}
-
-fn soulfind_bin() -> Option<PathBuf> {
-    std::env::var_os("SOULFIND_BIN")
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME").map(|h| Path::new(&h).join(".local/share/soulfind/soulfind"))
-        })
-        .filter(|p| p.exists())
-}
+use slsk_testserver::TestServer;
 
 fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
+    std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
 }
 
-async fn server() -> Option<Server> {
-    let bin = soulfind_bin()?;
-    let dir = tempfile::tempdir().unwrap();
-    let port = free_port();
-    let mut cmd = Command::new(bin);
-    // Apple's system SQLite refuses the single-thread mode soulfind asks for
-    // and fails the open as "out of memory"; a stock build is fine.
-    if Path::new("/opt/homebrew/opt/sqlite/lib").exists() {
-        cmd.env("DYLD_LIBRARY_PATH", "/opt/homebrew/opt/sqlite/lib");
-    }
-    let child = cmd
-        .args([
-            "-d",
-            dir.path().join("db").to_str().unwrap(),
-            "-p",
-            &port.to_string(),
-        ])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
-    for _ in 0..50 {
-        if tokio::net::TcpStream::connect(("127.0.0.1", port))
-            .await
-            .is_ok()
-        {
-            return Some(Server {
-                child,
-                port,
-                _dir: dir,
-            });
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    panic!("soulfind did not start");
+async fn server() -> Option<TestServer> {
+    Some(TestServer::start().await)
 }
 
-async fn engine(server: &Server, name: &str, shares: Vec<PathBuf>, state: &Path) -> Engine {
+async fn engine(server: &TestServer, name: &str, shares: Vec<PathBuf>, state: &Path) -> Engine {
     let mut cfg = EngineConfig::new(name, "hunter2");
-    cfg.server = format!("127.0.0.1:{}", server.port);
+    cfg.server = server.address();
     cfg.listen_port = free_port();
     cfg.share_dirs = shares;
     cfg.state_dir = state.to_path_buf();
@@ -115,10 +57,7 @@ async fn wait_for_shares(e: &Engine, files: usize) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn two_engines_search_and_download() {
-    let Some(server) = server().await else {
-        eprintln!("soulfind not installed; skipping");
-        return;
-    };
+    let Some(server) = server().await else { return };
     let tmp = tempfile::tempdir().unwrap();
     let music = tmp.path().join("music");
     let data = album(&music);
@@ -231,7 +170,7 @@ async fn interoperates_with_soulseek_rs() {
     let alice = engine(&server, "alice", vec![music.clone()], tmp.path()).await;
     wait_for_shares(&alice, 2).await;
 
-    let port = server.port;
+    let port = server.addr.port();
     let their_share = tmp.path().join("theirs");
     std::fs::create_dir_all(&their_share).unwrap();
     std::fs::write(

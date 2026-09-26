@@ -1,0 +1,13 @@
+[package]
+name = "slsk-testserver"
+version = "0.1.0"
+description = "A minimal in-process Soulseek server for tests: login, peer addresses, indirect connections, search fan-out."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+slsk-proto = { path = "../slsk-proto" }
+bytes.workspace = true
+tokio = { version = "1", features = ["full"] }

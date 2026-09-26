@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/slsk-proto", "crates/slsk-engine"]
+members = ["crates/slsk-proto", "crates/slsk-engine", "crates/slsk-mcp", "crates/slsk-testserver"]
 resolver = "3"
 
 [workspace.package]
@@ -9,11 +9,8 @@ repository = "https://github.com/radiosilence/slsk-mcp"
 rust-version = "1.91"
 
 [workspace.dependencies]
-anyhow = "1"
 bytes = "1"
 thiserror = "2"
-tokio = { version = "1.53", features = ["full"] }
-tracing = "0.1"
 
 [profile.release]
 strip = true
