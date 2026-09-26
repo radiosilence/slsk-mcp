@@ -22,6 +22,11 @@ pub struct Metrics {
     pub uploads_active: AtomicU64,
     pub uploads_queued: AtomicU64,
     pub downloads_active: AtomicU64,
+    pub logged_in: AtomicU64,
+    pub shared_folders: AtomicU64,
+    pub shared_bytes: AtomicU64,
+    /// Distinct users an upload has completed to since start.
+    pub upload_users: AtomicU64,
 }
 
 impl Metrics {
@@ -120,6 +125,26 @@ impl Metrics {
                 "slsk_downloads_active",
                 "Downloads in progress.",
                 &self.downloads_active,
+            ),
+            (
+                "slsk_logged_in",
+                "1 while logged in to the server.",
+                &self.logged_in,
+            ),
+            (
+                "slsk_shared_folders",
+                "Folders in the share index.",
+                &self.shared_folders,
+            ),
+            (
+                "slsk_shared_bytes",
+                "Total size of shared files.",
+                &self.shared_bytes,
+            ),
+            (
+                "slsk_upload_users",
+                "Distinct users served an upload since start.",
+                &self.upload_users,
             ),
         ];
         for (name, help, v) in gauges {

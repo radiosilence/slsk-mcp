@@ -41,6 +41,46 @@ tested for interoperability against the `soulseek-rs` client.
    certain stops in `review` with candidates for a person — or the assistant —
    to choose from.
 
+## Running it
+
+It is a long-running daemon: it holds one Soulseek login, shares the library
+continuously, and serves the UI and MCP on two ports. Each of these works;
+pick by what the host already runs.
+
+- **Container** — `ghcr.io/radiosilence/slsk-mcp`, a static binary on
+  `scratch`, for amd64 and arm64. `deploy/compose/docker-compose.yml` runs it
+  with Postgres.
+- **systemd** — the same binary is attached to each release;
+  `deploy/systemd/slsk-mcp.service` runs it confined to the library and
+  download directories.
+- **Kubernetes** — `deploy/pulumi` is a Pulumi component
+  (`@radiosilence/slsk-mcp-pulumi`, at the image's version): local volumes for
+  the library and downloads pinned to the node that holds them, Postgres in
+  the pod, a UPnP mapper for the peer port, and a NetworkPolicy confining it.
+
+Whatever runs it, three things matter:
+
+1. **The peer port** (`LISTEN_PORT`, TCP) must be reachable from the
+   internet. Two peers both behind NAT cannot connect at all, so an
+   unreachable client can only download from the half of the network that is
+   reachable, and uploads to the other half never happen.
+2. **The internal port** (`INTERNAL_ADDR`) trusts `X-Slsk-*` credential
+   headers. Bind it to loopback or firewall it to the MCP gateway and the
+   metrics scraper; never publish it.
+3. **The library and downloads on one filesystem**, so an import is a rename
+   rather than a copy of every album.
+
+Open files: every peer connection is a socket, and a well-connected client
+holds hundreds. Raise `LimitNOFILE`/`ulimit -n` above the default 1024.
+
+## Monitoring
+
+`/metrics` on the internal port is Prometheus text: bytes up and down, uploads
+and downloads by state, the upload queue, distinct users served, searches
+received, answered and shed under load, distributed-network position, shared
+files, folders and bytes, jobs by status, unread messages and open wishes.
+Everything is a counter or a gauge with a small, fixed label set.
+
 ## Configuration
 
 Read from the environment at start; a missing or malformed value fails

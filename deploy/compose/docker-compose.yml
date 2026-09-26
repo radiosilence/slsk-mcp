@@ -1,0 +1,45 @@
+# slsk-mcp and its Postgres on one host. Copy, fill in the paths and the
+# secrets, `docker compose up -d`.
+#
+# The peer port must be reachable from the internet (forward it on the router,
+# or leave UPnP to a mapper of your own); without it peers behind NAT cannot
+# reach you, and neither can downloads from anyone else behind NAT.
+services:
+  slsk:
+    image: ghcr.io/radiosilence/slsk-mcp:v0
+    restart: unless-stopped
+    user: "1000:1000" # the owner of the music library
+    depends_on: [postgres]
+    ports:
+      - "2240:2240" # Soulseek peers — public
+      - "127.0.0.1:8080:8080" # web UI — put a TLS proxy in front
+      - "127.0.0.1:8081:8081" # MCP, GraphQL, /metrics — trusts credential headers; never expose
+    environment:
+      DATABASE_URL: postgres://slsk:${POSTGRES_PASSWORD}@postgres:5432/slsk
+      SEAL_KEY: ${SEAL_KEY} # openssl rand -base64 32
+      SLSK_USERNAME: ${SLSK_USERNAME}
+      SLSK_PASSWORD: ${SLSK_PASSWORD}
+      LIBRARY_DIR: /music
+      STAGING_DIR: /downloads/incomplete
+      COMPLETE_DIR: /downloads/complete
+      STATE_DIR: /state
+      LISTEN_PORT: "2240"
+      PUBLIC_URL: https://slsk.example.com
+      OIDC_ISSUER: https://auth.example.com
+      OIDC_CLIENT_ID: slsk
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET}
+      BEETS_CONFIG: /config/beets.yaml # optional
+    volumes:
+      - /path/to/music:/music
+      - /path/to/downloads:/downloads # same filesystem as the library: imports become renames
+      - ./state:/state
+      - ./beets.yaml:/config/beets.yaml:ro
+  postgres:
+    image: postgres:18.1-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: slsk
+      POSTGRES_DB: slsk
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ./postgres:/var/lib/postgresql/data

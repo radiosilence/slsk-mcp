@@ -120,6 +120,7 @@ pub(crate) struct Uploads {
     /// Bytes per second of the last completed upload, which is what the
     /// protocol reports as our speed.
     last_speed: AtomicU64,
+    served: Mutex<HashSet<String>>,
 }
 
 const HISTORY: usize = 500;
@@ -133,6 +134,7 @@ impl Uploads {
             responses: DashMap::new(),
             next_id: AtomicU64::new(0),
             last_speed: AtomicU64::new(0),
+            served: Mutex::new(HashSet::new()),
         }
     }
 
@@ -339,6 +341,15 @@ async fn run(inner: Arc<Inner>, u: Arc<Upload>) {
                 .uploads_completed
                 .fetch_add(1, Ordering::Relaxed);
             inner.uploads.last_speed.store(speed, Ordering::Relaxed);
+            let served = {
+                let mut s = inner.uploads.served.lock();
+                s.insert(u.username.to_lowercase());
+                s.len()
+            };
+            inner
+                .metrics
+                .upload_users
+                .store(served as u64, Ordering::Relaxed);
             let _ = inner.send_server(ToServer::SendUploadSpeed {
                 speed: speed.min(u64::from(u32::MAX)) as u32,
             });

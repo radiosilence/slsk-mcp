@@ -1,0 +1,34 @@
+# The static binary under systemd, for a host without containers. Postgres is
+# assumed local. Put the secrets in /etc/slsk-mcp/env (mode 600):
+#   DATABASE_URL, SEAL_KEY, SLSK_USERNAME, SLSK_PASSWORD, OIDC_CLIENT_SECRET
+[Unit]
+Description=slsk-mcp Soulseek client
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+User=music
+Group=music
+EnvironmentFile=/etc/slsk-mcp/env
+Environment=LIBRARY_DIR=/srv/music
+Environment=STAGING_DIR=/srv/downloads/incomplete
+Environment=COMPLETE_DIR=/srv/downloads/complete
+Environment=STATE_DIR=/var/lib/slsk-mcp
+Environment=LISTEN_PORT=2240
+Environment=UI_ADDR=127.0.0.1:8080
+Environment=INTERNAL_ADDR=127.0.0.1:8081
+Environment=PUBLIC_URL=https://slsk.example.com
+Environment=OIDC_ISSUER=https://auth.example.com
+Environment=OIDC_CLIENT_ID=slsk
+ExecStart=/usr/local/bin/slsk-mcp
+Restart=on-failure
+StateDirectory=slsk-mcp
+LimitNOFILE=65536
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/music /srv/downloads
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

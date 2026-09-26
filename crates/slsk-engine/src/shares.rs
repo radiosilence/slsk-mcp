@@ -72,6 +72,10 @@ impl ShareIndex {
         self.dirs.len()
     }
 
+    pub fn total_bytes(&self) -> u64 {
+        self.files.iter().map(|f| f.size).sum()
+    }
+
     /// The complete SharedFileListResponse frame.
     pub fn browse_frame(&self) -> Bytes {
         self.browse.clone()

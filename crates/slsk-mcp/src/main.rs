@@ -159,6 +159,7 @@ fn internal_router(app: Arc<App>) -> Router {
                         if let Some(engine) = app.session.engine() {
                             engine.metrics().render(&mut out);
                         }
+                        state_metrics(&app, &mut out).await;
                         (
                             [(http::header::CONTENT_TYPE, "text/plain; version=0.0.4")],
                             out,
@@ -168,6 +169,89 @@ fn internal_router(app: Arc<App>) -> Router {
             }),
         )
         .route("/healthz", get(|| async { "ok" }))
+}
+
+/// Gauges read from current state at scrape time, where counting as things
+/// happen would be a second copy of the truth to keep in step.
+async fn state_metrics(app: &App, out: &mut String) {
+    use std::collections::BTreeMap;
+    use std::fmt::Write as _;
+    let mut gauge = |name: &str, help: &str, rows: &[(String, i64)], label: &str| {
+        let _ = writeln!(out, "# HELP {name} {help}\n# TYPE {name} gauge");
+        for (value, n) in rows {
+            if label.is_empty() {
+                let _ = writeln!(out, "{name} {n}");
+            } else {
+                let _ = writeln!(out, "{name}{{{label}=\"{value}\"}} {n}");
+            }
+        }
+    };
+    if let Some(engine) = app.session.engine() {
+        let by_state = |views: Vec<slsk_engine::TransferView>| {
+            let mut m: BTreeMap<String, i64> = BTreeMap::new();
+            for v in views {
+                *m.entry(v.state.to_string()).or_default() += 1;
+            }
+            m.into_iter().collect::<Vec<_>>()
+        };
+        gauge(
+            "slsk_downloads",
+            "Downloads the engine holds, by state.",
+            &by_state(engine.downloads()),
+            "state",
+        );
+        gauge(
+            "slsk_uploads",
+            "Uploads the engine holds, by state (recent history included).",
+            &by_state(engine.uploads()),
+            "state",
+        );
+        let (parent, level, _, _) = engine.distributed();
+        gauge(
+            "slsk_distributed_parent",
+            "1 when a distributed-network parent is adopted.",
+            &[(String::new(), i64::from(parent.is_some()))],
+            "",
+        );
+        gauge(
+            "slsk_distributed_branch_level",
+            "Our depth in the distributed search tree; 0 is a branch root.",
+            &[(String::new(), i64::from(level))],
+            "",
+        );
+    }
+    let jobs: Vec<(String, i64)> =
+        sqlx::query_as("SELECT status, count(*) FROM jobs GROUP BY status ORDER BY status")
+            .fetch_all(&app.db)
+            .await
+            .unwrap_or_default();
+    gauge(
+        "slsk_jobs",
+        "Albums on their way into the library, by status.",
+        &jobs,
+        "status",
+    );
+    let unread: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM messages WHERE NOT read AND NOT outgoing")
+            .fetch_one(&app.db)
+            .await
+            .unwrap_or(0);
+    gauge(
+        "slsk_messages_unread",
+        "Private messages not yet read.",
+        &[(String::new(), unread)],
+        "",
+    );
+    let wishes: i64 = sqlx::query_scalar("SELECT count(*) FROM wishes WHERE job_id IS NULL")
+        .fetch_one(&app.db)
+        .await
+        .unwrap_or(0);
+    gauge(
+        "slsk_wishes_open",
+        "Wishlist searches still looking.",
+        &[(String::new(), wishes)],
+        "",
+    );
 }
 
 /// Kubernetes stops a pod with SIGTERM; a terminal with Ctrl-C.

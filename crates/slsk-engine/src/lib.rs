@@ -204,6 +204,10 @@ impl Inner {
     }
 
     fn set_status(&self, status: Status) {
+        self.metrics.logged_in.store(
+            u64::from(matches!(status, Status::LoggedIn { .. })),
+            Ordering::Relaxed,
+        );
         self.status.send_replace(status.clone());
         let _ = self.events.send(Event::Status(status));
     }
@@ -335,10 +339,12 @@ impl Engine {
         .await
         .expect("scan panicked");
         tracing::info!(files = index.file_count(), dirs = index.dir_count(), took = ?started.elapsed(), "shares scanned");
-        self.0
-            .metrics
-            .shared_files
+        let m = &self.0.metrics;
+        m.shared_files
             .store(index.file_count() as u64, Ordering::Relaxed);
+        m.shared_folders
+            .store(index.dir_count() as u64, Ordering::Relaxed);
+        m.shared_bytes.store(index.total_bytes(), Ordering::Relaxed);
         let (dirs, files) = (index.dir_count() as u32, index.file_count() as u32);
         self.0.shares.store(Arc::new(index));
         let _ = self
