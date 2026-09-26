@@ -58,9 +58,10 @@ pub struct ShareIndex {
 
 impl ShareIndex {
     pub fn empty() -> Self {
-        let mut index = Self::default();
-        index.browse = shared_file_list_frame(&[], &[]);
-        index
+        Self {
+            browse: shared_file_list_frame(&[], &[]),
+            ..Self::default()
+        }
     }
 
     pub fn file_count(&self) -> usize {

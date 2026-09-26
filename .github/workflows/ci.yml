@@ -1,0 +1,237 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # The network tests run engines against an in-process server over real
+      # sockets; nothing outside cargo is needed.
+      - run: cargo test --workspace --locked
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  format:
+    name: Check Formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # stable
+        with:
+          toolchain: stable
+      - run: cargo fmt --all -- --check
+
+  chart:
+    name: Chart
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: deploy/pulumi
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: deploy/pulumi/package-lock.json
+      - run: npm ci
+      - run: npm run check
+      - run: npm run build
+
+  version:
+    name: Version
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.check.outputs.should_release }}
+      version: ${{ steps.check.outputs.version }}
+      major: ${{ steps.check.outputs.major }}
+      major_minor: ${{ steps.check.outputs.major_minor }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          CRATE=$(grep '^version = ' crates/slsk-mcp/Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          CHART=$(node -p "require('./deploy/pulumi/package.json').version")
+          APP=$(sed -n 's/^export const APP_VERSION = "\(.*\)";/\1/p' deploy/pulumi/src/versions.ts)
+          # One number: the chart pins the image it deploys by this version.
+          if [ "$CRATE" != "$CHART" ] || [ "$CRATE" != "$APP" ]; then
+            echo "::error::versions disagree: Cargo.toml $CRATE, package.json $CHART, versions.ts $APP"
+            exit 1
+          fi
+          LATEST=$(gh release list --limit 1 --json tagName -q '.[0].tagName' 2>/dev/null || echo "")
+          if [ -z "$LATEST" ] || [ "$CRATE" != "${LATEST#v}" ]; then
+            echo "should_release=true" >> $GITHUB_OUTPUT
+          else
+            echo "should_release=false" >> $GITHUB_OUTPUT
+          fi
+          echo "version=${CRATE}" >> $GITHUB_OUTPUT
+          echo "major=$(echo $CRATE | cut -d. -f1)" >> $GITHUB_OUTPUT
+          echo "major_minor=$(echo $CRATE | cut -d. -f1-2)" >> $GITHUB_OUTPUT
+
+  build-image:
+    name: Build ${{ matrix.arch }} Image
+    runs-on: ${{ matrix.runner }}
+    needs: [version]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+    permissions:
+      contents: read
+      packages: write
+    env:
+      PUBLISH: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      # cmake/clang for aws-lc-sys, the rustls crypto backend.
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends musl-tools musl-dev cmake clang
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # stable
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          key: ${{ matrix.target }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo build --release --locked -p slsk-mcp --target ${{ matrix.target }}
+      - name: Prepare binary
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/slsk-mcp dist/slsk-mcp-linux-${{ matrix.arch }}-musl
+      - uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
+      - name: Log in to Container Registry
+        if: env.PUBLISH == 'true'
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build ${{ matrix.arch }}
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: ${{ matrix.platform }}
+          push: ${{ env.PUBLISH == 'true' }}
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:main-${{ matrix.arch }}
+
+  create-manifest:
+    name: Push image manifest
+    needs: [test, lint, format, chart, build-image, version]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create :main and :sha-<short> manifests
+        run: |
+          for tag in main "sha-$(echo ${{ github.sha }} | cut -c1-7)"; do
+            docker buildx imagetools create \
+              --tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$tag \
+              ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:main-amd64 \
+              ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:main-arm64
+          done
+      - name: Create semver manifests
+        if: needs.version.outputs.should_release == 'true'
+        run: |
+          for tag in "v${{ needs.version.outputs.version }}" \
+                     "v${{ needs.version.outputs.major_minor }}" \
+                     "v${{ needs.version.outputs.major }}" \
+                     latest; do
+            docker buildx imagetools create \
+              --tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$tag \
+              ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:main-amd64 \
+              ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:main-arm64
+          done
+
+  # After the image: a published chart promises an image that exists.
+  publish-chart:
+    name: Publish chart
+    needs: [version, create-manifest]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && needs.version.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    defaults:
+      run:
+        working-directory: deploy/pulumi
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          registry-url: https://npm.pkg.github.com
+          cache: npm
+          cache-dependency-path: deploy/pulumi/package-lock.json
+      - run: npm ci
+      - run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Last, so a release never names an image or a chart that does not exist.
+  create-release:
+    name: Create Release
+    needs: [version, create-manifest, publish-chart]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && needs.version.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          tag_name: v${{ needs.version.outputs.version }}
+          name: v${{ needs.version.outputs.version }}
+          generate_release_notes: true
