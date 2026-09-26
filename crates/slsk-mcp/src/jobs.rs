@@ -396,10 +396,9 @@ impl Jobs {
         let incoming = self.dir(id);
         if tokio::fs::try_exists(&incoming).await.unwrap_or(false)
             && !tokio::fs::try_exists(&dir).await.unwrap_or(false)
+            && let Err(e) = tokio::fs::rename(&incoming, &dir).await
         {
-            if let Err(e) = tokio::fs::rename(&incoming, &dir).await {
-                tracing::warn!(error = %e, "could not move {} to {}", incoming.display(), dir.display());
-            }
+            tracing::warn!(error = %e, "could not move {} to {}", incoming.display(), dir.display());
         }
         let dir = if tokio::fs::try_exists(&dir).await.unwrap_or(false) {
             dir
