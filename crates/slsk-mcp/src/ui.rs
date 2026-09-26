@@ -280,6 +280,16 @@ impl TransfersView {
     fn size(&self, b: &u64) -> String {
         human(*b)
     }
+    /// Short enough for a phone's last column.
+    fn label(&self, t: &Transfer) -> String {
+        match (t.state.as_str(), t.place) {
+            ("remote_queued" | "queued", Some(p)) => format!("queued #{p}"),
+            ("remote_queued" | "queued", None) => "queued".into(),
+            ("transferring", _) => "active".into(),
+            ("completed", _) => "done".into(),
+            (s, _) => s.into(),
+        }
+    }
     fn short<'a>(&self, name: &'a str) -> &'a str {
         name.rsplit('\\').next().unwrap_or(name)
     }

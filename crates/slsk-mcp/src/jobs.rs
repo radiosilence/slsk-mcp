@@ -548,11 +548,29 @@ impl Jobs {
     pub async fn retry(self: &Arc<Self>, id: Uuid) -> Result<()> {
         let engine = self.session.require()?.clone();
         let job = db::job(&self.db, id).await?.context("no such job")?;
+        // Everything arrived and only the import went wrong: import again,
+        // rather than fetch the album a second time. In the background, so
+        // the caller is not held for the length of an import.
+        let downloaded = tokio::fs::try_exists(self.complete_dir(&job))
+            .await
+            .unwrap_or(false);
         match job.status.as_str() {
-            "failed" | "cancelled" => {}
-            "review" | "suspect" => return self.import(id, None).await,
-            s => bail!("job is {s}, not failed"),
+            "review" | "suspect" => {}
+            "failed" if downloaded => {}
+            "failed" | "cancelled" => return self.redownload(&engine, id).await,
+            s => bail!("job is {s}; only failed, cancelled, review and suspect jobs retry"),
         }
+        db::set_status(&self.db, id, "importing", None).await?;
+        let jobs = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = jobs.import(id, None).await {
+                tracing::warn!(%id, error = %e, "retried import failed");
+            }
+        });
+        Ok(())
+    }
+
+    async fn redownload(&self, engine: &Engine, id: Uuid) -> Result<()> {
         let rows = db::job_files(&self.db, id).await?;
         for f in &rows {
             let remote = RawStr(f.remote.clone().into());

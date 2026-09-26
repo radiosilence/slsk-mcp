@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.7
+
+- MusicBrainz rate limiting is waited out rather than failing the import: up to ten attempts, honouring `Retry-After`, with the request gate held meanwhile (sift).
+- Titles are searched and compared without edition markers, so "Monster (25th Anniversary Edition)" finds "Monster" (sift).
+- Retry on an album that failed at import imports it again rather than downloading it again, and runs in the background.
+- Transfer states read short on a phone: `queued #4`, `active`, `done`.
+
 ## 0.1.6
 
 - Imports are renames again. The chart mounted the library and the download area as two volumes, and a rename cannot cross mounts even on one disk, so every import copied the album — minutes for a hi-res record on a USB drive. It now mounts the drive once (`mediaRoot`), with `library` and `downloads` inside it; the service refuses to start while the library is missing, which is how an unmounted drive shows.
