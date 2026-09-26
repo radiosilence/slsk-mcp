@@ -639,9 +639,52 @@ impl Jobs {
     }
 
     /// Import a suspect job anyway.
+    /// Take a job waiting on a decision into `importing`, or say why not. A
+    /// second request for the same job (a double tap, an assistant beside a
+    /// person) is refused here rather than queued behind the first.
+    async fn claim(&self, id: Uuid) -> Result<()> {
+        if db::claim_import(&self.db, id).await? {
+            return Ok(());
+        }
+        let job = db::job(&self.db, id).await?.context("no such job")?;
+        bail!(
+            "job is {}; only review, suspect and failed jobs import",
+            job.status
+        )
+    }
+
+    /// Import a suspect job despite its analysis, waiting for the outcome.
     pub async fn approve(self: &Arc<Self>, id: Uuid) -> Result<()> {
+        self.claim(id).await?;
         db::set_approved(&self.db, id).await?;
         self.import(id, None).await
+    }
+
+    /// Import a job as the given MusicBrainz release, waiting for the outcome.
+    pub async fn resolve(self: &Arc<Self>, id: Uuid, release: String) -> Result<()> {
+        self.claim(id).await?;
+        self.import(id, Some(release)).await
+    }
+
+    /// `approve` or `resolve` without waiting: the job reads `importing` as
+    /// soon as this returns, which is what a person tapping a button sees.
+    pub async fn import_soon(
+        self: &Arc<Self>,
+        id: Uuid,
+        approve: bool,
+        release: Option<String>,
+    ) -> Result<()> {
+        self.claim(id).await?;
+        if approve {
+            db::set_approved(&self.db, id).await?;
+        }
+        let jobs = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = jobs.import(id, release).await {
+                tracing::warn!(%id, error = %e, "import failed");
+            }
+        });
+        Ok(())
     }
 
     pub fn spectrogram(&self, id: Uuid, n: u32) -> PathBuf {
@@ -675,14 +718,7 @@ impl Jobs {
             "failed" | "cancelled" => return self.redownload(&engine, id).await,
             s => bail!("job is {s}; only failed, cancelled, review and suspect jobs retry"),
         }
-        db::set_status(&self.db, id, "importing", None).await?;
-        let jobs = self.clone();
-        tokio::spawn(async move {
-            if let Err(e) = jobs.import(id, None).await {
-                tracing::warn!(%id, error = %e, "retried import failed");
-            }
-        });
-        Ok(())
+        self.import_soon(id, false, None).await
     }
 
     async fn redownload(&self, engine: &Engine, id: Uuid) -> Result<()> {

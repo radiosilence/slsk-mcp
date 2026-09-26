@@ -22,8 +22,8 @@
       <td class="state">{{ self.label(t) }}</td>
       <td class="actions">
         <form id="up-{{ t.id.as_str() }}"><input type="hidden" name="username" value="{{ t.username }}"><input type="hidden" name="filename" value="{{ t.filename }}"></form>
-        <button class="quiet" data-on:click="@post('/uploads/cancel', {contentType: 'form', selector: '#up-{{ t.id.as_str() }}'})">Cancel</button>
-        <button class="quiet" data-on:click="@post('/ban', {contentType: 'form', selector: '#up-{{ t.id.as_str() }}'})">Ban</button>
+        <button class="quiet" data-indicator="_up_{{ loop.index }}" data-attr:disabled="$_up_{{ loop.index }}" data-on:click="@post('/uploads/cancel', {contentType: 'form', selector: '#up-{{ t.id.as_str() }}'})">Cancel</button>
+        <button class="quiet" data-indicator="_up_{{ loop.index }}" data-attr:disabled="$_up_{{ loop.index }}" data-on:click="@post('/ban', {contentType: 'form', selector: '#up-{{ t.id.as_str() }}'})">Ban</button>
       </td>
     </tr>
   {% endfor %}

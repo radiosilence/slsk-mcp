@@ -249,6 +249,11 @@ impl JobsView {
     fn pct(&self, j: &Job) -> u64 {
         percent(j.downloaded_bytes, j.total_bytes)
     }
+    /// The signal that is true while a request from this job's card is in
+    /// flight. Local (leading underscore), so it is never sent back.
+    fn sig(&self, j: &Job) -> String {
+        format!("_busy_{}", j.id.as_str().replace('-', ""))
+    }
     fn size(&self, b: &u64) -> String {
         human(*b)
     }
@@ -472,29 +477,39 @@ async fn job_action(
         "retry" => jobs.retry(id).await,
         "cancel" => jobs.cancel(id).await,
         "remove" => jobs.remove(id).await,
-        "approve" => jobs.approve(id).await,
+        "approve" => jobs.import_soon(id, true, None).await,
         _ => return StatusCode::NOT_FOUND.into_response(),
     };
     match result {
-        Ok(()) => one(jobs_html(&s.app).await),
-        Err(e) => one(format!(
-            r#"<div id="flash" class="flash error">{}</div>"#,
-            askama_escape(&format!("{e:#}"))
-        )),
+        Ok(()) => done(&s.app).await,
+        Err(e) => failed(&e),
     }
+}
+
+/// The job list as it now stands, and any earlier error cleared: the change
+/// on the card is the confirmation.
+async fn done(app: &App) -> Response {
+    one(format!(
+        "{}\n<div id=\"flash\"></div>",
+        jobs_html(app).await
+    ))
+}
+
+fn failed(e: &anyhow::Error) -> Response {
+    one(format!(
+        r#"<div id="flash" class="flash error" role="alert">{}</div>"#,
+        askama_escape(&format!("{e:#}"))
+    ))
 }
 
 async fn resolve(State(s): State<UiState>, Path((id, release)): Path<(Uuid, String)>) -> Response {
     if Uuid::parse_str(&release).is_err() {
         return StatusCode::BAD_REQUEST.into_response();
     }
-    let app = s.app.clone();
-    tokio::spawn(async move {
-        if let Err(e) = app.jobs.import(id, Some(release)).await {
-            tracing::warn!(%id, error = %e, "resolve failed");
-        }
-    });
-    one(jobs_html(&s.app).await)
+    match s.app.jobs.import_soon(id, false, Some(release)).await {
+        Ok(()) => done(&s.app).await,
+        Err(e) => failed(&e),
+    }
 }
 
 /// Behind the session layer like everything else: a spectrogram is a

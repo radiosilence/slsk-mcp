@@ -6,7 +6,7 @@
     <div class="row">
       <span class="path" title="{{ f.path }}">{{ f.path }}</span>
       <span class="grow"></span>
-      <button class="primary" data-on:click="@post('/download', {contentType: 'form', selector: '#dl-{{ loop.index }}'})">Download</button>
+      <button class="primary" data-indicator="_dl_{{ loop.index }}" data-attr:disabled="$_dl_{{ loop.index }}" data-class:busy="$_dl_{{ loop.index }}" data-on:click="@post('/download', {contentType: 'form', selector: '#dl-{{ loop.index }}'})">Download</button>
     </div>
     <div class="meta">
       {{ f.username }} · {{ f.audio_files }} tracks · {{ self.quality(f) }} · {{ self.size(f.total_size) }} ·

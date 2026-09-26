@@ -673,7 +673,7 @@ impl Mutation {
     async fn resolve_job(&self, ctx: &Context<'_>, id: ID, release_id: String) -> Result<Job> {
         let app = app(ctx);
         let id = parse_id(&id)?;
-        app.jobs.import(id, Some(release_id)).await?;
+        app.jobs.resolve(id, release_id).await?;
         job_view(
             app,
             db::job(&app.db, id)

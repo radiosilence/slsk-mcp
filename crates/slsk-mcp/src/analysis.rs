@@ -322,14 +322,28 @@ fn classify(d: &Decoded, file: String) -> TrackAnalysis {
         return out;
     }
 
-    if d.sample_rate > 48_000 && cutoff <= 24_500.0 && steep {
-        out.verdict = Verdict::Upsampled;
-        out.confidence = 0.9;
-        out.estimate = Some(if cutoff < 20_500.0 {
-            "lossy source, resampled to hi-res".into()
+    // A real hi-res recording has something above 26 kHz, if only tape hiss
+    // or microphone noise; resampling from 44.1 or 48 kHz leaves nothing but
+    // the floor there. Measured on transcodes of known masters, the gap is
+    // about 30 dB either way, which the steepness of the edge — soft under
+    // some resamplers — does not give.
+    let ultrasonic = band(26_000.0, (nyquist * 0.9).min(40_000.0)) - floor;
+    if d.sample_rate > 48_000 && ultrasonic.is_finite() {
+        if ultrasonic < 6.0 {
+            out.verdict = Verdict::Upsampled;
+            out.confidence = 0.9;
+            out.estimate = Some(if cutoff < 20_500.0 {
+                "lossy source, resampled to hi-res".into()
+            } else {
+                "44.1/48 kHz source, resampled".into()
+            });
         } else {
-            "44.1/48 kHz source, resampled".into()
-        });
+            // Every lossy encoder discards everything up there, so content
+            // above 26 kHz is proof on its own; a dark track's low cutoff is
+            // the master, not a codec.
+            out.verdict = Verdict::Lossless;
+            out.confidence = 0.9;
+        }
         return out;
     }
 
@@ -453,8 +467,8 @@ mod tests {
 
     /// White noise, optionally brickwalled at `cutoff` Hz in the frequency
     /// domain — the shape a lossy encoder's low-pass leaves.
-    fn noise(seconds: usize, cutoff: Option<f64>) -> Vec<i16> {
-        let n = (RATE as usize * seconds).next_power_of_two();
+    fn noise(rate: u32, seconds: usize, cutoff: Option<f64>) -> Vec<i16> {
+        let n = (rate as usize * seconds).next_power_of_two();
         let mut state = 0x2545_f491_4f6c_dd1du64;
         let mut signal: Vec<Complex32> = (0..n)
             .map(|_| {
@@ -467,7 +481,7 @@ mod tests {
         if let Some(cutoff) = cutoff {
             let mut planner = FftPlanner::<f32>::new();
             planner.plan_fft_forward(n).process(&mut signal);
-            let bin = (cutoff / f64::from(RATE) * n as f64) as usize;
+            let bin = (cutoff / f64::from(rate) * n as f64) as usize;
             for (i, s) in signal.iter_mut().enumerate() {
                 if i > bin && i < n - bin {
                     *s = Complex32::default();
@@ -479,7 +493,7 @@ mod tests {
         signal.iter().map(|s| (s.re * 20_000.0) as i16).collect()
     }
 
-    fn wav(dir: &Path, name: &str, samples: &[i16]) -> PathBuf {
+    fn wav(dir: &Path, name: &str, rate: u32, samples: &[i16]) -> PathBuf {
         let path = dir.join(name);
         let data_len = (samples.len() * 2) as u32;
         let mut bytes = Vec::with_capacity(44 + data_len as usize);
@@ -489,8 +503,8 @@ mod tests {
         bytes.extend_from_slice(&16u32.to_le_bytes());
         bytes.extend_from_slice(&1u16.to_le_bytes());
         bytes.extend_from_slice(&1u16.to_le_bytes());
-        bytes.extend_from_slice(&RATE.to_le_bytes());
-        bytes.extend_from_slice(&(RATE * 2).to_le_bytes());
+        bytes.extend_from_slice(&rate.to_le_bytes());
+        bytes.extend_from_slice(&(rate * 2).to_le_bytes());
         bytes.extend_from_slice(&2u16.to_le_bytes());
         bytes.extend_from_slice(&16u16.to_le_bytes());
         bytes.extend_from_slice(b"data");
@@ -512,7 +526,7 @@ mod tests {
     fn full_band_noise_is_lossless() {
         let dir = tmp();
         let a = analyse(
-            &wav(&dir, "full.wav", &noise(8, None)),
+            &wav(&dir, "full.wav", RATE, &noise(RATE, 8, None)),
             Some(&dir.join("full.png")),
         )
         .unwrap();
@@ -523,7 +537,11 @@ mod tests {
     #[test]
     fn a_16khz_brickwall_reads_as_low_bitrate_lossy() {
         let dir = tmp();
-        let a = analyse(&wav(&dir, "lp.wav", &noise(8, Some(16_000.0))), None).unwrap();
+        let a = analyse(
+            &wav(&dir, "lp.wav", RATE, &noise(RATE, 8, Some(16_000.0))),
+            None,
+        )
+        .unwrap();
         assert_eq!(a.verdict, Verdict::Lossy, "{a:?}");
         let cutoff = a.cutoff_hz.unwrap();
         assert!((15_500.0..16_500.0).contains(&cutoff), "{cutoff}");
@@ -533,9 +551,39 @@ mod tests {
     #[test]
     fn a_19_5khz_brickwall_is_lossy_with_less_confidence() {
         let dir = tmp();
-        let a = analyse(&wav(&dir, "v0.wav", &noise(8, Some(19_500.0))), None).unwrap();
+        let a = analyse(
+            &wav(&dir, "v0.wav", RATE, &noise(RATE, 8, Some(19_500.0))),
+            None,
+        )
+        .unwrap();
         assert_eq!(a.verdict, Verdict::Lossy, "{a:?}");
         assert!(a.confidence < 0.8);
+    }
+
+    #[test]
+    fn hi_res_with_nothing_above_cd_rate_is_upsampled() {
+        // A 44.1 kHz source resampled to 96 kHz: nothing above the old
+        // Nyquist, however gently the resampler's filter rolls off.
+        let dir = tmp();
+        let a = analyse(
+            &wav(&dir, "up.wav", 96_000, &noise(96_000, 4, Some(21_000.0))),
+            None,
+        )
+        .unwrap();
+        assert_eq!(a.verdict, Verdict::Upsampled, "{a:?}");
+    }
+
+    #[test]
+    fn hi_res_with_ultrasonic_content_is_genuine() {
+        // Content to 44 kHz, then the converter's decimation filter: the
+        // shape of a real 96 kHz recording.
+        let dir = tmp();
+        let a = analyse(
+            &wav(&dir, "real.wav", 96_000, &noise(96_000, 4, Some(44_000.0))),
+            None,
+        )
+        .unwrap();
+        assert_eq!(a.verdict, Verdict::Lossless, "{a:?}");
     }
 
     #[test]

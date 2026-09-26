@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.13
+
+- Hi-res files are judged upsampled by whether anything sits above 26 kHz, and genuine when something does. The edge-steepness rule missed resamplers with a gentle filter and flagged dark tracks on genuine 24/96 releases; on known transcodes the new measure separates the two by about 30 dB.
+- Every button shows that its request is in flight, and for exactly as long: the album's card and its buttons are marked busy and disabled from Datastar's request indicator, which also stops a second tap. Errors float at the foot of the screen, where they are seen, and clear on the next success.
+- Use and Import anyway mark the album `importing` before they return, and import in the background. Use returned with nothing changed, which read as a tap that did nothing and invited a second one.
+- A job waiting on a decision moves to `importing` in one database statement, so two requests for it (from the UI, GraphQL or MCP) cannot both start an import.
+- Grab prefers FLAC to WAV unless the WAV is much sooner to arrive.
+
 ## 0.1.12
 
 - Stopping waits for an import in progress (the chart allows ten minutes). Moving an album into the library is not atomic, and a restart partway through left it split between the staging folder and the library. Imports still queued stay `importing` and resume at the next start.

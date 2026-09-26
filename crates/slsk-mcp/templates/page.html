@@ -17,11 +17,11 @@
 </header>
 <main>
   <section class="finder">
-    <form id="finder" data-on:submit__prevent="@post('/search', {contentType: 'form', selector: '#finder'})">
+    <form id="finder" data-indicator="_searching" data-on:submit__prevent="@post('/search', {contentType: 'form', selector: '#finder'})">
       <input name="q" data-bind:q placeholder="Artist album" autocomplete="off" autofocus>
       <label class="toggle"><input type="checkbox" name="lossless" value="true" data-bind:lossless> lossless</label>
-      <button type="submit">Search</button>
-      <button type="button" class="primary" data-indicator:busy data-attr:disabled="$busy || !$q"
+      <button type="submit" data-attr:disabled="$_searching || $busy" data-class:busy="$_searching">Search</button>
+      <button type="button" class="primary" data-indicator:busy data-attr:disabled="$busy || $_searching || !$q" data-class:busy="$busy"
         data-on:click="@post('/grab', {contentType: 'form', selector: '#finder'})">Grab best</button>
     </form>
     <div id="flash"></div>

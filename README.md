@@ -34,14 +34,39 @@ tested for interoperability against the `soulseek-rs` client.
    user (disc folders such as `CD 1` count as their album), keeps those whose
    path mentions every word of the query as often as the query does, puts
    live, demo and remix folders behind the album unless asked for, and ranks
-   lossless first, then free upload slot, queue length and speed.
+   lossless first (FLAC before WAV), then free upload slot, queue length and
+   speed.
 2. The best folder's full listing is requested from the peer and each file is
-   queued. The next four folders are kept as fallbacks if the peer fails.
-3. When every file has arrived, sift matches the folder against MusicBrainz.
+   queued. Failed files are asked for again from the same peer twice, resuming
+   from what arrived; after that the next of four fallback folders is tried.
+3. Every lossless-labelled track is checked for a lossy or upsampled source
+   (see below). An album where a quarter of the tracks confidently fail is
+   held as `suspect` with per-track spectrograms, for a person or assistant to
+   import anyway or replace.
+4. When every file has arrived, sift matches the folder against MusicBrainz.
    A complete match below the distance threshold is tagged, given cover art
    and moved into the library by the configured template. Anything less
    certain stops in `review` with candidates for a person — or the assistant —
    to choose from.
+
+### The transcode check
+
+A lossy encoder low-passes its input, so a FLAC made from an MP3 has a
+spectrum that stops dead below 20.5 kHz where a CD master runs to 21–22 kHz; a
+gradual roll-off is read as a dark master, not a codec, and never holds an
+album. A hi-res file is judged by whether anything at all sits above 26 kHz:
+real recordings carry at least tape or microphone noise there, and a file
+resampled up from 44.1 or 48 kHz carries none. A 24-bit file using only 16
+bits is padded.
+
+Measured on tracks from several albums (quiet, noisy and lo-fi material
+among them) transcoded and decoded back to FLAC: no original was flagged; MP3
+at CBR 128–320 kbps and `-V2`, padded 24-bit and upsampled 96 kHz files were
+caught on every track. MP3 `-V0` from LAME 4 and AAC at 256 kbps keep the full
+band and are not detected
+([#8](https://github.com/radiosilence/slsk-mcp/issues/8)).
+
+`slsk-mcp analyse FILE…` prints the check's reading of any files.
 
 ## Running it
 

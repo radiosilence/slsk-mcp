@@ -1,16 +1,16 @@
 <div id="jobs" class="jobs">
 {% if jobs.is_empty() %}<p class="note">Nothing yet. Search for something, or ask your assistant to grab it.</p>{% endif %}
 {% for j in jobs %}
-  <article class="job {{ j.status }}">
+  <article class="job {{ j.status }}" data-class:busy="${{ self.sig(j) }}">
     <div class="row">
       <strong class="title">{{ j.title }}</strong>
       <span class="pill">{{ j.status }}</span>
       <span class="grow"></span>
-      {% if j.status == "suspect" %}<button data-on:click="@post('/jobs/{{ j.id.as_str() }}/approve')">Import anyway</button>{% endif %}
-      {% if j.status == "failed" || j.status == "cancelled" || j.status == "review" %}<button data-on:click="@post('/jobs/{{ j.id.as_str() }}/retry')">Retry</button>{% endif %}
-      {% if j.status == "downloading" %}<button data-on:click="@post('/jobs/{{ j.id.as_str() }}/cancel')">Cancel</button>{% endif %}
-      {% if j.status == "imported" %}<button class="quiet" data-on:click="@post('/jobs/{{ j.id.as_str() }}/remove')">Remove</button>
-      {% else %}<button class="quiet" data-on:click="confirm('Remove this album and delete its downloaded files?') && @post('/jobs/{{ j.id.as_str() }}/remove')">Remove</button>{% endif %}
+      {% if j.status == "suspect" %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/approve')">Import anyway</button>{% endif %}
+      {% if j.status == "failed" || j.status == "cancelled" || j.status == "review" %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/retry')">Retry</button>{% endif %}
+      {% if j.status == "downloading" %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/cancel')">Cancel</button>{% endif %}
+      {% if j.status == "imported" %}<button class="quiet" data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/remove')">Remove</button>
+      {% else %}<button class="quiet" data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="confirm('Remove this album and delete its downloaded files?') && @post('/jobs/{{ j.id.as_str() }}/remove')">Remove</button>{% endif %}
     </div>
     <div class="meta">
       {% match j.username %}{% when Some with (u) %}from {{ u }}{% when None %}{% endmatch %}
@@ -38,7 +38,7 @@
     <ul class="candidates">
       {% for c in j.candidates %}
       <li>
-        <button data-on:click="@post('/jobs/{{ j.id.as_str() }}/resolve/{{ c.release_id }}')">Use</button>
+        <button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/resolve/{{ c.release_id }}')">Use</button>
         <span>{{ c.artist }} — {{ c.title }}</span>
         <span class="meta">{% match c.date %}{% when Some with (d) %}{{ d }}{% when None %}{% endmatch %} {% match c.country %}{% when Some with (x) %}{{ x }}{% when None %}{% endmatch %} {% match c.media %}{% when Some with (m) %}{{ m }}{% when None %}{% endmatch %} · {{ c.tracks }} tracks · distance {{ c.distance }}{% if c.missing > 0 %} · {{ c.missing }} missing{% endif %}{% if c.extra > 0 %} · {{ c.extra }} extra{% endif %}</span>
       </li>

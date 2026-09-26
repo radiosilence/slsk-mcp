@@ -275,6 +275,19 @@ pub async fn set_analysis(
         .map(|_| ())
 }
 
+/// Move a job to `importing` if it is waiting on a decision. One statement,
+/// so two requests for the same job cannot both succeed.
+pub async fn claim_import(db: &PgPool, id: Uuid) -> sqlx::Result<bool> {
+    sqlx::query(
+        "UPDATE jobs SET status = 'importing', error = NULL, updated_at = now() \
+         WHERE id = $1 AND status IN ('review', 'suspect', 'failed') RETURNING id",
+    )
+    .bind(id)
+    .fetch_optional(db)
+    .await
+    .map(|row| row.is_some())
+}
+
 pub async fn set_approved(db: &PgPool, id: Uuid) -> sqlx::Result<()> {
     sqlx::query("UPDATE jobs SET approved = TRUE, updated_at = now() WHERE id = $1")
         .bind(id)

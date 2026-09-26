@@ -2,13 +2,13 @@
   {% match username %}{% when Some with (u) %}<strong>{{ u }}</strong>{% when None %}{% endmatch %}
   <span class="pill">{{ state }}</span>
   {% match detail %}{% when Some with (d) %}<span class="detail">{{ d }}</span>{% when None %}{% endmatch %}
-  {% if state == "displaced" || state == "disconnected" %}<button data-on:click="@post('/reconnect')">Reconnect</button>{% endif %}
+  {% if state == "displaced" || state == "disconnected" %}<button data-indicator="_reconnecting" data-attr:disabled="$_reconnecting" data-class:busy="$_reconnecting" data-on:click="@post('/reconnect')">Reconnect</button>{% endif %}
   {% if state == "connected" %}<span class="stats">sharing {{ files }} files · ↑ {{ up }} · ↓ {{ down }} · {{ children }} children</span>{% endif %}
   {% if state == "no-account" || state == "rejected" %}
-  <form id="account" class="account" data-on:submit__prevent="@post('/account', {contentType: 'form', selector: '#account'})">
+  <form id="account" class="account" data-indicator="_signing_in" data-on:submit__prevent="@post('/account', {contentType: 'form', selector: '#account'})">
     <input name="username" placeholder="Soulseek username" autocomplete="username">
     <input name="password" type="password" placeholder="password" autocomplete="current-password">
-    <button type="submit">Sign in</button>
+    <button type="submit" data-attr:disabled="$_signing_in" data-class:busy="$_signing_in">Sign in</button>
   </form>
   {% endif %}
 </div>

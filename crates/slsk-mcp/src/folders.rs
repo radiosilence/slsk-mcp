@@ -10,6 +10,7 @@ use slsk_engine::slsk_proto::RawStr;
 use slsk_engine::slsk_proto::peer::{FileEntry, SearchResponse};
 
 const LOSSLESS: &[&str] = &["flac", "wav", "aiff", "aif", "ape", "wv", "alac"];
+const UNCOMPRESSED: &[&str] = &["wav", "aiff", "aif"];
 const AUDIO: &[&str] = &[
     "flac", "wav", "aiff", "aif", "ape", "wv", "alac", "mp3", "m4a", "aac", "ogg", "opus", "wma",
 ];
@@ -257,6 +258,15 @@ fn score(f: &Folder) -> f64 {
     if f.lossless {
         s += 1000.0;
         s += f64::from(f.bit_depth.unwrap_or(16).min(24)) * 2.0;
+        // Uncompressed audio carries its tags poorly or not at all and is
+        // twice the size: a FLAC copy is preferred unless the WAV is much
+        // sooner to arrive.
+        if f.files
+            .iter()
+            .any(|x| UNCOMPRESSED.contains(&x.extension.as_str()))
+        {
+            s -= 250.0;
+        }
     } else {
         s += f64::from(f.bitrate.unwrap_or(0).min(320));
     }
@@ -404,5 +414,23 @@ mod tests {
         for no in ["CDs", "Discovery", "Disco Inferno", "Mezzanine", ""] {
             assert!(!is_disc(no), "{no}");
         }
+    }
+
+    #[test]
+    fn flac_is_preferred_to_wav() {
+        let rs = vec![
+            response(
+                "wav",
+                true,
+                vec![entry("m\\A\\1.wav", "wav", vec![(4, 44100), (5, 16)])],
+            ),
+            response(
+                "flac",
+                true,
+                vec![entry("m\\A\\1.flac", "flac", vec![(4, 44100), (5, 16)])],
+            ),
+        ];
+        let all = group(&rs, &Filter::default());
+        assert_eq!(all[0].username, "flac");
     }
 }

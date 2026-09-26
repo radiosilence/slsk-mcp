@@ -70,3 +70,17 @@ td.state { width: 90px; color: var(--dim); }
 .failed td.state { color: var(--bad); }
 .transferring td.state { color: var(--accent); }
 @media (max-width: 640px) { td.actions button { padding: 5px 7px; } td.actions { width: 120px; } }
+
+/* In flight: set by Datastar's request indicator, so it lasts exactly as
+   long as the request. */
+button:disabled { opacity: .55; cursor: progress; }
+button.busy::after, .job.busy .pill::after {
+  content: ""; display: inline-block; width: .8em; height: .8em; margin-left: .45em; vertical-align: -.1em;
+  border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%;
+  animation: spin .7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { button.busy::after, .job.busy .pill::after { animation: none; border-right-color: currentColor; } }
+/* Errors float over the page, so one is seen wherever the tap was. */
+#flash.error { position: fixed; left: 16px; right: 16px; bottom: 16px; z-index: 10; padding: 12px 14px;
+  background: var(--panel, #1b1d22); border: 1px solid var(--bad); border-radius: 8px; box-shadow: 0 6px 24px rgba(0,0,0,.35); }
