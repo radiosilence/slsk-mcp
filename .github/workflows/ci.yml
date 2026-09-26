@@ -3,8 +3,8 @@ name: CI/CD
 on:
   push:
     branches: [main]
+  # Every PR, including ones stacked on another PR's branch.
   pull_request:
-    branches: [main]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
