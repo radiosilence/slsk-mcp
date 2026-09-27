@@ -717,6 +717,40 @@ impl Query {
         Ok(app(ctx).social.wishes().await?)
     }
 
+    /// Albums in the library matching a beets query, one term per list
+    /// element: `artist:burial`, `year:1990..1999`, `format:FLAC`,
+    /// `album::^The` (regex), `^genre:rock` (negated), `year-` (sort).
+    /// Empty lists everything. The index follows the files, so this is
+    /// current.
+    async fn library_albums(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(default)] query: Vec<String>,
+    ) -> Result<Vec<crate::library::LibraryAlbum>> {
+        Ok(app(ctx).library.albums(&query).await?)
+    }
+
+    /// Albums held more than once, each with the copy to keep and why the
+    /// others are spare. Changes nothing; `binDuplicates` acts on it.
+    async fn duplicates(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(default)] query: Vec<String>,
+    ) -> Result<Vec<crate::library::DuplicateSet>> {
+        Ok(app(ctx).library.duplicates(&query, false).await?)
+    }
+
+    /// Albums not where the current path rules would file them, and where
+    /// they would go, or why they would be left alone. Changes nothing;
+    /// `refile` acts on it.
+    async fn refile_plan(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(default)] query: Vec<String>,
+    ) -> Result<Vec<crate::library::AlbumMove>> {
+        Ok(app(ctx).library.refile(&query, false).await?)
+    }
+
     /// Why albums did not land cleanly, grouped by cause, most frequent
     /// first, each with its most recent examples. A cause that keeps
     /// recurring is a fix to make in code; `version` says which release
@@ -873,6 +907,33 @@ pub struct Mutation;
 
 #[Object]
 impl Mutation {
+    /// Move every spare copy found by `duplicates(query)` to the bin beside
+    /// the library, at its path relative to it. Nothing is deleted, and the
+    /// bin is outside what Navidrome and the shares see. Check `duplicates`
+    /// with the same query first.
+    async fn bin_duplicates(
+        &self,
+        ctx: &Context<'_>,
+        query: Vec<String>,
+    ) -> Result<Vec<crate::library::DuplicateSet>> {
+        Ok(app(ctx).library.duplicates(&query, true).await?)
+    }
+
+    /// Re-file the albums `refilePlan(query)` lists. Albums whose plan
+    /// collides with anything stay where they are. A query is required:
+    /// re-filing the whole library is a decision for its owner, made
+    /// deliberately with `query: [""]`.
+    async fn refile(
+        &self,
+        ctx: &Context<'_>,
+        query: Vec<String>,
+    ) -> Result<Vec<crate::library::AlbumMove>> {
+        if query.is_empty() {
+            return Err(Error::new("give a query; [\"\"] means the whole library"));
+        }
+        Ok(app(ctx).library.refile(&query, true).await?)
+    }
+
     /// Find an album and start fetching the best copy of it. The best copy is
     /// lossless (unless `filter.lossless` is false and nothing lossless
     /// exists), from a peer with a free slot, and mentions every word of the

@@ -11,6 +11,7 @@ mod error;
 mod folders;
 mod graphql;
 mod jobs;
+mod library;
 mod mcp;
 mod session;
 mod social;
@@ -31,6 +32,7 @@ pub struct App {
     pub session: Arc<Session>,
     pub jobs: Arc<jobs::Jobs>,
     pub social: Arc<social::Social>,
+    pub library: Arc<library::Library>,
 }
 
 #[tokio::main]
@@ -88,6 +90,23 @@ async fn main() -> anyhow::Result<()> {
     // The root filesystem is read-only in a container; the state volume is
     // where a cache survives restarts.
     sift_cfg.cache_dir = Some(cfg.state_dir.join("cache"));
+    // Spare copies go beside the library rather than in it: out of
+    // Navidrome's and the shares' sight, and on the same drive, so binning
+    // is a rename.
+    let bin = {
+        let mut name = cfg
+            .library_dir
+            .file_name()
+            .unwrap_or_default()
+            .to_os_string();
+        name.push("-bin");
+        cfg.library_dir.with_file_name(name)
+    };
+    let library = Arc::new(library::Library::open(
+        &cfg.state_dir.join("library.db"),
+        sift_cfg.clone(),
+        bin,
+    )?);
     let importer = Arc::new(sift::Importer::new(sift_cfg));
 
     let session = Session::new(cfg.clone(), db.clone());
@@ -107,7 +126,9 @@ async fn main() -> anyhow::Result<()> {
         session,
         jobs: jobs.clone(),
         social: social.clone(),
+        library: library.clone(),
     });
+    tokio::spawn(async move { library.warm().await });
     jobs.spawn();
     social.spawn();
     if app.session.engine().is_some()

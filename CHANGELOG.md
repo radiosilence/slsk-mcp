@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.28
+
+- The library as a whole is reachable over GraphQL and MCP, through sift's index of it: `libraryAlbums(query)` lists albums with beets' query syntax; `duplicates` finds albums held more than once and names the copy to keep (lossless over lossy, then more tracks, then higher resolution, then the one filed under the current rules); `binDuplicates` moves the spare copies to `<library>-bin`; `refilePlan` and `refile` move albums to where the current naming rules put them. The bin is outside what Navidrome and the shares see, and on the same drive, so binning is a rename; nothing is deleted. `refile` refuses an empty query, so re-filing the whole library is deliberate (`[""]`).
+- The index lives in the state directory, is built at startup and brought up to date incrementally before each library query. A scan reads two files at a time, since a file the tag reader cannot parse can cost tens of MB while it tries, and such files are not re-read until they change.
+- Filing follows beets' placement of the edge replacements (`^\.`, `\.$`): they apply to each path component rather than to every value inside it, so "The Vertigo E.P. [MP3]" keeps its dots (sift). ALAC is filed as `[ALAC]`, not `[AAC]` (sift).
+
 ## 0.1.27
 
 - An album stalled on its only known copy searches again for its title, and moves to the best copy on another peer if one is online. Without this, a rare album found on one peer waited on that peer indefinitely. Searches are spaced a stall (twenty minutes) apart and skip peers that stalled recently.

@@ -80,6 +80,18 @@ that produced it, in a history kept after the job itself is gone. The
 `slsk_job_outcomes_total` counts them for the dashboard. A cause that recurs
 is a fix to make in code; the version then identifies the jobs to repair.
 
+### The library after import
+
+sift keeps an index of the whole library, derived from the files and rebuilt
+incrementally before each library query, so the service can answer questions
+about what is already there: which albums are held twice, and which are not
+where the current naming rules put them (a library filed over years by
+different beets configurations disagrees with itself). `duplicates` and
+`refilePlan` only report; `binDuplicates` and `refile` act. Spare copies go to
+`<library>-bin`, beside the library rather than in it, so Navidrome and the
+shares stop seeing them and restoring one is a move back. Nothing deletes a
+file.
+
 ## Running it
 
 It is a long-running daemon: it holds one Soulseek login, shares the library

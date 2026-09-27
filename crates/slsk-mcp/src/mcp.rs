@@ -161,6 +161,12 @@ impl ServerHandler for SlskMcp {
                  waits several seconds for peers to answer.\n\n\
                  For something nobody has yet, `addWish(query, grab: true)` keeps searching on the server's \
                  wishlist interval and starts a job when it turns up.\n\n\
+                 The library itself: `libraryAlbums(query)` lists albums with beets' query syntax, one term per \
+                 list element (`[\"artist:burial\", \"year:2000..2010\"]`). `duplicates` names albums held more than \
+                 once, the copy to keep and why the others are spare; `binDuplicates(query)` moves the spares to a \
+                 bin beside the library, deleting nothing. `refilePlan` lists albums not where the current naming \
+                 rules would put them; `refile(query)` moves them. Show the user a plan before acting on more than \
+                 a handful of albums: moving files can cost the player its play counts.\n\n\
                  The client is also a chat client: rooms, private messages (`conversations`, `messages`), \
                  buddies and interests. `sendMessage` and `say` reach real people, so they take two calls: \
                  PREVIEW returns a token and sends nothing; show the user the preview, and only after they agree \
