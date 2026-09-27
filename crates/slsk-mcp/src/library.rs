@@ -17,6 +17,7 @@ pub struct Library {
     index: Mutex<sift::library::Library>,
     cfg: sift::Config,
     bin: PathBuf,
+    tagger: std::sync::Arc<sift::Importer>,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -64,6 +65,16 @@ pub struct DuplicateSet {
 }
 
 #[derive(SimpleObject)]
+pub struct EnrichedAlbum {
+    pub path: String,
+    pub gain_db: Option<f64>,
+    pub genres: Vec<String>,
+    /// Tracks given lyrics.
+    pub lyrics: usize,
+    pub problems: Vec<String>,
+}
+
+#[derive(SimpleObject)]
 pub struct AlbumMove {
     pub from: String,
     /// The album's new directory; absent when it was refused.
@@ -74,11 +85,16 @@ pub struct AlbumMove {
 }
 
 impl Library {
-    pub fn open(index: &Path, cfg: sift::Config, bin: PathBuf) -> anyhow::Result<Self> {
+    pub fn open(
+        index: &Path,
+        tagger: std::sync::Arc<sift::Importer>,
+        bin: PathBuf,
+    ) -> anyhow::Result<Self> {
         Ok(Self {
             index: Mutex::new(sift::library::Library::open(index)?.with_workers(2)),
-            cfg,
+            cfg: tagger.cfg.clone(),
             bin,
+            tagger,
         })
     }
 
@@ -152,6 +168,29 @@ impl Library {
             out.push(DuplicateSet {
                 keep: LibraryAlbum::from(d.keep),
                 spares,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Add gain, genres and lyrics to matching albums, as every new import
+    /// gets. Rewrites tags (only those fields) across what the query
+    /// matches, so it is for a deliberate backfill.
+    pub async fn enrich(&self, query: &[String]) -> anyhow::Result<Vec<EnrichedAlbum>> {
+        let albums = {
+            let mut index = self.index.lock().await;
+            self.refresh(&mut index)?;
+            index.albums(&Query::parse(query)?)?
+        };
+        let mut out = Vec::new();
+        for a in albums {
+            let e = self.tagger.enrich(&a.dir).await?;
+            out.push(EnrichedAlbum {
+                path: a.dir.to_string_lossy().into_owned(),
+                gain_db: e.gain_db,
+                genres: e.genres,
+                lyrics: e.lyrics,
+                problems: e.problems,
             });
         }
         Ok(out)

@@ -776,9 +776,27 @@ impl Jobs {
                 self.event(&job, "imported", None, Some(&path.to_string_lossy()))
                     .await;
                 let _ = tokio::fs::remove_dir_all(&dir).await;
-                if let Some(engine) = self.session.engine().cloned() {
-                    tokio::spawn(async move { engine.rescan().await });
-                }
+                // Gain, genres and lyrics, off the import path: an album is
+                // playable as soon as it is filed, and these only add to it.
+                let (tagger, engine) = (self.tagger.clone(), self.session.engine().cloned());
+                tokio::spawn(async move {
+                    match tagger.enrich(&path).await {
+                        Ok(e) => tracing::info!(
+                            album = %path.display(),
+                            gain_db = ?e.gain_db,
+                            genres = ?e.genres,
+                            lyrics = e.lyrics,
+                            problems = ?e.problems,
+                            "enriched"
+                        ),
+                        Err(e) => {
+                            tracing::warn!(album = %path.display(), error = %e, "could not enrich")
+                        }
+                    }
+                    if let Some(engine) = engine {
+                        engine.rescan().await;
+                    }
+                });
             }
             Ok(sift::Outcome::Review {
                 reason,

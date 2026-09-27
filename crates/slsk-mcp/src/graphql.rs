@@ -919,6 +919,21 @@ impl Mutation {
         Ok(app(ctx).library.duplicates(&query, true).await?)
     }
 
+    /// Add ReplayGain, MusicBrainz genres (where an album has none) and
+    /// lyrics to matching albums, as every new import gets. Writes only
+    /// those tags, but across everything the query matches: a query is
+    /// required, and a large one takes a long time.
+    async fn enrich_library(
+        &self,
+        ctx: &Context<'_>,
+        query: Vec<String>,
+    ) -> Result<Vec<crate::library::EnrichedAlbum>> {
+        if query.is_empty() {
+            return Err(Error::new("give a query; [\"\"] means the whole library"));
+        }
+        Ok(app(ctx).library.enrich(&query).await?)
+    }
+
     /// Re-file the albums `refilePlan(query)` lists. Albums whose plan
     /// collides with anything stay where they are. A query is required:
     /// re-filing the whole library is a decision for its owner, made

@@ -92,6 +92,10 @@ different beets configurations disagrees with itself). `duplicates` and
 shares stop seeing them and restoring one is a move back. Nothing deletes a
 file.
 
+Each import is followed by what beets' `replaygain`, `lastgenre` and `lyrics`
+plugins add: loudness normalisation for players, genres from MusicBrainz, and
+synced lyrics from LRCLIB. `enrichLibrary` backfills albums imported before.
+
 ## Running it
 
 It is a long-running daemon: it holds one Soulseek login, shares the library

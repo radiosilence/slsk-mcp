@@ -90,6 +90,7 @@ async fn main() -> anyhow::Result<()> {
     // The root filesystem is read-only in a container; the state volume is
     // where a cache survives restarts.
     sift_cfg.cache_dir = Some(cfg.state_dir.join("cache"));
+    let importer = Arc::new(sift::Importer::new(sift_cfg));
     // Spare copies go beside the library rather than in it: out of
     // Navidrome's and the shares' sight, and on the same drive, so binning
     // is a rename.
@@ -104,10 +105,9 @@ async fn main() -> anyhow::Result<()> {
     };
     let library = Arc::new(library::Library::open(
         &cfg.state_dir.join("library.db"),
-        sift_cfg.clone(),
+        importer.clone(),
         bin,
     )?);
-    let importer = Arc::new(sift::Importer::new(sift_cfg));
 
     let session = Session::new(cfg.clone(), db.clone());
     session.boot().await?;

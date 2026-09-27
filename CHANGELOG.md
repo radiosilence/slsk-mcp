@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.31
+
+- Every imported album is given ReplayGain track and album gain, MusicBrainz genres when it has none, and time-synced lyrics from LRCLIB where they exist, as beets' `replaygain`, `lastgenre` and `lyrics` plugins would (sift's `Importer::enrich`). It runs after the album is filed, so the album is playable first; a failure is logged, not a failed import.
+- `enrichLibrary(query)` does the same for albums already in the library. It writes only those tags, but across everything the query matches, so it requires a query.
+
 ## 0.1.30
 
 - Albums whose files number tracks straight through (B-side files tagged disc 2, tracks 5–8) match a release on one medium, or on sides that restart at 1, by overall position (sift). Rezzett's LP had matched with four tracks "missing" and the same four "extra".
