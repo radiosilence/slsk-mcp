@@ -122,6 +122,11 @@ fn verify(files: &[(PathBuf, Vec<u8>)]) {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "load test; run explicitly"]
 async fn one_client_downloads_from_every_peer_at_once() {
+    // RUST_LOG=slsk_engine=trace shows each transfer's steps.
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_test_writer()
+        .try_init();
     let (peers, per) = scale();
     let server = TestServer::start().await;
     let tmp = tempfile::tempdir().unwrap();
