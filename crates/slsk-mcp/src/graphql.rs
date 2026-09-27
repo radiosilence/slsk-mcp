@@ -882,9 +882,13 @@ pub(crate) async fn grab(
         lossless: true,
         ..Default::default()
     });
-    let mut found = folders::relevant(search(app, query, wait, &filter).await?, query);
+    let mut found =
+        folders::relevant_complete_first(search(app, query, wait, &filter).await?, query);
     if found.is_empty() && !strict {
-        found = folders::relevant(search(app, query, wait, &Filter::default()).await?, query);
+        found = folders::relevant_complete_first(
+            search(app, query, wait, &Filter::default()).await?,
+            query,
+        );
     }
     // A peer we are queued with and receiving nothing from, or one that
     // stalled us recently, answers searches readily and sends nothing; its

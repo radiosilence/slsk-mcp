@@ -287,6 +287,58 @@ fn is_clutter(w: &str) -> bool {
 /// unless the query asks for one. With nothing that qualifies, everything
 /// is returned as it came.
 pub fn relevant(folders: Vec<Folder>, query: &str) -> Vec<Folder> {
+    tiered(folders, query).into_iter().map(|(_, f)| f).collect()
+}
+
+/// An album this short is taken at whatever length anyone has it: a single
+/// or an EP shared as two tracks is not a fragment of anything.
+const SHORT_ALBUM: usize = 4;
+
+/// Far short of the fullest copy: under four-fifths of its tracks, the same
+/// bar searching again after a stall sets.
+fn is_fragment(f: &Folder, fullest: usize) -> bool {
+    fullest > SHORT_ALBUM && f.audio_files * 5 < fullest * 4
+}
+
+/// [`relevant`], each folder marked when it holds only part of the album.
+/// The album's length is taken as the most tracks any folder in the best
+/// relevance tier holds: those answer the query most closely, where a live
+/// or deluxe folder further down may well be longer than the album.
+fn marked(folders: Vec<Folder>, query: &str) -> Vec<(Option<u8>, bool, Folder)> {
+    let ranked = tiered(folders, query);
+    let best = ranked.first().map(|(t, _)| *t);
+    let most = ranked
+        .iter()
+        .filter(|(t, _)| Some(*t) == best)
+        .map(|(_, f)| f.audio_files)
+        .max()
+        .unwrap_or(0);
+    ranked
+        .into_iter()
+        .map(|(t, f)| (t, is_fragment(&f, most), f))
+        .collect()
+}
+
+/// [`relevant`], with folders holding only part of the album behind the
+/// complete copies within each relevance tier. They are kept, last, for
+/// when nothing else will come.
+pub fn relevant_complete_first(folders: Vec<Folder>, query: &str) -> Vec<Folder> {
+    let mut ranked = marked(folders, query);
+    ranked.sort_by_key(|(t, fragment, _)| (*t, *fragment));
+    ranked.into_iter().map(|(.., f)| f).collect()
+}
+
+/// [`relevant`], without folders holding only part of the album: for a wish,
+/// which should wait for a complete copy rather than take a fragment.
+pub fn relevant_complete(folders: Vec<Folder>, query: &str) -> Vec<Folder> {
+    marked(folders, query)
+        .into_iter()
+        .filter(|(_, fragment, _)| !fragment)
+        .map(|(.., f)| f)
+        .collect()
+}
+
+fn tiered(folders: Vec<Folder>, query: &str) -> Vec<(Option<u8>, Folder)> {
     let norm = sift::matching::normalise(query);
     let wanted: Vec<&str> = norm.split(' ').filter(|w| w.len() > 1).collect();
     let tier = |f: &Folder| -> Option<u8> {
@@ -317,7 +369,7 @@ pub fn relevant(folders: Vec<Folder>, query: &str) -> Vec<Folder> {
         ranked.retain(|(t, _)| t.is_some());
         ranked.sort_by_key(|(t, _)| *t);
     }
-    ranked.into_iter().map(|(_, f)| f).collect()
+    ranked
 }
 
 /// Quality first, then how soon it will actually arrive. A free slot matters
@@ -413,6 +465,100 @@ mod tests {
             &Filter::default(),
         )
         .remove(0)
+    }
+
+    /// A folder holding `tracks` FLAC files, from a peer with a free slot.
+    fn album(user: &str, path: &str, tracks: usize) -> Folder {
+        let flac = |n: String| entry(&n, "flac", vec![(4, 44100), (5, 16)]);
+        group(
+            &[response(
+                user,
+                true,
+                (1..=tracks)
+                    .map(|i| flac(format!("{path}\\{i}.flac")))
+                    .collect(),
+            )],
+            &Filter::default(),
+        )
+        .remove(0)
+    }
+
+    #[test]
+    fn a_fragment_ranks_behind_a_complete_copy() {
+        // The fragment comes first on quality alone (24-bit beats 16).
+        let mut fragment = album("a", "m\\Mac Declos\\Nothing Stands Still", 2);
+        fragment.bit_depth = Some(24);
+        let complete = album("b", "x\\Mac Declos - Nothing Stands Still", 12);
+        let found = relevant_complete_first(
+            vec![fragment, complete.clone()],
+            "mac declos nothing stands still",
+        );
+        assert_eq!(
+            found
+                .iter()
+                .map(|f| f.username.as_str())
+                .collect::<Vec<_>>(),
+            ["b", "a"]
+        );
+    }
+
+    #[test]
+    fn completeness_ranks_within_relevance_not_above_it() {
+        let live_complete = album("a", "m\\Pixies\\Doolittle Live", 15);
+        let album_short = album("b", "m\\Pixies\\Doolittle", 10);
+        let fragment = album("c", "x\\Pixies\\Doolittle", 3);
+        let found = relevant_complete_first(
+            vec![live_complete, fragment, album_short],
+            "pixies doolittle",
+        );
+        // 10 of 15 is a fragment by the live copy's count, but the album
+        // tier still comes first; within it, 10 tracks beats 3.
+        assert_eq!(
+            found
+                .iter()
+                .map(|f| f.username.as_str())
+                .collect::<Vec<_>>(),
+            ["b", "c", "a"]
+        );
+    }
+
+    #[test]
+    fn grab_keeps_a_fragment_as_a_fallback_and_a_wish_drops_it() {
+        let q = "mac declos nothing stands still";
+        let copies = || {
+            vec![
+                album("a", "m\\Mac Declos\\Nothing Stands Still", 2),
+                album("b", "x\\Mac Declos - Nothing Stands Still", 12),
+            ]
+        };
+        assert_eq!(relevant_complete_first(copies(), q).len(), 2);
+        let wished = relevant_complete(copies(), q);
+        assert_eq!(
+            wished
+                .iter()
+                .map(|f| f.username.as_str())
+                .collect::<Vec<_>>(),
+            ["b"]
+        );
+        // Alone, a short copy is its own measure: nothing says it is short.
+        let alone = relevant_complete(
+            vec![album("a", "m\\Mac Declos\\Nothing Stands Still", 2)],
+            q,
+        );
+        assert_eq!(alone.len(), 1);
+    }
+
+    #[test]
+    fn singles_and_eps_are_not_fragments() {
+        let q = "burial street halo";
+        let found = relevant_complete(
+            vec![
+                album("a", "m\\Burial\\Street Halo", 1),
+                album("b", "x\\Burial - Street Halo", 3),
+            ],
+            q,
+        );
+        assert_eq!(found.len(), 2);
     }
 
     fn paths(folders: Vec<Folder>) -> Vec<String> {

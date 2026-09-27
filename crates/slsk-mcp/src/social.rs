@@ -540,8 +540,10 @@ impl Social {
             lossless: wish.lossless,
             ..Default::default()
         };
-        let found =
-            crate::folders::relevant(crate::folders::group(&responses, &filter), &wish.query);
+        let found = crate::folders::relevant_complete(
+            crate::folders::group(&responses, &filter),
+            &wish.query,
+        );
         tracing::info!(query = %wish.query, folders = found.len(), "wishlist search");
         if wish.grab {
             let mut found = found.into_iter();
