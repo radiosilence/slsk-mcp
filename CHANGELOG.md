@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- The web UI has an icon: the Soulseek bird, painted in kōan's style. It is the favicon and the home-screen icon.
+
 ## 0.1.35
 
 - Browse: Download folder is offered at every level, not only in a folder holding files. Everything under the folder is downloaded as one job per album, with disc folders kept inside their album; above 100 files it asks first, and more than 200 albums is refused as a whole collection.

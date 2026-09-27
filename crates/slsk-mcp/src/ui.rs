@@ -104,8 +104,25 @@ pub fn router(app: Arc<App>) -> Router {
                 )
             }),
         )
+        .route(
+            "/assets/icon-32.png",
+            get(|| async { png(include_bytes!("../assets/icon-32.png")) }),
+        )
+        .route(
+            "/assets/icon-192.png",
+            get(|| async { png(include_bytes!("../assets/icon-192.png")) }),
+        )
+        .route(
+            "/assets/apple-touch-icon.png",
+            get(|| async { png(include_bytes!("../assets/apple-touch-icon.png")) }),
+        )
         .layer(axum::middleware::from_fn(security_headers))
         .with_state(state)
+}
+
+/// Public like the other assets: a browser asks for the icon before anyone signs in.
+fn png(bytes: &'static [u8]) -> impl IntoResponse {
+    ([(header::CONTENT_TYPE, "image/png")], bytes)
 }
 
 async fn security_headers(request: Request, next: Next) -> Response {
