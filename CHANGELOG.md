@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.30
+
+- Albums whose files number tracks straight through (B-side files tagged disc 2, tracks 5–8) match a release on one medium, or on sides that restart at 1, by overall position (sift). Rezzett's LP had matched with four tracks "missing" and the same four "extra".
+
 ## 0.1.29
 
 - Searching again for a stalled album accepts only a copy as good as the one it replaces: lossless for a lossless album, and at least four-fifths of its tracks. It had replaced a 21-file FLAC Boiler Room set with a one-file 192 kbps video rip, and a twelve-track album with a single track from it.
