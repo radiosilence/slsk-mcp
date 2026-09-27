@@ -1,7 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.1.36
 
+- A job with no stored fallbacks searches for another copy when its peer refuses or keeps failing, as a stalled job already did. A folder picked by hand has no fallbacks, so a peer's daily file limit ("Too many files today") or a ban failed it outright although other peers had the album.
 - The web UI has an icon: the Soulseek bird, painted in kōan's style. It is the favicon and the home-screen icon.
 
 ## 0.1.35

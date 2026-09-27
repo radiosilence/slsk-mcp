@@ -554,7 +554,11 @@ impl Jobs {
                         .insert(job.id, (now, received));
                     let (jobs, engine, job) = (self.clone(), engine.clone(), job.clone());
                     tokio::spawn(async move {
-                        if let Err(e) = jobs.search_again(&engine, &job).await {
+                        if let Err(e) = jobs
+                            .search_again(&engine, &job, cause::STALLED_PEER)
+                            .await
+                            .map(drop)
+                        {
                             tracing::warn!(job = %job.id, error = %e, "search for another copy failed");
                         }
                     });
@@ -611,6 +615,15 @@ impl Jobs {
                         }
                     }
                     Some(false) => {}
+                    // Out of stored fallbacks, as a folder picked by hand
+                    // always is: a peer that refuses (a daily file limit, a
+                    // ban) will not relent, but another may have the album.
+                    None if job.alternates.0.is_empty() => {
+                        if !self.search_again(&engine, &job, cause::PEER_FAILED).await? {
+                            self.fall_back(&engine, &job, &rows, cause::PEER_FAILED)
+                                .await?
+                        }
+                    }
                     None => {
                         self.fall_back(&engine, &job, &rows, cause::PEER_FAILED)
                             .await?
@@ -1086,9 +1099,15 @@ impl Jobs {
     }
 
     /// Search for the job's title again and move to the best copy found on
-    /// another peer, for a stalled job with no fallbacks left. Titles are the
-    /// query a grab was given, so this is the grab's own search.
-    async fn search_again(self: &Arc<Self>, engine: &Engine, job: &Job) -> Result<()> {
+    /// another peer, for a job with no fallbacks left. Titles are the query a
+    /// grab was given, so this is the grab's own search. False when no other
+    /// copy was found and the job was left as it was.
+    async fn search_again(
+        self: &Arc<Self>,
+        engine: &Engine,
+        job: &Job,
+        cause: &str,
+    ) -> Result<bool> {
         let rows = db::job_files(&self.db, job.id).await?;
         let current = rows.first().map(|r| r.peer.clone()).unwrap_or_default();
         let stalled = self.recently_stalled();
@@ -1130,8 +1149,8 @@ impl Jobs {
         };
         let found = search(&filter).await?;
         if found.is_empty() {
-            tracing::info!(job = %job.id, "no other copy online; still waiting on {current}");
-            return Ok(());
+            tracing::info!(job = %job.id, "no other copy online; still on {current}");
+            return Ok(false);
         }
         tracing::info!(job = %job.id, copies = found.len(), "found other copies; moving off {current}");
         self.stalled_peers
@@ -1140,8 +1159,8 @@ impl Jobs {
             .insert(current, tokio::time::Instant::now());
         let mut job = job.clone();
         job.alternates = Json(found.into_iter().take(4).map(Alternate::from).collect());
-        self.fall_back(engine, &job, &rows, cause::STALLED_PEER)
-            .await
+        self.fall_back(engine, &job, &rows, cause).await?;
+        Ok(true)
     }
 
     /// Retry a failed or cancelled job from its current source.
