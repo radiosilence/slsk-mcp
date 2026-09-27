@@ -242,12 +242,23 @@ impl Jobs {
         files: Vec<(RawStr, u64)>,
         title: String,
     ) -> Result<Job> {
-        let engine = self.session.require()?.clone();
-        let id = Uuid::new_v4();
-        let listing: Vec<(RawStr, u64, String)> = files
+        let listing = files
             .into_iter()
             .map(|(r, s)| (r, s, String::new()))
             .collect();
+        self.from_listing(username, listing, title).await
+    }
+
+    /// Files already known from a share listing, each with its
+    /// subdirectory relative to the album, so disc folders stay apart.
+    pub async fn from_listing(
+        self: &Arc<Self>,
+        username: &str,
+        listing: Vec<(RawStr, u64, String)>,
+        title: String,
+    ) -> Result<Job> {
+        let engine = self.session.require()?.clone();
+        let id = Uuid::new_v4();
         let job = Job {
             id,
             account: engine.username(),

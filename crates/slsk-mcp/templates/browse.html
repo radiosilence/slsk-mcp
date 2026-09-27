@@ -14,6 +14,11 @@
     <button type="button" class="link" data-indicator="_browsing" data-attr:disabled="$_browsing" data-on:click="@post('/browse', {contentType: 'form', selector: '#browse-user'})">top</button>
     {% for c in crumbs %}<span class="meta">/</span><button type="button" class="link" name="key" value="{{ c.key }}" data-indicator="_browsing" data-attr:disabled="$_browsing" data-on:click="@post('/browse', {contentType: 'form', selector: '#browse-user'})">{{ c.name }}</button>{% endfor %}
   </nav>
+  {% if tree_files > 0 %}
+  <div class="actions">
+    <button type="button" class="primary" name="key" value="{{ here_key }}" data-indicator="_dl_here" data-attr:disabled="$_dl_here" data-class:busy="$_dl_here" data-on:click="{% if tree_files > 100 %}confirm('Download everything under this folder? It is more than 100 files, one job per album.') && {% endif %}@post('/browse/tree', {contentType: 'form', selector: '#browse-user'})">Download folder · {{ tree_files }} files</button>
+  </div>
+  {% endif %}
   {% if !children.is_empty() %}
   <ul class="rows dirs">
   {% for c in children %}
@@ -27,7 +32,6 @@
     <input type="hidden" name="username" value="{{ username }}">
     <input type="hidden" name="key" value="{{ here_key }}">
     <div class="actions">
-      <button type="button" class="primary" data-indicator="_dl_here" data-attr:disabled="$_dl_here" data-class:busy="$_dl_here" data-on:click="@post('/download', {contentType: 'form', selector: '#browse-files'})">Download folder</button>
       <button type="button" data-indicator="_dl_some" data-attr:disabled="$_dl_some" data-class:busy="$_dl_some" data-on:click="@post('/browse/files', {contentType: 'form', selector: '#browse-files'})">Download ticked</button>
     </div>
     <ul class="rows files">

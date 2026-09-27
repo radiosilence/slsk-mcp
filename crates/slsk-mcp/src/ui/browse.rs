@@ -7,6 +7,7 @@
 //! Folders are named in URLs and forms by the base64 of their raw bytes:
 //! peer paths are not always UTF-8, and a key is safe anywhere.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -27,6 +28,7 @@ pub(super) fn routes() -> Router<UiState> {
     Router::new()
         .route("/browse", post(browse))
         .route("/browse/files", post(download_files))
+        .route("/browse/tree", post(download_tree))
 }
 
 type Listing = Arc<Vec<Directory>>;
@@ -153,6 +155,8 @@ struct BrowseView {
     children: Vec<Child>,
     more: usize,
     here_key: String,
+    /// Files in this folder and every folder under it.
+    tree_files: usize,
     files: Vec<FileRow>,
     info: Option<Info>,
     error: Option<String>,
@@ -207,6 +211,7 @@ fn render(username: &str, dirs: &[Directory], at: &[u8], info: Option<Info>) -> 
         children,
         more,
         here_key: key(at),
+        tree_files: albums(dirs, at).values().map(Vec::len).sum(),
         files,
         info,
         error: None,
@@ -223,6 +228,7 @@ fn note(username: &str, error: String) -> String {
         children: Vec::new(),
         more: 0,
         here_key: String::new(),
+        tree_files: 0,
         files: Vec::new(),
         info: None,
         error: Some(error),
@@ -339,6 +345,94 @@ async fn download_files(State(s): State<UiState>, body: Bytes) -> Response {
     }
 }
 
+/// Every folder at or under `at` that holds files, grouped into albums: a
+/// disc folder ("CD1") belongs to its parent, and its name becomes the
+/// file's subdirectory so same-named tracks on different discs stay apart.
+fn albums(dirs: &[Directory], at: &[u8]) -> BTreeMap<Vec<u8>, Vec<(RawStr, u64, String)>> {
+    let mut prefix = at.to_vec();
+    if !prefix.is_empty() {
+        prefix.push(b'\\');
+    }
+    let mut out: BTreeMap<Vec<u8>, Vec<(RawStr, u64, String)>> = BTreeMap::new();
+    for d in dirs {
+        let name = d.name.as_bytes();
+        if d.files.is_empty() || !(at.is_empty() || name == at || name.starts_with(&prefix)) {
+            continue;
+        }
+        let (root, sub) = match name.iter().rposition(|b| *b == b'\\') {
+            Some(i)
+                if i >= at.len()
+                    && crate::folders::is_disc(&String::from_utf8_lossy(&name[i + 1..])) =>
+            {
+                (
+                    name[..i].to_vec(),
+                    String::from_utf8_lossy(&name[i + 1..]).into_owned(),
+                )
+            }
+            _ => (name.to_vec(), String::new()),
+        };
+        let files = out.entry(root).or_default();
+        for f in &d.files {
+            let mut full = name.to_vec();
+            full.push(b'\\');
+            full.extend_from_slice(f.name.as_bytes());
+            files.push((RawStr(full.into()), f.size, sub.clone()));
+        }
+    }
+    out
+}
+
+/// More than this is a whole collection, not a folder of albums.
+const MAX_ALBUMS: usize = 200;
+
+/// Download a folder and everything under it, one job per album. Files and
+/// sizes come from the listing the page was drawn from, not from the form.
+async fn download_tree(State(s): State<UiState>, body: Bytes) -> Response {
+    let form = fields(&body);
+    let (Some(username), Some(at)) = (
+        super::field(&form, "username"),
+        super::field(&form, "key").and_then(|k| URL_SAFE_NO_PAD.decode(k).ok()),
+    ) else {
+        return failed(&anyhow::anyhow!("no folder given"));
+    };
+    let Some(listing) = s.browsed.get(username) else {
+        return failed(&anyhow::anyhow!(
+            "That listing has expired; browse the folder again."
+        ));
+    };
+    let albums = albums(&listing, &at);
+    if albums.is_empty() {
+        return failed(&anyhow::anyhow!("There are no files under that folder."));
+    }
+    if albums.len() > MAX_ALBUMS {
+        return failed(&anyhow::anyhow!(
+            "That is {} albums; open a folder with at most {MAX_ALBUMS}.",
+            albums.len()
+        ));
+    }
+    let count = albums.len();
+    let mut started = Vec::new();
+    for (root, files) in albums {
+        let title = RawStr(root.into())
+            .to_string_lossy()
+            .rsplit('\\')
+            .next()
+            .unwrap_or_default()
+            .to_string();
+        match s.app.jobs.from_listing(username, files, title).await {
+            Ok(job) => started.push(job.title),
+            Err(e) => {
+                return failed(&e.context(format!("started {} of {count} albums", started.len())));
+            }
+        }
+    }
+    let msg = match started.as_slice() {
+        [one_title] => format!("Downloading {one_title}"),
+        _ => format!("Downloading {count} albums"),
+    };
+    one(format!("{}\n{}", jobs_html(&s.app).await, flash_ok(&msg)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -388,6 +482,34 @@ mod tests {
             b"@@music\\A",
         );
         assert!(a.is_empty());
+    }
+
+    #[test]
+    fn a_tree_downloads_as_albums_with_discs_kept_together() {
+        let dirs = vec![
+            dir("@@music\\A\\One", 2),
+            dir("@@music\\A\\Two\\CD1", 3),
+            dir("@@music\\A\\Two\\CD2", 3),
+            dir("@@music\\AB", 1),
+        ];
+        let a = albums(&dirs, b"@@music\\A");
+        assert_eq!(
+            a.iter()
+                .map(|(k, v)| (String::from_utf8_lossy(k).into_owned(), v.len()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("@@music\\A\\One".to_string(), 2),
+                ("@@music\\A\\Two".to_string(), 6)
+            ]
+        );
+        let two = &a[b"@@music\\A\\Two".as_slice()];
+        assert_eq!(two[0].2, "CD1");
+        assert_eq!(two[5].2, "CD2");
+        // A disc folder opened directly is its own album.
+        let cd = albums(&dirs, b"@@music\\A\\Two\\CD1");
+        assert_eq!(cd.len(), 1);
+        assert_eq!(cd.values().next().unwrap()[0].2, "");
+        assert_eq!(albums(&dirs, b"").len(), 3);
     }
 
     #[test]

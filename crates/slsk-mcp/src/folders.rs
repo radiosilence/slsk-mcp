@@ -171,7 +171,7 @@ pub fn group(responses: &[SearchResponse], filter: &Filter) -> Vec<Folder> {
 
 /// "CD 1", "Disc2", "cd1 - Mezzanine": one disc of an album split into
 /// folders.
-fn is_disc(name: &str) -> bool {
+pub(crate) fn is_disc(name: &str) -> bool {
     let norm = sift::matching::normalise(name);
     let mut words = norm.split(' ');
     let Some(first) = words.next() else {
