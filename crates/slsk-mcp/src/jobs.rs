@@ -871,6 +871,24 @@ impl Jobs {
                     ),
                 );
             }
+            // Another copy of this album is already filed, in this format's
+            // folder. What was asked for is in the library, so the job is
+            // done and points there; this copy is not kept. Another source
+            // would land on the same folder and be refused the same way.
+            Err(sift::ImportError::Exists(existing)) => {
+                let path = existing.to_string_lossy().to_string();
+                db::set_imported(&self.db, id, &path).await?;
+                self.event(
+                    &job,
+                    "imported",
+                    None,
+                    Some(&format!(
+                        "already in the library as {path}; this copy was not kept"
+                    )),
+                )
+                .await;
+                let _ = tokio::fs::remove_dir_all(&dir).await;
+            }
             // As-is refused: the tags are not good enough to file by, which
             // leaves the album where it was, waiting on a decision.
             Err(e @ sift::ImportError::Untagged(_)) => {

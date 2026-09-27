@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.37
+
+- A job whose album is already in the library, as another copy in the same format, ends as imported and points at the album there, and the new copy is dropped. It failed with "… is already in the library" and offered another copy, which would have been refused the same way.
+
 ## 0.1.36
 
 - A job with no stored fallbacks searches for another copy when its peer refuses or keeps failing, as a stalled job already did. A folder picked by hand has no fallbacks, so a peer's daily file limit ("Too many files today") or a ban failed it outright although other peers had the album.
