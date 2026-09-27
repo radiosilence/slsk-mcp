@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- The MCP guidance mentions `enrichLibrary` and that it should run an artist or album at a time.
+
 ## 0.1.31
 
 - Every imported album is given ReplayGain track and album gain, MusicBrainz genres when it has none, and time-synced lyrics from LRCLIB where they exist, as beets' `replaygain`, `lastgenre` and `lyrics` plugins would (sift's `Importer::enrich`). It runs after the album is filed, so the album is playable first; a failure is logged, not a failed import.
