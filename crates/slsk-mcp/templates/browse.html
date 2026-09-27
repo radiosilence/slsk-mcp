@@ -1,0 +1,41 @@
+<div id="browse">
+  <form id="browse-user"><input type="hidden" name="username" value="{{ username }}"></form>
+{% match error %}{% when Some with (e) %}<p class="note">{{ e }}</p>{% when None %}
+  <div class="row">
+    <strong class="title">{{ username }}</strong>
+  </div>
+  <div class="actions">
+    <button type="button" class="quiet" name="key" value="{{ here_key }}" data-indicator="_browsing" data-attr:disabled="$_browsing" data-class:busy="$_browsing" data-on:click="@post('/browse?fresh=true', {contentType: 'form', selector: '#browse-user'})">Refresh</button>
+    <button type="button" class="quiet" data-on:click="$tab = 'chat'; @post('/chat/open', {contentType: 'form', selector: '#browse-user'})">Message</button>
+  </div>
+  <div class="meta">{{ folders }} folders{% match info %}{% when Some with (i) %} · {{ i.uploads }} uploads · queue {{ i.queue }} · {% if i.free %}<span class="ok">free slot</span>{% else %}no free slot{% endif %}{% when None %}{% endmatch %}</div>
+  {% match info %}{% when Some with (i) %}{% if !i.description.is_empty() %}<details class="about"><summary>About</summary><p class="desc">{{ i.description }}</p></details>{% endif %}{% when None %}{% endmatch %}
+  <nav class="crumbs">
+    <button type="button" class="link" data-indicator="_browsing" data-attr:disabled="$_browsing" data-on:click="@post('/browse', {contentType: 'form', selector: '#browse-user'})">top</button>
+    {% for c in crumbs %}<span class="meta">/</span><button type="button" class="link" name="key" value="{{ c.key }}" data-indicator="_browsing" data-attr:disabled="$_browsing" data-on:click="@post('/browse', {contentType: 'form', selector: '#browse-user'})">{{ c.name }}</button>{% endfor %}
+  </nav>
+  {% if !children.is_empty() %}
+  <ul class="rows dirs">
+  {% for c in children %}
+    <li><button type="button" class="link" name="key" value="{{ c.key }}" data-indicator="_browsing" data-attr:disabled="$_browsing" data-on:click="@post('/browse', {contentType: 'form', selector: '#browse-user'})">{{ c.name }}</button><span class="meta">{{ c.files }} files</span></li>
+  {% endfor %}
+  </ul>
+  {% if more > 0 %}<p class="note">and {{ more }} more folders</p>{% endif %}
+  {% endif %}
+  {% if !files.is_empty() %}
+  <form id="browse-files">
+    <input type="hidden" name="username" value="{{ username }}">
+    <input type="hidden" name="key" value="{{ here_key }}">
+    <div class="actions">
+      <button type="button" class="primary" data-indicator="_dl_here" data-attr:disabled="$_dl_here" data-class:busy="$_dl_here" data-on:click="@post('/download', {contentType: 'form', selector: '#browse-files'})">Download folder</button>
+      <button type="button" data-indicator="_dl_some" data-attr:disabled="$_dl_some" data-class:busy="$_dl_some" data-on:click="@post('/browse/files', {contentType: 'form', selector: '#browse-files'})">Download ticked</button>
+    </div>
+    <ul class="rows files">
+    {% for f in files %}
+      <li><label class="pick"><input type="checkbox" name="f" value="{{ f.key }}"><span class="name">{{ f.name }}</span></label><span class="meta">{{ f.quality }} · {{ self.size(f.size) }}</span></li>
+    {% endfor %}
+    </ul>
+  </form>
+  {% endif %}
+{% endmatch %}
+</div>

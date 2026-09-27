@@ -98,6 +98,10 @@ impl Library {
         })
     }
 
+    pub fn root(&self) -> &Path {
+        &self.cfg.directory
+    }
+
     /// Bring the index up to date with the files. Incremental: only files
     /// whose size or modification time changed are read.
     fn refresh(&self, index: &mut sift::library::Library) -> anyhow::Result<()> {

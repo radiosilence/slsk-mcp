@@ -399,6 +399,17 @@ impl Social {
         Ok(rows)
     }
 
+    /// Private messages received and not yet read, across everyone.
+    pub async fn unread(&self) -> Result<i64> {
+        let engine = self.engine()?;
+        Ok(sqlx::query_scalar(
+            "SELECT count(*) FROM messages WHERE account = $1 AND NOT read AND NOT outgoing",
+        )
+        .bind(engine.username())
+        .fetch_one(&self.db)
+        .await?)
+    }
+
     pub async fn mark_read(&self, peer: &str) -> Result<()> {
         let engine = self.engine()?;
         sqlx::query(
@@ -442,6 +453,16 @@ impl Social {
             })?;
         }
         Ok(())
+    }
+
+    pub async fn interests(&self) -> Result<Vec<(String, bool)>> {
+        let engine = self.engine()?;
+        Ok(
+            sqlx::query_as("SELECT item, liked FROM interests WHERE account = $1 ORDER BY item")
+                .bind(engine.username())
+                .fetch_all(&self.db)
+                .await?,
+        )
     }
 
     // --- Wishlist ------------------------------------------------------------

@@ -23,6 +23,10 @@ impl Bucket {
         self.rate.store(rate, Ordering::Relaxed);
     }
 
+    pub fn rate(&self) -> u64 {
+        self.rate.load(Ordering::Relaxed)
+    }
+
     /// Wait until `n` bytes may pass. Free when unlimited.
     pub async fn take(&self, n: usize) {
         loop {

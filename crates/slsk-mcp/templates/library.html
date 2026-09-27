@@ -1,0 +1,58 @@
+<div id="library">
+{% match error %}{% when Some with (e) %}<p class="error">{{ e }}</p>{% when None %}
+  <h3 class="section">Duplicates <span class="count">{{ dups.len() }}</span></h3>
+  {% if dups.is_empty() %}<p class="note">No album is held twice.</p>{% else %}
+  <p class="note">Each album kept once; the spare copies move to the bin beside the library, where nothing sees them. Nothing is deleted.</p>
+  <div class="actions">
+    <button class="primary" data-indicator="_bin_all" data-attr:disabled="$_bin_all" data-class:busy="$_bin_all" data-on:click="confirm('Move every spare copy listed here to the bin?') && @post('/library/bin-all')">Bin all spares ({{ spares }})</button>
+  </div>
+  {% for d in dups %}
+  <article class="job" data-class:busy="$_bin_{{ loop.index }}">
+    <form id="bin-{{ loop.index }}"><input type="hidden" name="path" value="{{ d.keep.path }}">{% for sp in d.spares %}<input type="hidden" name="path" value="{{ sp.album.path }}">{% endfor %}</form>
+    <div class="row"><span class="pill keep">keep</span><span class="title path">{{ self.rel(d.keep.path) }}</span></div>
+    <div class="meta">{{ self.album(d.keep) }}</div>
+    <ul class="rows tight">
+    {% for sp in d.spares %}
+      <li><span class="path">{{ self.rel(sp.album.path) }}</span><span class="meta">{{ self.album(sp.album) }} · {{ sp.reason }}</span></li>
+    {% endfor %}
+    </ul>
+    <div class="actions">
+      <button data-indicator="_bin_{{ loop.index }}" data-attr:disabled="$_bin_{{ loop.index }}" data-class:busy="$_bin_{{ loop.index }}" data-on:click="confirm('Move the spare copies of this album to the bin?') && @post('/library/bin', {contentType: 'form', selector: '#bin-{{ loop.index }}'})">Bin spares</button>
+    </div>
+  </article>
+  {% endfor %}
+  {% endif %}
+
+  <h3 class="section">Re-file</h3>
+  {% if groups.is_empty() %}<p class="note">Every album is where the current rules file it.</p>{% else %}
+  <p class="note">Albums the current naming rules would file elsewhere.</p>
+  {% if safe > 0 %}
+  <div class="actions">
+    <button class="primary" data-indicator="_refile_safe" data-attr:disabled="$_refile_safe" data-class:busy="$_refile_safe" data-on:click="confirm('Re-file every album whose change only corrects its file or folder names?') && @post('/library/refile-safe')">Re-file {{ safe }} safe</button>
+  </div>
+  {% endif %}
+  {% for g in groups %}
+  {% let gi = loop.index %}
+  <details class="group-list"{% if !g.change.safe() %} open{% endif %}>
+    <summary><strong>{{ g.change.label() }}</strong> <span class="count">{{ g.moves.len() }}</span>{% if g.change.safe() %} <span class="ok">safe</span>{% endif %}</summary>
+    <p class="note">{{ g.change.why() }}</p>
+    <ul class="rows">
+    {% for m in self.shown(g) %}
+      <li data-class:busy="$_rf_{{ gi }}_{{ loop.index }}">
+        <span class="path">{{ self.rel(m.from) }}</span>
+        {% match m.to %}{% when Some with (to) %}
+        {% if g.change != Change::FileNames %}<span class="meta">→ {{ self.rel(to) }}</span>{% endif %}
+        <span class="meta">{{ m.files }} files</span>
+        <button type="button" name="path" value="{{ m.from }}" data-indicator="_rf_{{ gi }}_{{ loop.index }}" data-attr:disabled="$_rf_{{ gi }}_{{ loop.index }}" data-class:busy="$_rf_{{ gi }}_{{ loop.index }}" data-on:click="confirm('Move this album to where the rules file it?') && @post('/library/refile', {contentType: 'form', selector: '#act'})">Re-file</button>
+        {% when None %}
+        {% match m.refused %}{% when Some with (why) %}<span class="meta">{{ self.reason(why) }}</span>{% when None %}{% endmatch %}
+        {% endmatch %}
+      </li>
+    {% endfor %}
+    </ul>
+    {% if self.hidden(g) > 0 %}<p class="note">and {{ self.hidden(g) }} more</p>{% endif %}
+  </details>
+  {% endfor %}
+  {% endif %}
+{% endmatch %}
+</div>

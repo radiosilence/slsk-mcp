@@ -321,6 +321,15 @@ impl Engine {
         self.0.down_limit.set_rate(download);
     }
 
+    pub fn upload_slots(&self) -> usize {
+        self.0.uploads.slots()
+    }
+
+    /// Upload and download limits in bytes per second; 0 is unlimited.
+    pub fn limits(&self) -> (u64, u64) {
+        (self.0.up_limit.rate(), self.0.down_limit.rate())
+    }
+
     /// Rescan shared directories and announce the new counts. Only changed
     /// files are probed, so this is cheap to call after every import.
     pub async fn rescan(&self) {

@@ -1,0 +1,11 @@
+<div id="bans">
+{% match error %}{% when Some with (e) %}<p class="note">{{ e }}</p>{% when None %}
+  <p class="note">A banned user gets no uploads, browsing or search results from you.</p>
+  {% if bans.is_empty() %}<p class="note">Nobody is banned.</p>{% endif %}
+  <ul class="rows">
+  {% for b in bans %}
+    <li data-class:busy="$_unban_{{ loop.index }}"><span class="name">{{ b }}</span><button type="button" name="username" value="{{ b }}" data-indicator="_unban_{{ loop.index }}" data-attr:disabled="$_unban_{{ loop.index }}" data-class:busy="$_unban_{{ loop.index }}" data-on:click="@post('/bans/remove', {contentType: 'form', selector: '#act'})">Unban</button></li>
+  {% endfor %}
+  </ul>
+{% endmatch %}
+</div>

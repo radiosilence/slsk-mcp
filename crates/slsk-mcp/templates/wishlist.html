@@ -1,0 +1,19 @@
+<div id="wishlist">
+{% match error %}{% when Some with (e) %}<p class="note">{{ e }}</p>{% when None %}
+  {% if rows.is_empty() %}<p class="note">No wishes. Add one for something nobody is sharing yet.</p>{% endif %}
+  <ul class="rows">
+  {% for r in rows %}
+    <li data-class:busy="${{ self.sig(r.wish) }}">
+      <div class="row">
+        <strong class="title">{{ r.wish.query }}</strong>
+        <button class="quiet" data-indicator="{{ self.sig(r.wish) }}" data-attr:disabled="${{ self.sig(r.wish) }}" data-class:busy="${{ self.sig(r.wish) }}" data-on:click="@post('/wishlist/{{ r.wish.id }}/remove')">Remove</button>
+      </div>
+      <div class="meta">
+        {% if r.wish.lossless %}lossless · {% endif %}{% if r.wish.grab %}grabs when found{% else %}search only{% endif %} · {{ self.searched(r.wish) }}
+        {% match r.job %}{% when Some with (j) %} · became <a href="#job-{{ r.wish.job_id.unwrap_or_default() }}" data-on:click="$tab = 'albums'">{{ j.0 }}</a> ({{ self.label(j.1) }}){% when None %}{% endmatch %}
+      </div>
+    </li>
+  {% endfor %}
+  </ul>
+{% endmatch %}
+</div>

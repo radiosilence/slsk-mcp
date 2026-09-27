@@ -1,0 +1,29 @@
+<div id="thread">
+  <form id="thread-form"><input type="hidden" name="kind" value="{{ kind }}"><input type="hidden" name="name" value="{{ name }}"></form>
+{% if !kind.is_empty() %}
+  <article class="job thread">
+    <div class="row">
+      <strong class="title">{{ name }}</strong>
+      <span class="pill">{% if kind == "room" %}room{% else %}private{% endif %}</span>
+    </div>
+    {% if kind == "pm" %}
+    <form id="thread-peer"><input type="hidden" name="username" value="{{ name }}"></form>
+    <div class="actions">
+      <button type="button" class="quiet" data-on:click="$tab = 'browse'; @post('/browse', {contentType: 'form', selector: '#thread-peer'})">Browse shares</button>
+      <button type="button" class="quiet" data-indicator="_bud_add" data-attr:disabled="$_bud_add" data-class:busy="$_bud_add" data-on:click="@post('/chat/buddy/add', {contentType: 'form', selector: '#thread-peer'})">Add buddy</button>
+    </div>
+    {% else %}
+    <div class="actions">
+      <button type="button" class="quiet" name="room" value="{{ name }}" data-indicator="_leaving" data-attr:disabled="$_leaving" data-class:busy="$_leaving" data-on:click="@post('/chat/leave', {contentType: 'form', selector: '#act'})">Leave room</button>
+    </div>
+    {% if !members.is_empty() %}<details class="about"><summary>{{ members.len() }} in the room</summary><p class="meta">{{ members.join(", ") }}</p></details>{% endif %}
+    {% endif %}
+    <form id="composer" class="composer" data-indicator="_sending" data-on:submit__prevent="confirm('Send this message? It goes to other people as soon as you confirm.') && @post('/chat/send', {contentType: 'form', selector: '#composer'})">
+      <input type="hidden" name="kind" value="{{ kind }}"><input type="hidden" name="name" value="{{ name }}">
+      <textarea name="message" rows="2" data-bind:_msg placeholder="Message" required></textarea>
+      <button type="submit" class="primary" data-attr:disabled="$_sending" data-class:busy="$_sending">Send</button>
+    </form>
+    {{ lines|safe }}
+  </article>
+{% endif %}
+</div>

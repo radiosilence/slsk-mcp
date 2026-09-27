@@ -1,0 +1,33 @@
+<div id="settings">
+{% if !connected %}<p class="note">Sign in to Soulseek first.</p>{% else %}
+  <h3 class="section">Shares</h3>
+  <p class="note">{{ files }} files in {{ folders }} folders.</p>
+  <div class="actions">
+    <button data-indicator="_rescan" data-attr:disabled="$_rescan" data-class:busy="$_rescan" data-on:click="@post('/settings/rescan')">Rescan shares</button>
+    <button data-indicator="_reconnecting" data-attr:disabled="$_reconnecting" data-class:busy="$_reconnecting" data-on:click="@post('/reconnect')">Reconnect</button>
+  </div>
+  <h3 class="section">Uploads</h3>
+  <form id="set-slots" class="inline-form" data-indicator="_slots" data-on:submit__prevent="@post('/settings/slots', {contentType: 'form', selector: '#set-slots'})">
+    <label>Upload slots <input name="slots" type="number" inputmode="numeric" min="1" max="100" value="{{ slots }}" required></label>
+    <button type="submit" data-attr:disabled="$_slots" data-class:busy="$_slots">Save</button>
+  </form>
+  <form id="set-limits" class="inline-form" data-indicator="_limits" data-on:submit__prevent="@post('/settings/limits', {contentType: 'form', selector: '#set-limits'})">
+    <label>Upload KB/s <input name="up" type="number" inputmode="numeric" min="0" value="{{ up_kb }}" required></label>
+    <label>Download KB/s <input name="down" type="number" inputmode="numeric" min="0" value="{{ down_kb }}" required></label>
+    <button type="submit" data-attr:disabled="$_limits" data-class:busy="$_limits">Save</button>
+  </form>
+  <p class="note">Now: {{ slots }} slots, up {{ self.rate(up_kb) }}, down {{ self.rate(down_kb) }}. 0 is unlimited. These hold until the service restarts, which returns to the deployment's settings.</p>
+  <h3 class="section">Interests</h3>
+  <p class="note">What you like and dislike drives the server's recommendations and similar users.</p>
+  <form id="interest" class="inline-form" data-indicator="_int" data-on:submit__prevent="@post('/settings/interest', {contentType: 'form', selector: '#interest'})">
+    <input name="item" data-bind:_interest placeholder="dub techno" autocomplete="off" required>
+    <button type="submit" name="liked" value="true" data-attr:disabled="$_int">Like</button>
+    <button type="submit" name="liked" value="false" class="quiet" data-attr:disabled="$_int">Dislike</button>
+  </form>
+  <ul class="rows">
+  {% for i in interests %}
+    <li data-class:busy="$_intf_{{ loop.index }}"><span class="name">{{ i.0 }}</span><span class="pill {% if i.1 %}connected{% else %}failed{% endif %}">{% if i.1 %}like{% else %}dislike{% endif %}</span><span class="grow"></span><button type="button" class="quiet" name="item" value="{{ i.0 }}" data-indicator="_intf_{{ loop.index }}" data-attr:disabled="$_intf_{{ loop.index }}" data-class:busy="$_intf_{{ loop.index }}" data-on:click="@post('/settings/interest', {contentType: 'form', selector: '#act'})">Forget</button></li>
+  {% endfor %}
+  </ul>
+{% endif %}
+</div>

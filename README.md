@@ -168,12 +168,36 @@ to itself, so a scraper can be admitted without being admitted to the second.
 The chart's NetworkPolicy admits the gateway to one and the metrics agent to
 the other, and nothing else to either.
 
+## The web UI
+
+The UI reaches everything GraphQL and MCP do, so a phone is a full client:
+albums and uploads, then the wishlist, the library (duplicates, re-filing,
+enrichment), browsing a user's shares, rooms and private messages, bans,
+settings and triage. Each action calls the same Rust the GraphQL resolvers
+call. Buttons show busy while their request is in flight and then the
+server's answer, never a guess. Anything that changes the library or reaches
+other people (binning, re-filing, enriching, banning, sending a message) asks
+first.
+
+Re-filing groups albums by what would change. File names, `_`/`-` folder
+spelling and the folder's year only correct how an album is written, so they
+can be applied together; an album whose tags name a different artist or
+album than its folder is moved one at a time, after a look. Library actions
+name albums by exact path, so they act only on what was shown. Enrichment
+runs in the background, an album at a time, with progress on the page, since
+it takes seconds per album.
+
 ## Security notes
 
 - Every UI route except sign-in, the probe and static assets is behind the
   session layer, which wraps the router whole.
 - State-changing UI requests must carry Datastar's request header, which a
   cross-site form cannot set.
+- Peer-chosen strings (user, room and file names, messages) reach the server
+  in form fields, and folders as base64 keys, never interpolated into a
+  Datastar expression. The CSP forbids inline scripts and styles.
+- Sending a message takes the same preview and confirmation tokens as the
+  API; the Send button, after a confirmation, is what confirms.
 - File names from peers never leave a job's staging directory, and the
   importer refuses paths that would leave the library.
 - Credentials are sealed with XChaCha20-Poly1305 in the database and held in

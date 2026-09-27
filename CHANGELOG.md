@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- The web UI covers everything GraphQL and MCP do, in new tabs beside Albums and Uploads; the tab bar scrolls sideways on a phone.
+  - Wishlist: add (lossless, grab when found), remove, when each was last searched, and the album it became, linked to its card.
+  - Library: find albums by beets query; duplicates with the copy kept and why the others are spare, binned per album or all at once; the re-file plan grouped by what would change (file names, folder spelling, year, tags disagreeing with the folder, refused), applied per album or for every safe group at once; enrichment per album, per artist or for a query, run in the background with progress and each album's result.
+  - Browse: a user's shares folder by folder, with the user's info, and download of a folder or of ticked files. Reached from a search result (opening at that folder), an uploading peer, a conversation or a buddy. The last few listings are kept for ten minutes.
+  - Chat: joined rooms, public rooms to join, private conversations with unread counts (also on the tab), buddies with status, and a conversation view refreshed every few seconds while open. Sending uses the API's preview and confirm tokens.
+  - Bans, list and add or remove; Settings: upload slots, speed limits, rescan, reconnect, and interests; Triage: why albums did not land, by cause, over 7, 30 or 90 days, with recent examples.
+- Downloads started from the UI and bans confirm themselves in a message that fades; errors can be tapped away.
+- The engine reports its current upload slots and speed limits.
 - Removing an album that a wishlist entry grabbed removes the wish too. The wish had forgotten its album when the job went, and grabbed the same copy again on its next pass, so a removed album kept coming back.
 
 ## 0.1.32

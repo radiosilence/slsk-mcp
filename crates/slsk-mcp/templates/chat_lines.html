@@ -1,0 +1,6 @@
+<ul id="thread-lines" class="lines">
+{% match note %}{% when Some with (n) %}<li class="note">{{ n }}</li>{% when None %}{% endmatch %}
+{% for l in lines %}
+  <li{% if l.ours %} class="ours"{% endif %}><span class="who">{{ l.who }}</span> <span class="body">{{ l.body }}</span> <span class="meta">{{ self.at(l) }}</span></li>
+{% endfor %}
+</ul>

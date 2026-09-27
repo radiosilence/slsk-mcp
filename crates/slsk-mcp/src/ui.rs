@@ -31,12 +31,20 @@ use crate::config::Config;
 use crate::folders::{Filter, Folder};
 use crate::graphql::{self, Job, Transfer};
 
+mod admin;
+mod browse;
+mod chat;
+mod library;
+mod wishlist;
+
 #[derive(Clone)]
 pub struct UiState {
     pub app: Arc<App>,
     pub config: Arc<Config>,
     pub sessions: Sessions,
     pub http: reqwest::Client,
+    enrich: Arc<parking_lot::Mutex<library::EnrichRun>>,
+    browsed: browse::Cache,
 }
 
 const CSP: &str = "default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self'; img-src 'self' data:; \
@@ -48,6 +56,8 @@ pub fn router(app: Arc<App>) -> Router {
         sessions: Sessions::new(app.db.clone()),
         app,
         http: reqwest::Client::new(),
+        enrich: Default::default(),
+        browsed: Default::default(),
     };
     let protected = Router::new()
         .route("/", get(page))
@@ -62,6 +72,11 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/ban", post(ban))
         .route("/account", post(account))
         .route("/reconnect", post(reconnect))
+        .merge(wishlist::routes())
+        .merge(library::routes())
+        .merge(browse::routes())
+        .merge(chat::routes())
+        .merge(admin::routes())
         .layer(axum::middleware::from_fn(require_datastar_on_post))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
@@ -142,6 +157,72 @@ fn one(html: String) -> Response {
     sse(futures_util::stream::once(async move { Ok(patch(&html)) })).into_response()
 }
 
+/// Several events in one response: fragments, then signals to reset.
+fn many(events: Vec<Event>) -> Response {
+    sse(futures_util::stream::iter(events.into_iter().map(Ok))).into_response()
+}
+
+/// Set signals from the server, as JSON: how a form is cleared once what it
+/// sent has been accepted.
+fn signals(json: &str) -> Event {
+    Event::default()
+        .event("datastar-patch-signals")
+        .data(format!("signals {json}"))
+}
+
+/// A confirmation that fades by itself; tapping it dismisses it sooner.
+fn flash_ok(msg: &str) -> String {
+    format!(
+        r#"<div id="flash" class="flash ok" role="status" data-on:click="el.className = ''">{}</div>"#,
+        askama_escape(msg)
+    )
+}
+
+fn flash_err(msg: &str) -> String {
+    format!(
+        r#"<div id="flash" class="flash error" role="alert" data-on:click="el.className = ''">{}</div>"#,
+        askama_escape(msg)
+    )
+}
+
+/// A form body whose fields may repeat (checkboxes, several hidden paths),
+/// which `axum::Form` does not collect.
+fn fields(body: &[u8]) -> Vec<(String, String)> {
+    url::form_urlencoded::parse(body).into_owned().collect()
+}
+
+fn field<'a>(fields: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    fields
+        .iter()
+        .find(|(k, _)| k == name)
+        .map(|(_, v)| v.as_str())
+        .filter(|v| !v.is_empty())
+}
+
+fn ago(t: chrono::DateTime<chrono::Utc>) -> String {
+    let secs = (chrono::Utc::now() - t).num_seconds().max(0);
+    match secs {
+        0..60 => "just now".into(),
+        60..3600 => format!("{}m ago", secs / 60),
+        3600..86400 => format!("{}h ago", secs / 3600),
+        _ => format!("{}d ago", secs / 86400),
+    }
+}
+
+/// A job's status as a person would say it.
+fn status_label(status: &str) -> &'static str {
+    match status {
+        "review" => "needs a choice",
+        "suspect" => "check quality",
+        "importing" => "filing",
+        "downloading" => "downloading",
+        "imported" => "in library",
+        "failed" => "failed",
+        "cancelled" => "cancelled",
+        _ => "working",
+    }
+}
+
 fn human(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
     let mut v = bytes as f64;
@@ -169,6 +250,8 @@ struct Page {
     transfers: String,
     uploads: String,
     up_count: String,
+    chat_count: String,
+    enrich: String,
 }
 
 async fn page(State(s): State<UiState>) -> Result<Html<String>, crate::error::AppError> {
@@ -178,6 +261,8 @@ async fn page(State(s): State<UiState>) -> Result<Html<String>, crate::error::Ap
         transfers: transfers_html(&s.app),
         uploads: uploads_html(&s.app).await,
         up_count: up_count_html(&s.app),
+        chat_count: chat::count_html(&s.app).await,
+        enrich: library::enrich_html(&s),
     };
     Ok(Html(page.render().map_err(anyhow::Error::from)?))
 }
@@ -306,18 +391,8 @@ impl JobsView {
             _ => path.to_string(),
         }
     }
-    /// The status as a person would say it.
     fn label(&self, status: &str) -> &'static str {
-        match status {
-            "review" => "needs a choice",
-            "suspect" => "check quality",
-            "importing" => "filing",
-            "downloading" => "downloading",
-            "imported" => "in library",
-            "failed" => "failed",
-            "cancelled" => "cancelled",
-            _ => "working",
-        }
+        status_label(status)
     }
 
     /// Why an import as-is would be refused, when it has been checked and
@@ -573,13 +648,7 @@ impl UploadsView {
         }
     }
     fn ago(&self, h: &crate::db::UploadRow) -> String {
-        let secs = (chrono::Utc::now() - h.finished_at).num_seconds().max(0);
-        match secs {
-            0..60 => "just now".into(),
-            60..3600 => format!("{}m ago", secs / 60),
-            3600..86400 => format!("{}h ago", secs / 3600),
-            _ => format!("{}d ago", secs / 86400),
-        }
+        ago(h.finished_at)
     }
     fn leaf<'a>(&self, name: &'a str) -> &'a str {
         name.rsplit(['\\', '/']).next().unwrap_or(name)
@@ -696,6 +765,8 @@ async fn stream(State(s): State<UiState>) -> impl IntoResponse {
             yield Ok(patch(&transfers_html(&app)));
             yield Ok(patch(&uploads_html(&app).await));
             yield Ok(patch(&up_count_html(&app)));
+            yield Ok(patch(&chat::count_html(&app).await));
+            yield Ok(patch(&library::enrich_html(&s)));
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
     };
@@ -821,7 +892,11 @@ async fn download(
         .from_folder(&folder, form.title, Vec::new())
         .await
     {
-        Ok(_) => one(jobs_html(&s.app).await),
+        Ok(job) => one(format!(
+            "{}\n{}",
+            jobs_html(&s.app).await,
+            flash_ok(&format!("Downloading {}", job.title))
+        )),
         Err(e) => one(format!(
             r#"<div id="flash" class="flash error">{}</div>"#,
             askama_escape(&format!("{e:#}"))
@@ -871,10 +946,7 @@ async fn done(app: &App) -> Response {
 }
 
 fn failed(e: &anyhow::Error) -> Response {
-    one(format!(
-        r#"<div id="flash" class="flash error" role="alert">{}</div>"#,
-        askama_escape(&format!("{e:#}"))
-    ))
+    one(flash_err(&format!("{e:#}")))
 }
 
 async fn resolve(State(s): State<UiState>, Path((id, release)): Path<(Uuid, String)>) -> Response {
@@ -920,17 +992,14 @@ async fn cancel_upload(
 }
 
 async fn ban(State(s): State<UiState>, axum::Form(f): axum::Form<UserFileForm>) -> Response {
-    if let Some(e) = s.app.session.engine() {
-        let account = e.username();
-        if crate::db::set_ban(&s.app.db, &account, &f.username, true)
-            .await
-            .is_ok()
-            && let Ok(bans) = crate::db::bans(&s.app.db, &account).await
-        {
-            e.set_banned(bans);
-        }
+    match graphql::set_ban(&s.app, &f.username, true).await {
+        Ok(_) => one(format!(
+            "{}\n{}",
+            uploads_html(&s.app).await,
+            flash_ok(&format!("Banned {}", f.username))
+        )),
+        Err(e) => one(flash_err(&e.message)),
     }
-    one(uploads_html(&s.app).await)
 }
 
 #[derive(serde::Deserialize)]

@@ -143,6 +143,10 @@ impl Uploads {
         self.wake.notify_one();
     }
 
+    pub fn slots(&self) -> usize {
+        self.slots.load(Ordering::Relaxed)
+    }
+
     pub fn avg_speed(&self) -> u32 {
         self.last_speed
             .load(Ordering::Relaxed)

@@ -1,0 +1,41 @@
+<div id="chat-side">
+{% match error %}{% when Some with (e) %}<p class="note">{{ e }}</p>{% when None %}
+  <h3 class="section">Rooms</h3>
+  {% if rooms.is_empty() %}<p class="note">In no rooms.</p>{% endif %}
+  <ul class="rows">
+  {% for r in rooms %}
+    <li><button type="button" class="link" name="room" value="{{ r.0 }}" data-indicator="_opening" data-attr:disabled="$_opening" data-on:click="@post('/chat/open', {contentType: 'form', selector: '#act'})">{{ r.0 }}</button><span class="meta">{{ r.1 }} in the room</span></li>
+  {% endfor %}
+  </ul>
+  <h3 class="section">Messages</h3>
+  {% if conversations.is_empty() %}<p class="note">No private messages.</p>{% endif %}
+  <ul class="rows">
+  {% for c in conversations %}
+    <li{% if c.unread > 0 %} class="unread"{% endif %}>
+      <div class="row">
+        <button type="button" class="link" name="username" value="{{ c.username }}" data-indicator="_opening" data-attr:disabled="$_opening" data-on:click="@post('/chat/open', {contentType: 'form', selector: '#act'})">{{ c.username }}</button>
+        {% if c.unread > 0 %}<span class="badge">{{ c.unread }}</span>{% endif %}
+        <span class="meta">{{ self.ago(c) }}</span>
+      </div>
+      <div class="meta clip">{% if c.ours %}you: {% endif %}{{ c.last }}</div>
+    </li>
+  {% endfor %}
+  </ul>
+  <h3 class="section">Buddies</h3>
+  {% if buddies.is_empty() %}<p class="note">No buddies.</p>{% endif %}
+  <ul class="rows">
+  {% for b in buddies %}
+    <li data-class:busy="$_bud_{{ loop.index }}">
+      <div class="row">
+        <button type="button" class="link" name="username" value="{{ b.username }}" data-indicator="_opening" data-attr:disabled="$_opening" data-on:click="@post('/chat/open', {contentType: 'form', selector: '#act'})">{{ b.username }}</button>
+        <span class="pill {{ b.status }}">{{ b.status }}</span>
+        <span class="grow"></span>
+        <button type="button" class="quiet" name="username" value="{{ b.username }}" data-on:click="$tab = 'browse'; @post('/browse', {contentType: 'form', selector: '#act'})">Browse</button>
+        <button type="button" class="quiet" name="username" value="{{ b.username }}" data-indicator="_bud_{{ loop.index }}" data-attr:disabled="$_bud_{{ loop.index }}" data-class:busy="$_bud_{{ loop.index }}" data-on:click="@post('/chat/buddy/remove', {contentType: 'form', selector: '#act'})">Remove</button>
+      </div>
+      {% if !b.note.is_empty() %}<div class="meta">{{ b.note }}</div>{% endif %}
+    </li>
+  {% endfor %}
+  </ul>
+{% endmatch %}
+</div>

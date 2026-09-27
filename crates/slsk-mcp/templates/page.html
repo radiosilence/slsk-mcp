@@ -19,8 +19,17 @@
 <nav class="tabs">
   <button type="button" data-class:active="$tab == 'albums'" data-on:click="$tab = 'albums'">Albums</button>
   <button type="button" data-class:active="$tab == 'uploads'" data-on:click="$tab = 'uploads'">Uploads {{ up_count|safe }}</button>
+  <button type="button" data-class:active="$tab == 'wishlist'" data-indicator="_t_wish" data-class:busy="$_t_wish" data-on:click="$tab = 'wishlist'; @get('/wishlist')">Wishlist</button>
+  <button type="button" data-class:active="$tab == 'library'" data-indicator="_t_lib" data-class:busy="$_t_lib" data-on:click="$tab = 'library'; @get('/library')">Library</button>
+  <button type="button" data-class:active="$tab == 'browse'" data-on:click="$tab = 'browse'">Browse</button>
+  <button type="button" data-class:active="$tab == 'chat'" data-indicator="_t_chat" data-class:busy="$_t_chat" data-on:click="$tab = 'chat'; @get('/chat', {contentType: 'form', selector: '#thread-form'})">Chat {{ chat_count|safe }}</button>
+  <button type="button" data-class:active="$tab == 'bans'" data-indicator="_t_bans" data-class:busy="$_t_bans" data-on:click="$tab = 'bans'; @get('/bans')">Bans</button>
+  <button type="button" data-class:active="$tab == 'settings'" data-indicator="_t_set" data-class:busy="$_t_set" data-on:click="$tab = 'settings'; @get('/settings')">Settings</button>
+  <button type="button" data-class:active="$tab == 'triage'" data-indicator="_t_tri" data-class:busy="$_t_tri" data-on:click="$tab = 'triage'; @get('/triage')">Triage</button>
 </nav>
 <main>
+  <form id="act" hidden></form>
+  <div id="flash"></div>
   <div data-show="$tab == 'albums'">
   <section class="finder">
     <form id="finder" data-indicator="_searching" data-on:submit__prevent="@post('/search', {contentType: 'form', selector: '#finder'})">
@@ -30,7 +39,6 @@
       <button type="button" class="primary" data-indicator:busy data-attr:disabled="$busy || $_searching || !$q" data-class:busy="$busy"
         data-on:click="@post('/grab', {contentType: 'form', selector: '#finder'})">Grab best</button>
     </form>
-    <div id="flash"></div>
     <div id="results"></div>
   </section>
   {{ jobs|safe }}
@@ -41,6 +49,64 @@
   </div>
   <div data-show="$tab == 'uploads'">
     {{ uploads|safe }}
+  </div>
+  <div data-show="$tab == 'wishlist'" class="area">
+    <form id="wish-form" class="finder-form" data-indicator="_wishing" data-on:submit__prevent="@post('/wishlist/add', {contentType: 'form', selector: '#wish-form'})">
+      <input name="q" data-bind:_wishq placeholder="Artist album nobody shares yet" autocomplete="off" required>
+      <label class="toggle"><input type="checkbox" name="lossless" value="true" checked> lossless</label>
+      <label class="toggle"><input type="checkbox" name="grab" value="true" checked> grab when found</label>
+      <button type="submit" class="primary" data-attr:disabled="$_wishing" data-class:busy="$_wishing">Add wish</button>
+    </form>
+    <p class="note">Searched in turn, one every few minutes, until something turns up. With grab on, the first good folder found becomes an album.</p>
+    <div id="wishlist"></div>
+  </div>
+  <div data-show="$tab == 'library'" class="area">
+    <form id="lib-find" class="finder-form" data-indicator="_finding" data-on:submit__prevent="@post('/library/find', {contentType: 'form', selector: '#lib-find'})">
+      <input name="q" placeholder="burial, artist:burial, year:1990..1999" autocomplete="off">
+      <button type="submit" data-attr:disabled="$_finding" data-class:busy="$_finding">Find albums</button>
+    </form>
+    <div id="lib-found"></div>
+    {{ enrich|safe }}
+    <div id="library"></div>
+  </div>
+  <div data-show="$tab == 'browse'" class="area">
+    <form id="browse-find" class="finder-form" data-indicator="_browsing" data-on:submit__prevent="@post('/browse', {contentType: 'form', selector: '#browse-find'})">
+      <input name="username" placeholder="Username" autocomplete="off" autocapitalize="off" required>
+      <button type="submit" data-attr:disabled="$_browsing" data-class:busy="$_browsing">Browse</button>
+    </form>
+    <div id="browse"><p class="note">Browse someone's shares: type their name, or tap a name in search results, uploads or chat.</p></div>
+  </div>
+  <div data-show="$tab == 'chat'" class="area" data-on-interval__duration.4s="$tab == 'chat' && @get('/chat?poll=true', {contentType: 'form', selector: '#thread-form'})">
+    <div id="thread"><form id="thread-form"><input type="hidden" name="kind" value=""><input type="hidden" name="name" value=""></form></div>
+    <div id="chat-side"></div>
+    <form id="chat-who" class="finder-form" data-on:submit__prevent="@post('/chat/open', {contentType: 'form', selector: '#chat-who'})">
+      <input name="username" data-bind:_buddy placeholder="Username" autocomplete="off" autocapitalize="off" required>
+      <input name="note" data-bind:_buddynote placeholder="Note (for buddies)" autocomplete="off">
+      <button type="submit" data-indicator="_msgto" data-attr:disabled="$_msgto" data-class:busy="$_msgto">Message</button>
+      <button type="button" data-indicator="_budadd" data-attr:disabled="$_budadd" data-class:busy="$_budadd" data-on:click="@post('/chat/buddy/add', {contentType: 'form', selector: '#chat-who'})">Add buddy</button>
+    </form>
+    <details class="about">
+      <summary>Public rooms</summary>
+      <form id="room-join" class="finder-form" data-indicator="_joining" data-on:submit__prevent="@post('/chat/join', {contentType: 'form', selector: '#room-join'})">
+        <input name="room" placeholder="Room name" autocomplete="off" autocapitalize="off" required>
+        <button type="submit" data-attr:disabled="$_joining" data-class:busy="$_joining">Join</button>
+      </form>
+      <ul id="room-list" class="rows"></ul>
+    </details>
+  </div>
+  <div data-show="$tab == 'bans'" class="area">
+    <form id="ban-form" class="finder-form" data-indicator="_banning" data-on:submit__prevent="confirm('Ban this user? They will get nothing more from you.') && @post('/bans/add', {contentType: 'form', selector: '#ban-form'})">
+      <input name="username" data-bind:_banuser placeholder="Username" autocomplete="off" autocapitalize="off" required>
+      <button type="submit" data-attr:disabled="$_banning" data-class:busy="$_banning">Ban</button>
+    </form>
+    <div id="bans"></div>
+  </div>
+  <div data-show="$tab == 'settings'" class="area">
+    <div id="settings"></div>
+  </div>
+  <div data-show="$tab == 'triage'" class="area">
+    <p class="note">Why albums did not land cleanly, by cause, with the most recent examples.</p>
+    <div id="triage"></div>
   </div>
 </main>
 </body>

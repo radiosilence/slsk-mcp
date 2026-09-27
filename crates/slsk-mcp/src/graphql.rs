@@ -762,35 +762,7 @@ impl Query {
         #[graphql(default = 7)] days: i64,
         #[graphql(default = 5)] examples: usize,
     ) -> Result<Vec<TriageCause>> {
-        let since = chrono::Utc::now() - chrono::Duration::days(days.clamp(1, 365));
-        let events = db::events_since(&app(ctx).db, since).await?;
-        let mut by_cause: std::collections::BTreeMap<String, TriageCause> = Default::default();
-        for e in events {
-            let Some(cause) = e.cause.clone() else {
-                continue;
-            };
-            let entry = by_cause
-                .entry(cause.clone())
-                .or_insert_with(|| TriageCause {
-                    cause,
-                    count: 0,
-                    examples: Vec::new(),
-                });
-            entry.count += 1;
-            if entry.examples.len() < examples {
-                entry.examples.push(TriageEvent {
-                    job_id: ID(e.job_id.to_string()),
-                    title: e.title,
-                    at: e.at,
-                    version: e.version,
-                    outcome: e.outcome,
-                    detail: e.detail,
-                });
-            }
-        }
-        let mut causes: Vec<TriageCause> = by_cause.into_values().collect();
-        causes.sort_by_key(|c| std::cmp::Reverse(c.count));
-        Ok(causes)
+        triage(app(ctx), days, examples).await
     }
 
     /// A job's files and the tags they carry now: the evidence for a
@@ -825,6 +797,40 @@ impl Query {
         let engine = app.session.require()?;
         Ok(db::bans(&app.db, &engine.username()).await?)
     }
+}
+
+/// Why albums did not land cleanly over the last `days`, by cause, most
+/// frequent first, each with up to `examples` of its most recent events.
+pub(crate) async fn triage(app: &App, days: i64, examples: usize) -> Result<Vec<TriageCause>> {
+    let since = chrono::Utc::now() - chrono::Duration::days(days.clamp(1, 365));
+    let events = db::events_since(&app.db, since).await?;
+    let mut by_cause: std::collections::BTreeMap<String, TriageCause> = Default::default();
+    for e in events {
+        let Some(cause) = e.cause.clone() else {
+            continue;
+        };
+        let entry = by_cause
+            .entry(cause.clone())
+            .or_insert_with(|| TriageCause {
+                cause,
+                count: 0,
+                examples: Vec::new(),
+            });
+        entry.count += 1;
+        if entry.examples.len() < examples {
+            entry.examples.push(TriageEvent {
+                job_id: ID(e.job_id.to_string()),
+                title: e.title,
+                at: e.at,
+                version: e.version,
+                outcome: e.outcome,
+                detail: e.detail,
+            });
+        }
+    }
+    let mut causes: Vec<TriageCause> = by_cause.into_values().collect();
+    causes.sort_by_key(|c| std::cmp::Reverse(c.count));
+    Ok(causes)
 }
 
 pub(crate) async fn search(
@@ -1275,7 +1281,7 @@ impl Mutation {
     }
 }
 
-async fn set_ban(app: &App, username: &str, banned: bool) -> Result<bool> {
+pub(crate) async fn set_ban(app: &App, username: &str, banned: bool) -> Result<bool> {
     let engine = app.session.require()?;
     let account = engine.username();
     db::set_ban(&app.db, &account, username, banned).await?;

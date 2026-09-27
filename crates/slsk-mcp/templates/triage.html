@@ -1,0 +1,18 @@
+<div id="triage">
+  <div class="actions">
+    {% for d in [7, 30, 90] %}<button type="button" class="{% if *d == days %}primary{% else %}quiet{% endif %}" data-indicator="_tri_{{ d }}" data-attr:disabled="$_tri_{{ d }}" data-class:busy="$_tri_{{ d }}" data-on:click="@get('/triage?days={{ d }}')">{{ d }} days</button>{% endfor %}
+  </div>
+{% match error %}{% when Some with (e) %}<p class="error">{{ e }}</p>{% when None %}
+  {% if causes.is_empty() %}<p class="note">Everything in the last {{ days }} days landed cleanly.</p>{% endif %}
+  {% for c in causes %}
+  <article class="job">
+    <div class="row"><strong class="title">{{ self.label(c.cause) }}</strong><span class="count">{{ c.count }}</span></div>
+    <ul class="rows tight">
+    {% for e in c.examples %}
+      <li><span class="name">{{ e.title }}</span><span class="meta">{{ self.ago(e.at) }} · {{ e.outcome }} · {{ e.version }}{% match e.detail %}{% when Some with (d) %} · {{ d }}{% when None %}{% endmatch %}</span></li>
+    {% endfor %}
+    </ul>
+  </article>
+  {% endfor %}
+{% endmatch %}
+</div>

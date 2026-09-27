@@ -1,0 +1,23 @@
+<div id="lib-found">
+{% match error %}{% when Some with (e) %}<p class="error">{{ e }}</p>{% when None %}
+  <p class="note">{{ total }} albums{% if total > albums.len() %}, first {{ albums.len() }} shown{% endif %}.</p>
+  {% if total > 0 && !q.is_empty() %}
+  <form id="enrich-q"><input type="hidden" name="q" value="{{ q }}"></form>
+  <div class="actions">
+    <button data-indicator="_en_all" data-attr:disabled="$_en_all" data-class:busy="$_en_all" data-on:click="confirm('Add gain, genres and lyrics to every album found? This rewrites those tags and takes a few seconds per album.') && @post('/library/enrich', {contentType: 'form', selector: '#enrich-q'})">Enrich all {{ total }}</button>
+  </div>
+  {% endif %}
+  <ul class="rows">
+  {% for a in albums %}
+    <li data-class:busy="$_en_{{ loop.index }}">
+      <span class="path">{{ self.rel(a.path) }}</span>
+      <span class="meta">{{ self.album(a) }}</span>
+      <span class="buttons">
+        <button type="button" name="path" value="{{ a.path }}" data-indicator="_en_{{ loop.index }}" data-attr:disabled="$_en_{{ loop.index }}" data-class:busy="$_en_{{ loop.index }}" data-on:click="confirm('Add gain, genres and lyrics to this album? This rewrites those tags.') && @post('/library/enrich', {contentType: 'form', selector: '#act'})">Enrich</button>
+        {% match a.album_artist %}{% when Some with (artist) %}<button type="button" class="quiet" name="artist" value="{{ artist }}" data-indicator="_ena_{{ loop.index }}" data-attr:disabled="$_ena_{{ loop.index }}" data-class:busy="$_ena_{{ loop.index }}" data-on:click="confirm('Add gain, genres and lyrics to every album by this artist? This rewrites those tags.') && @post('/library/enrich', {contentType: 'form', selector: '#act'})">Whole artist</button>{% when None %}{% endmatch %}
+      </span>
+    </li>
+  {% endfor %}
+  </ul>
+{% endmatch %}
+</div>

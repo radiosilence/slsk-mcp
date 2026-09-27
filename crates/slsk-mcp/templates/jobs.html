@@ -4,7 +4,7 @@
 <section class="group attention">
   <h2>Needs you <span class="count">{{ attention.len() }}</span></h2>
 {% for j in attention %}
-  <article class="job {{ j.status }}" data-class:busy="${{ self.sig(j) }}">
+  <article id="job-{{ j.id.as_str() }}" class="job {{ j.status }}" data-class:busy="${{ self.sig(j) }}">
     <div class="row">
       <strong class="title">{{ j.title }}</strong>
       <span class="pill">{{ self.label(j.status) }}</span>
@@ -64,7 +64,7 @@
 <section class="group underway">
   <h2>On the way <span class="count">{{ underway.len() }}</span></h2>
 {% for j in underway %}
-  <article class="job {{ j.status }}" data-class:busy="${{ self.sig(j) }}">
+  <article id="job-{{ j.id.as_str() }}" class="job {{ j.status }}" data-class:busy="${{ self.sig(j) }}">
     <div class="row">
       <strong class="title">{{ j.title }}</strong>
       <span class="pill">{{ self.label(j.status) }}</span>
@@ -125,7 +125,7 @@
   <h2>In your library</h2>
   <ul class="landed">
   {% for j in settled %}
-    <li class="{{ j.status }}" data-class:busy="${{ self.sig(j) }}">
+    <li id="job-{{ j.id.as_str() }}" class="{{ j.status }}" data-class:busy="${{ self.sig(j) }}">
       <span class="title">{{ self.landed(j) }}</span>
       {% if j.status == "cancelled" %}<span class="meta">cancelled</span>{% endif %}
       {% if j.status == "cancelled" %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/retry')">Retry</button>{% endif %}

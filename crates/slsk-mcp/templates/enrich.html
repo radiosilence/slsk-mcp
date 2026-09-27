@@ -1,0 +1,21 @@
+<div id="enrich">
+{% if run.running || run.done > 0 || run.error.is_some() %}
+  <h3 class="section">{% if run.running %}Enriching{% else %}Enriched{% endif %} {{ run.asked }}</h3>
+  {% if run.running %}
+  <p class="note">{% if run.total == 0 %}Finding the albums…{% else %}{{ run.done }} of {{ run.total }} albums{% endif %}{% match run.current %}{% when Some with (c) %} · now {{ self.rel(c) }}{% when None %}{% endmatch %}</p>
+  <progress class="bar" max="{{ run.total.max(1) }}" value="{{ run.done }}">{{ run.done }}</progress>
+  {% else %}
+  <p class="note">Finished: {{ run.done }} albums.</p>
+  {% endif %}
+  {% match run.error %}{% when Some with (e) %}<p class="error">{{ e }}</p>{% when None %}{% endmatch %}
+  <ul class="rows">
+  {% for r in self.recent() %}
+    <li>
+      <span class="path">{{ self.rel(r.path) }}</span>
+      <span class="meta">{{ self.gain(r) }}{% if !r.genres.is_empty() %} · {{ r.genres.join(", ") }}{% endif %} · lyrics for {{ r.lyrics }}</span>
+      {% for p in r.problems %}<span class="error">{{ p }}</span>{% endfor %}
+    </li>
+  {% endfor %}
+  </ul>
+{% endif %}
+</div>

@@ -1,0 +1,6 @@
+<ul id="room-list" class="rows">
+{% if rooms.is_empty() %}<li class="note">The server has not sent its room list yet.</li>{% endif %}
+{% for r in rooms %}
+  <li data-class:busy="$_join_{{ loop.index }}"><span class="name">{{ r.0 }}</span><span class="meta">{{ r.1 }}</span><button type="button" name="room" value="{{ r.0 }}" data-indicator="_join_{{ loop.index }}" data-attr:disabled="$_join_{{ loop.index }}" data-class:busy="$_join_{{ loop.index }}" data-on:click="@post('/chat/join', {contentType: 'form', selector: '#act'})">Join</button></li>
+{% endfor %}
+</ul>

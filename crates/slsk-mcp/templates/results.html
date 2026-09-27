@@ -9,7 +9,7 @@
       <button class="primary" data-indicator="_dl_{{ loop.index }}" data-attr:disabled="$_dl_{{ loop.index }}" data-class:busy="$_dl_{{ loop.index }}" data-on:click="@post('/download', {contentType: 'form', selector: '#dl-{{ loop.index }}'})">Download</button>
     </div>
     <div class="meta">
-      {{ f.username }} · {{ f.audio_files }} tracks · {{ self.quality(f) }} · {{ self.size(f.total_size) }} ·
+      <button type="button" class="link" data-on:click="$tab = 'browse'; @post('/browse', {contentType: 'form', selector: '#dl-{{ loop.index }}'})">{{ f.username }}</button> · {{ f.audio_files }} tracks · {{ self.quality(f) }} · {{ self.size(f.total_size) }} ·
       {% if f.free_slot %}<span class="ok">free slot</span>{% else %}queue {{ f.queue_length }}{% endif %} · {{ self.size(f.speed as u64) }}/s
     </div>
   </article>

@@ -4,7 +4,7 @@
   {% for p in peers %}
   <article class="job peer">
     <div class="row">
-      <strong class="title">{{ p.username }}</strong>
+      <strong class="title"><button type="button" class="link" data-on:click="$tab = 'browse'; @post('/browse', {contentType: 'form', selector: '#ban-{{ loop.index }}'})">{{ p.username }}</button></strong>
       {% if p.speed > 0 %}<span class="meta">{{ self.size(p.speed) }}/s</span>{% endif %}
     </div>
     <div class="meta">{{ p.files.len() }} in progress or queued{% if p.done > 0 %} · {{ p.done }} sent{% endif %}</div>
