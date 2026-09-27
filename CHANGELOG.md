@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Removing an album that a wishlist entry grabbed removes the wish too. The wish had forgotten its album when the job went, and grabbed the same copy again on its next pass, so a removed album kept coming back.
+
 ## 0.1.32
 
 - The uploads page keeps a history: every finished upload (who, what, how much, average speed while sending, and whether it completed), with today's and this week's totals. Recorded in Postgres as each upload ends and kept for 180 days, so it survives restarts, where the engine's own list holds only recent transfers in memory.

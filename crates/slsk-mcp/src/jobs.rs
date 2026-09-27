@@ -1183,6 +1183,12 @@ impl Jobs {
         if let Some(job) = db::job(&self.db, id).await? {
             let _ = tokio::fs::remove_dir_all(self.complete_dir(&job)).await;
         }
+        // A wish that found this album would otherwise find it again on its
+        // next pass: removing the album is the answer to the wish too.
+        sqlx::query("DELETE FROM wishes WHERE job_id = $1")
+            .bind(id)
+            .execute(&self.db)
+            .await?;
         db::delete_job(&self.db, id).await?;
         Ok(())
     }
