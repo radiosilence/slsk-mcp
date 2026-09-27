@@ -51,7 +51,16 @@ async fn engine(
     engine
 }
 
-/// `n` small files under `root/<name>`, each with content only it has, so a
+/// `LOAD_SIZE` bytes per file, default about 4 KiB: many small files test
+/// the per-transfer overhead, a few large ones the byte throughput.
+fn file_size(i: usize) -> usize {
+    std::env::var("LOAD_SIZE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(4096 + i % 997)
+}
+
+/// `n` files under `root/<name>`, each with content only it has, so a
 /// file delivered to the wrong place or cut short cannot pass for another.
 fn share(root: &Path, name: &str, n: usize) -> Vec<(String, Vec<u8>)> {
     let dir = root.join(name).join("Album");
@@ -62,7 +71,7 @@ fn share(root: &Path, name: &str, n: usize) -> Vec<(String, Vec<u8>)> {
             let data: Vec<u8> = format!("{name}/{i}:")
                 .bytes()
                 .cycle()
-                .take(4096 + i % 997)
+                .take(file_size(i))
                 .collect();
             std::fs::write(dir.join(&file), &data).unwrap();
             (format!("{name}\\Album\\{file}"), data)

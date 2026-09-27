@@ -16,6 +16,7 @@ mod mcp;
 mod session;
 mod social;
 mod ui;
+mod uploads_log;
 
 use std::sync::Arc;
 
@@ -131,6 +132,7 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(async move { library.warm().await });
     jobs.spawn();
     social.spawn();
+    uploads_log::spawn(app.clone());
     if app.session.engine().is_some()
         && let Err(e) = jobs.resume().await
     {

@@ -176,7 +176,7 @@ async fn page(State(s): State<UiState>) -> Result<Html<String>, crate::error::Ap
         status: status_html(&s.app).await,
         jobs: jobs_html(&s.app).await,
         transfers: transfers_html(&s.app),
-        uploads: uploads_html(&s.app),
+        uploads: uploads_html(&s.app).await,
         up_count: up_count_html(&s.app),
     };
     Ok(Html(page.render().map_err(anyhow::Error::from)?))
@@ -540,6 +540,10 @@ struct UploadsView {
     queued: usize,
     sent: usize,
     shared: usize,
+    history: Vec<crate::db::UploadRow>,
+    /// Completed uploads today and this week: (files, bytes).
+    today: (i64, i64),
+    week: (i64, i64),
 }
 
 /// One person taking files from us.
@@ -551,6 +555,35 @@ struct Peer {
 }
 
 impl UploadsView {
+    fn bytes(&self, b: &i64) -> String {
+        human((*b).max(0) as u64)
+    }
+    fn files(&self, n: &i64) -> String {
+        if *n == 1 {
+            "1 file".into()
+        } else {
+            format!("{n} files")
+        }
+    }
+    /// Average speed over the time it was seen sending, when that is known.
+    fn rate(&self, h: &crate::db::UploadRow) -> String {
+        match h.seconds.filter(|s| *s >= 1.0) {
+            Some(s) => format!("{}/s", human((h.bytes.max(0) as f64 / s) as u64)),
+            None => String::new(),
+        }
+    }
+    fn ago(&self, h: &crate::db::UploadRow) -> String {
+        let secs = (chrono::Utc::now() - h.finished_at).num_seconds().max(0);
+        match secs {
+            0..60 => "just now".into(),
+            60..3600 => format!("{}m ago", secs / 60),
+            3600..86400 => format!("{}h ago", secs / 3600),
+            _ => format!("{}d ago", secs / 86400),
+        }
+    }
+    fn leaf<'a>(&self, name: &'a str) -> &'a str {
+        name.rsplit(['\\', '/']).next().unwrap_or(name)
+    }
     fn pct(&self, t: &Transfer) -> u64 {
         percent(t.bytes, t.size)
     }
@@ -584,7 +617,7 @@ fn up_count_html(app: &App) -> String {
 
 /// Who is taking what from us, grouped by person: those receiving now
 /// first, then those waiting in the queue.
-fn uploads_html(app: &App) -> String {
+async fn uploads_html(app: &App) -> String {
     let mut peers: Vec<Peer> = Vec::new();
     let (mut sending, mut queued, mut sent, mut shared) = (0, 0, 0, 0);
     if let Some(e) = app.session.engine() {
@@ -620,12 +653,31 @@ fn uploads_html(app: &App) -> String {
             .collect();
         peers.sort_by_key(|p| std::cmp::Reverse(p.speed));
     }
+    let now = chrono::Utc::now();
+    let midnight = now
+        .date_naive()
+        .and_hms_opt(0, 0, 0)
+        .map(|t| t.and_utc())
+        .unwrap_or(now);
+    let history = crate::db::recent_uploads(&app.db, 40)
+        .await
+        .inspect_err(|e| tracing::warn!(error = %e, "could not read upload history"))
+        .unwrap_or_default();
+    let today = crate::db::upload_totals(&app.db, midnight)
+        .await
+        .unwrap_or_default();
+    let week = crate::db::upload_totals(&app.db, now - chrono::Duration::days(7))
+        .await
+        .unwrap_or_default();
     UploadsView {
         peers,
         sending,
         queued,
         sent,
         shared,
+        history,
+        today,
+        week,
     }
     .render()
     .unwrap_or_default()
@@ -642,7 +694,7 @@ async fn stream(State(s): State<UiState>) -> impl IntoResponse {
             yield Ok(patch(&status_html(&app).await));
             yield Ok(patch(&jobs_html(&app).await));
             yield Ok(patch(&transfers_html(&app)));
-            yield Ok(patch(&uploads_html(&app)));
+            yield Ok(patch(&uploads_html(&app).await));
             yield Ok(patch(&up_count_html(&app)));
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
@@ -864,7 +916,7 @@ async fn cancel_upload(
     if let (Some(e), Some(name)) = (s.app.session.engine(), f.filename) {
         e.cancel_upload(&f.username, &RawStr::from(name));
     }
-    one(uploads_html(&s.app))
+    one(uploads_html(&s.app).await)
 }
 
 async fn ban(State(s): State<UiState>, axum::Form(f): axum::Form<UserFileForm>) -> Response {
@@ -878,7 +930,7 @@ async fn ban(State(s): State<UiState>, axum::Form(f): axum::Form<UserFileForm>) 
             e.set_banned(bans);
         }
     }
-    one(uploads_html(&s.app))
+    one(uploads_html(&s.app).await)
 }
 
 #[derive(serde::Deserialize)]

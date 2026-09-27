@@ -25,4 +25,15 @@
     </div>
   </article>
   {% endfor %}
+  <h3 class="section">History</h3>
+  <p class="note">Today {{ self.files(today.0) }} · {{ self.bytes(today.1) }} · this week {{ self.files(week.0) }} · {{ self.bytes(week.1) }}</p>
+  {% if history.is_empty() %}<p class="note">Nothing uploaded yet.</p>{% endif %}
+  <ul class="files history">
+  {% for h in history %}
+    <li>
+      <span class="name" title="{{ h.filename }}">{{ self.leaf(h.filename) }}</span>
+      <span class="meta">{{ h.username }} · {% if h.state == "completed" %}{{ self.bytes(h.size) }}{% else %}{{ self.bytes(h.bytes) }} of {{ self.bytes(h.size) }}{% endif %}{% if !self.rate(h).is_empty() %} · {{ self.rate(h) }}{% endif %} · {{ self.ago(h) }}{% if h.state != "completed" %} · {{ h.state }}{% endif %}</span>
+    </li>
+  {% endfor %}
+  </ul>
 </div>

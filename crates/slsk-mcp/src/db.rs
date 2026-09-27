@@ -397,3 +397,75 @@ pub async fn set_approved(db: &PgPool, id: Uuid) -> sqlx::Result<()> {
         .await
         .map(|_| ())
 }
+
+#[derive(sqlx::FromRow, Clone)]
+pub struct UploadRow {
+    pub username: String,
+    pub filename: String,
+    pub size: i64,
+    pub bytes: i64,
+    pub state: String,
+    pub seconds: Option<f64>,
+    pub finished_at: chrono::DateTime<chrono::Utc>,
+}
+
+pub async fn record_upload(
+    db: &PgPool,
+    username: &str,
+    filename: &str,
+    size: u64,
+    bytes: u64,
+    state: &str,
+    error: Option<&str>,
+    seconds: Option<f64>,
+) -> sqlx::Result<()> {
+    sqlx::query(
+        "INSERT INTO uploads (username, filename, size, bytes, state, error, seconds) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7)",
+    )
+    .bind(username)
+    .bind(filename)
+    .bind(size as i64)
+    .bind(bytes as i64)
+    .bind(state)
+    .bind(error)
+    .bind(seconds)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+pub async fn recent_uploads(db: &PgPool, limit: i64) -> sqlx::Result<Vec<UploadRow>> {
+    sqlx::query_as(
+        "SELECT username, filename, size, bytes, state, seconds, finished_at FROM uploads \
+         ORDER BY finished_at DESC LIMIT $1",
+    )
+    .bind(limit)
+    .fetch_all(db)
+    .await
+}
+
+/// Completed uploads since `since`: how many, and how many bytes.
+pub async fn upload_totals(
+    db: &PgPool,
+    since: chrono::DateTime<chrono::Utc>,
+) -> sqlx::Result<(i64, i64)> {
+    sqlx::query_as(
+        "SELECT COUNT(*), COALESCE(SUM(bytes), 0)::BIGINT FROM uploads \
+         WHERE state = 'completed' AND finished_at >= $1",
+    )
+    .bind(since)
+    .fetch_one(db)
+    .await
+}
+
+/// History older than `days` goes; it is for looking back weeks, not years.
+pub async fn prune_uploads(db: &PgPool, days: i32) -> sqlx::Result<u64> {
+    Ok(
+        sqlx::query("DELETE FROM uploads WHERE finished_at < now() - make_interval(days => $1)")
+            .bind(days)
+            .execute(db)
+            .await?
+            .rows_affected(),
+    )
+}
