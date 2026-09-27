@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.33
 
 - The web UI covers everything GraphQL and MCP do, in new tabs beside Albums and Uploads; the tab bar scrolls sideways on a phone.
   - Wishlist: add (lossless, grab when found), remove, when each was last searched, and the album it became, linked to its card.
