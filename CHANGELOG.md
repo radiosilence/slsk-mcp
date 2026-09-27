@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.29
+
+- Searching again for a stalled album accepts only a copy as good as the one it replaces: lossless for a lossless album, and at least four-fifths of its tracks. It had replaced a 21-file FLAC Boiler Room set with a one-file 192 kbps video rip, and a twelve-track album with a single track from it.
+- A rip numbering its tracks straight through a vinyl release whose sides restart at 1 matches every track instead of only the first side's (sift).
+
 ## 0.1.28
 
 - The library as a whole is reachable over GraphQL and MCP, through sift's index of it: `libraryAlbums(query)` lists albums with beets' query syntax; `duplicates` finds albums held more than once and names the copy to keep (lossless over lossy, then more tracks, then higher resolution, then the one filed under the current rules); `binDuplicates` moves the spare copies to `<library>-bin`; `refilePlan` and `refile` move albums to where the current naming rules put them. The bin is outside what Navidrome and the shares see, and on the same drive, so binning is a rename; nothing is deleted. `refile` refuses an empty query, so re-filing the whole library is deliberate (`[""]`).

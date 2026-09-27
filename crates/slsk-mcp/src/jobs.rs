@@ -1077,14 +1077,29 @@ impl Jobs {
                     .collect(),
             )
         };
-        let lossless = crate::folders::Filter {
-            lossless: true,
+        // The replacement must be as good a copy as the one it replaces:
+        // lossless for lossless, and most of the tracks. A copy that is
+        // merely online is not a substitute; a lossless album replaced by a
+        // one-file video rip is worse than waiting.
+        let exts: Vec<String> = rows
+            .iter()
+            .filter_map(|r| {
+                let name = String::from_utf8_lossy(&r.remote).replace('\\', "/");
+                std::path::Path::new(&name)
+                    .extension()
+                    .map(|e| e.to_string_lossy().to_lowercase())
+            })
+            .filter(|e| crate::folders::AUDIO.contains(&e.as_str()))
+            .collect();
+        let filter = crate::folders::Filter {
+            lossless: !exts.is_empty()
+                && exts
+                    .iter()
+                    .all(|e| crate::folders::LOSSLESS.contains(&e.as_str())),
+            min_tracks: Some((exts.len() * 4).div_ceil(5).max(1)),
             ..Default::default()
         };
-        let mut found = search(&lossless).await?;
-        if found.is_empty() {
-            found = search(&Default::default()).await?;
-        }
+        let found = search(&filter).await?;
         if found.is_empty() {
             tracing::info!(job = %job.id, "no other copy online; still waiting on {current}");
             return Ok(());

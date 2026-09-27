@@ -9,9 +9,9 @@ use std::collections::HashMap;
 use slsk_engine::slsk_proto::RawStr;
 use slsk_engine::slsk_proto::peer::{FileEntry, SearchResponse};
 
-const LOSSLESS: &[&str] = &["flac", "wav", "aiff", "aif", "ape", "wv", "alac"];
+pub(crate) const LOSSLESS: &[&str] = &["flac", "wav", "aiff", "aif", "ape", "wv", "alac"];
 const UNCOMPRESSED: &[&str] = &["wav", "aiff", "aif"];
-const AUDIO: &[&str] = &[
+pub(crate) const AUDIO: &[&str] = &[
     "flac", "wav", "aiff", "aif", "ape", "wv", "alac", "mp3", "m4a", "aac", "ogg", "opus", "wma",
 ];
 

@@ -2831,7 +2831,7 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 [[package]]
 name = "sift"
 version = "0.1.0"
-source = "git+https://github.com/radiosilence/sift#8bc83918d0440be18d1bab702d75ff32bd5c4f09"
+source = "git+https://github.com/radiosilence/sift#b390a23d8106b5e963946fc4c03313dc865c59e4"
 dependencies = [
  "anyhow",
  "bytes",
@@ -2916,7 +2916,7 @@ dependencies = [
 
 [[package]]
 name = "slsk-mcp"
-version = "0.1.28"
+version = "0.1.29"
 dependencies = [
  "anyhow",
  "askama",
