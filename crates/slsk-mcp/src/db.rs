@@ -409,26 +409,22 @@ pub struct UploadRow {
     pub finished_at: chrono::DateTime<chrono::Utc>,
 }
 
+/// A finished upload, with how long it was seen sending when known.
 pub async fn record_upload(
     db: &PgPool,
-    username: &str,
-    filename: &str,
-    size: u64,
-    bytes: u64,
-    state: &str,
-    error: Option<&str>,
+    t: &slsk_engine::TransferView,
     seconds: Option<f64>,
 ) -> sqlx::Result<()> {
     sqlx::query(
         "INSERT INTO uploads (username, filename, size, bytes, state, error, seconds) \
          VALUES ($1, $2, $3, $4, $5, $6, $7)",
     )
-    .bind(username)
-    .bind(filename)
-    .bind(size as i64)
-    .bind(bytes as i64)
-    .bind(state)
-    .bind(error)
+    .bind(&t.username)
+    .bind(t.filename.to_string_lossy())
+    .bind(t.size as i64)
+    .bind(t.bytes as i64)
+    .bind(t.state)
+    .bind(t.error.as_deref())
     .bind(seconds)
     .execute(db)
     .await?;

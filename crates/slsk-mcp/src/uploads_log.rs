@@ -33,19 +33,7 @@ pub fn spawn(app: Arc<App>) {
                     }
                     "completed" | "failed" | "cancelled" if !recorded.contains(&t.id) => {
                         let seconds = started.get(&t.id).map(|s| s.elapsed().as_secs_f64());
-                        let name = t.filename.to_string_lossy();
-                        match crate::db::record_upload(
-                            &app.db,
-                            &t.username,
-                            &name,
-                            t.size,
-                            t.bytes,
-                            t.state,
-                            t.error.as_deref(),
-                            seconds,
-                        )
-                        .await
-                        {
+                        match crate::db::record_upload(&app.db, t, seconds).await {
                             Ok(()) => {
                                 recorded.insert(t.id);
                             }
