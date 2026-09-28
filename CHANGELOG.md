@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.44
+
+- A repeated `grab` returns the earlier job only while what that job imported is still in the library. Once the album has been binned (a spare, or a damaged copy), asking again fetches a new copy instead of handing back the old job.
+
 ## 0.1.43
 
 - **Downloads are no longer spliced into damaged files.** Resuming a stalled transfer asks the peer to continue from what is already on disk; some peers send the whole file from the start regardless, and the engine appended that, producing a file of two copies joined together that plays as noise. Albums grabbed twice at once made this common, since the peer then served each file twice. The engine now compares the first bytes a resumed transfer sends with the start of the partial file, and starts the file over when they match.

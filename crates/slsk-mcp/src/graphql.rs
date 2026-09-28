@@ -892,7 +892,15 @@ pub(crate) async fn grab(
             .clone()
     };
     let _turn = turn.lock().await;
-    if let Some(job) = db::live_grab(&app.db, query).await? {
+    // Unless what it imported has since left the library (binned as a spare
+    // or a damaged copy): asking again is then asking for a new copy.
+    if let Some(job) = db::live_grab(&app.db, query).await?
+        && !(job.status == "imported"
+            && job
+                .library_path
+                .as_deref()
+                .is_some_and(|p| !std::path::Path::new(p).exists()))
+    {
         return Ok(job);
     }
     let strict = filter.is_some();
