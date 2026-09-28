@@ -88,6 +88,8 @@ pub struct Jobs {
     /// Spectrograms, one directory per job.
     spectrograms: PathBuf,
     tagger: Arc<sift::Importer>,
+    /// Where a copy a replacing import sets aside goes: the library's bin.
+    bin: PathBuf,
     /// Imports touch the library tree; one at a time keeps two albums from
     /// racing for the same destination.
     import_lock: Mutex<()>,
@@ -125,8 +127,10 @@ impl Jobs {
         complete: PathBuf,
         spectrograms: PathBuf,
         tagger: Arc<sift::Importer>,
+        bin: PathBuf,
     ) -> Arc<Self> {
         Arc::new(Self {
+            bin,
             db,
             session,
             staging,
@@ -225,6 +229,7 @@ impl Jobs {
             analysis: None,
             approved: false,
             as_is_blocker: None,
+            replaces: false,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         };
@@ -275,6 +280,7 @@ impl Jobs {
             analysis: None,
             approved: false,
             as_is_blocker: None,
+            replaces: false,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         };
@@ -823,6 +829,11 @@ impl Jobs {
         }
         tracing::info!(%id, title = %job.title, dir = %dir.display(), "import started");
         let outcome = match &how {
+            How::Match(release) if job.replaces => {
+                self.tagger
+                    .import_replacing(&dir, release.as_deref(), &self.bin)
+                    .await
+            }
             How::Match(release) => self.tagger.import(&dir, release.as_deref()).await,
             How::AsIs(edits) => self.tagger.import_as_is(&dir, edits).await,
         };

@@ -964,10 +964,16 @@ pub(crate) async fn grab(
         .next()
         .ok_or_else(|| Error::new(format!("nothing found for {query:?}")))?;
     let alternates = found.take(4).map(Alternate::from).collect();
-    Ok(app
+    let job = app
         .jobs
         .from_folder(&best, Some(query.to_string()), alternates)
-        .await?)
+        .await?;
+    // Fetched again because the filed copy is bad: its import replaces
+    // that copy instead of taking this one for a repeat of it.
+    if refetch {
+        db::set_replaces(&app.db, job.id).await?;
+    }
+    Ok(job)
 }
 
 fn parse_id(id: &ID) -> Result<Uuid> {
@@ -1052,8 +1058,11 @@ impl Mutation {
     /// again for the same query within a day, while that job has not failed,
     /// returns that job rather than fetching the album twice, so a call that
     /// timed out can simply be repeated. Grab one album per call.
-    /// `refetch: true` skips that and always fetches a new copy: for
-    /// replacing one that turned out bad.
+    /// `refetch: true` skips that and always fetches a new copy, for
+    /// replacing one that turned out bad: its import moves the copy already
+    /// filed in that folder to the bin beside the library and files the new
+    /// one. Leave the bad copy where it is; moving it out first is not
+    /// needed.
     async fn grab(
         &self,
         ctx: &Context<'_>,

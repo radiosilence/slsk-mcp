@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.52
+
+- **`grab(refetch: true)` replaces the filed copy** (sift 0.3.4). A refetched album that finished downloading while the bad copy was still in the library was taken for a repeat of it (same folder, format and stated lengths), marked imported, and deleted, leaving only the bad copy. A refetched job now imports with `import_replacing`: the folder already there moves to the bin beside the library and the new copy is filed. The bad copy no longer needs moving out by hand first.
+
 ## 0.1.51
 
 - **Searches are spaced at least 4 seconds apart.** Two dozen grabs inside a minute each searched at once, and the Soulseek server banned the account for 30 minutes for flooding. Every search (grabs, retries, wishlist, the Search page) now waits for its slot, so a burst of requests reaches the server as a steady trickle; a grab's listening window starts when its search goes out.

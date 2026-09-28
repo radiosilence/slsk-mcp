@@ -95,6 +95,8 @@ pub struct Job {
     pub analysis: Option<Json<Vec<crate::analysis::TrackAnalysis>>>,
     pub approved: bool,
     pub as_is_blocker: Option<String>,
+    /// Fetched to replace a copy already filed; see `grab(refetch)`.
+    pub replaces: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -132,6 +134,14 @@ pub async fn insert_job(db: &PgPool, job: &Job, files: &[JobFile]) -> sqlx::Resu
             .await?;
     }
     tx.commit().await
+}
+
+pub async fn set_replaces(db: &PgPool, id: Uuid) -> sqlx::Result<()> {
+    sqlx::query("UPDATE jobs SET replaces = true WHERE id = $1")
+        .bind(id)
+        .execute(db)
+        .await?;
+    Ok(())
 }
 
 pub async fn replace_files(
