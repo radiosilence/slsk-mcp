@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.38
+
+- sift 0.2.0: imports now move a featured artist into the title (`ftintitle`), keep files' own dates as their added time and across moves (`importadded`), fill a missing year from MusicBrainz's release group (`yearfixer`), and honour `fetchart`'s minimum width, quality, aspect-ratio and high-resolution options, resizing art above the maximum width. Each follows the plugins listed in the beets config the service is given.
+- rmcp 3.
+
 ## 0.1.37
 
 - A job whose album is already in the library, as another copy in the same format, ends as imported and points at the album there, and the new copy is dropped. It failed with "… is already in the library" and offered another copy, which would have been refused the same way.
