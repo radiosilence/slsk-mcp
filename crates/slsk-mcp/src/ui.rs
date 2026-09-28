@@ -833,6 +833,7 @@ async fn search(State(s): State<UiState>, axum::Form(form): axum::Form<SearchFor
         lossless: form.lossless,
         ..Default::default()
     };
+    engine.pace().await;
     let rx = engine.search(&query);
     let events = async_stream::stream! {
         let Ok(mut rx) = rx else {

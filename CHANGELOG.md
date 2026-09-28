@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.51
+
+- **Searches are spaced at least 4 seconds apart.** Two dozen grabs inside a minute each searched at once, and the Soulseek server banned the account for 30 minutes for flooding. Every search (grabs, retries, wishlist, the Search page) now waits for its slot, so a burst of requests reaches the server as a steady trickle; a grab's listening window starts when its search goes out.
+- **A ban is waited out.** When the server announces "You have been banned for N minutes", the client stops logging in until a minute after it lifts. It had kept retrying on its usual backoff, reaching every two minutes, which the server counts against the account.
+
 ## 0.1.50
 
 - **`duplicates` pairs one album tagged two ways** (sift 0.3.3, [#15](https://github.com/radiosilence/slsk-mcp/issues/15)). The same album under two album-artist spellings, or with track titles spelled differently, is paired when the album title and track count match and each track is within 3 seconds in length and closely titled. A spare paired only this way reads "the same album, tagged differently".

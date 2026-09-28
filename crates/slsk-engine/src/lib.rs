@@ -26,7 +26,7 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use dashmap::DashMap;
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use slsk_proto::RawStr;
 use slsk_proto::peer::{Directory, PeerMessage, SearchResponse, UserInfo};
 use slsk_proto::server::{FromServer, ToServer};
@@ -179,7 +179,17 @@ pub(crate) struct Inner {
     pub(crate) metrics: Arc<Metrics>,
     up_limit: limit::Bucket,
     down_limit: limit::Bucket,
+    /// When the next search may go out; see [`SEARCH_GAP`].
+    next_search: Mutex<tokio::time::Instant>,
+    /// Set when the server says it has banned us: logging in again before
+    /// then is refused, and may lengthen the ban.
+    ban_until: Mutex<Option<tokio::time::Instant>>,
 }
+
+/// Searches go out at least this far apart. The server bans an account that
+/// searches in bursts (two dozen grabs inside a minute did it), however many
+/// callers want one at the same moment.
+const SEARCH_GAP: Duration = Duration::from_secs(4);
 
 impl Inner {
     fn username(&self) -> String {
@@ -250,6 +260,8 @@ impl Engine {
             up_limit: limit::Bucket::new(cfg.upload_limit),
             down_limit: limit::Bucket::new(cfg.download_limit),
             metrics,
+            next_search: Mutex::new(tokio::time::Instant::now()),
+            ban_until: Mutex::new(None),
             cfg,
         });
         tokio::spawn(peers::listen(inner.clone(), listener));
@@ -378,6 +390,20 @@ impl Engine {
     pub fn share_counts(&self) -> (usize, usize) {
         let index = self.0.shares.load();
         (index.dir_count(), index.file_count())
+    }
+
+    /// Wait for this caller's turn to search: each call reserves the next
+    /// slot [`SEARCH_GAP`] after the last one. Call before any search a
+    /// person or a job starts, so a burst of them reaches the server spaced
+    /// out rather than at once.
+    pub async fn pace(&self) {
+        let at = {
+            let mut next = self.0.next_search.lock();
+            let at = (*next).max(tokio::time::Instant::now());
+            *next = at + SEARCH_GAP;
+            at
+        };
+        tokio::time::sleep_until(at).await;
     }
 
     /// Search the network. Responses arrive on the receiver until it is

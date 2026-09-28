@@ -19,6 +19,14 @@ const MAX_FRAME: usize = 16 << 20;
 pub(crate) async fn run(inner: Arc<Inner>) {
     let mut backoff = Duration::from_secs(2);
     loop {
+        let banned = *inner.ban_until.lock();
+        if let Some(until) = banned.filter(|u| *u > tokio::time::Instant::now()) {
+            inner.set_status(Status::Disconnected {
+                error: "banned by the server; waiting for it to lift".into(),
+            });
+            tokio::time::sleep_until(until).await;
+            backoff = Duration::from_secs(2);
+        }
         inner.set_status(Status::Connecting);
         let outcome = session(&inner).await;
         inner.server_tx.write().take();
@@ -204,8 +212,24 @@ fn dispatch(inner: &Arc<Inner>, msg: &FromServer) {
             token,
             query,
         } => peers::respond_to_search(inner, username, *token, query),
-        FromServer::MessageUser { id, .. } => {
+        FromServer::MessageUser {
+            id,
+            username,
+            message,
+            ..
+        } => {
             let _ = inner.send_server(ToServer::MessageAcked { id: *id });
+            if username == "server"
+                && let Some(minutes) = ban_minutes(message)
+            {
+                // A minute over, so the first login lands after the ban.
+                let wait = Duration::from_secs((minutes + 1) * 60);
+                *inner.ban_until.lock() = Some(tokio::time::Instant::now() + wait);
+                tracing::warn!(
+                    minutes,
+                    "banned by the server; not logging in until it lifts"
+                );
+            }
         }
         FromServer::PossibleParents { parents } => distributed::on_possible_parents(inner, parents),
         FromServer::EmbeddedMessage { code: 3, payload } => {
@@ -230,4 +254,29 @@ fn dispatch(inner: &Arc<Inner>, msg: &FromServer) {
         .metrics
         .peer_connections
         .store(inner.peers.links.len() as u64, Ordering::Relaxed);
+}
+
+/// The length of a ban the server announces: "You have been banned for 30
+/// minutes."
+fn ban_minutes(message: &str) -> Option<u64> {
+    let rest = message.split("banned for ").nth(1)?;
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    let minutes = digits.parse().ok()?;
+    rest[digits.len()..]
+        .trim_start()
+        .starts_with("minute")
+        .then_some(minutes)
+}
+
+#[cfg(test)]
+mod ban_tests {
+    use super::ban_minutes;
+
+    #[test]
+    fn reads_the_ban_length() {
+        let m = "System Message: You have been banned for 30 minutes. This is usually the result of doing too many operations at once.";
+        assert_eq!(ban_minutes(m), Some(30));
+        assert_eq!(ban_minutes("banned for life"), None);
+        assert_eq!(ban_minutes("hello"), None);
+    }
 }

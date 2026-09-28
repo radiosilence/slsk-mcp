@@ -872,6 +872,7 @@ pub(crate) async fn search(
     filter: &Filter,
 ) -> Result<Vec<Folder>> {
     let engine = app.session.require()?;
+    engine.pace().await;
     let mut rx = engine.search(query)?;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(wait.clamp(1, 30));
     let mut responses = Vec::new();

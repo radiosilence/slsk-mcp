@@ -641,6 +641,7 @@ impl Social {
             .bind(wish.id)
             .execute(&self.db)
             .await?;
+        engine.pace().await;
         let mut rx = engine.wishlist_search(&wish.query)?;
         let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
         let mut responses = Vec::new();
