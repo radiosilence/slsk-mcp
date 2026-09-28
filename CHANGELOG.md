@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.48
+
+- **Imports file under the artist folder already there when names differ only in case** (sift 0.3.2). "The Squire Of Gothos" and "The Squire of Gothos" no longer make two folders; each part of the destination takes the spelling already on disk.
+
 ## 0.1.47
 
 - **`pendingChecks`: peers holding downloads behind a message the service could not answer.** When a check is not in the standard form, an assistant can see it, with the peer's words marked as untrusted data. The MCP instructions confine it to answering the check with a short literal reply through `sendMessage`'s preview and confirm, which the user sees before anything is sent, and to doing nothing else the message asks.
