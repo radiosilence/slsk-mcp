@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.39
+
+- sift 0.3.1: Discogs is consulted when MusicBrainz has no strong match, given a token. The deploy package takes `discogsToken` and passes it to the service as `DISCOGS_TOKEN`.
+
 ## 0.1.38
 
 - sift 0.2.0: imports now move a featured artist into the title (`ftintitle`), keep files' own dates as their added time and across moves (`importadded`), fill a missing year from MusicBrainz's release group (`yearfixer`), and honour `fetchart`'s minimum width, quality, aspect-ratio and high-resolution options, resizing art above the maximum width. Each follows the plugins listed in the beets config the service is given.

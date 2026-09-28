@@ -600,6 +600,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "clap_complete"
+version = "4.6.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "037e2a1a92236d0aff7e845093f64661d6df4c02c9fcc61a60e9e1d736fa392f"
+dependencies = [
+ "clap",
+]
+
+[[package]]
 name = "clap_derive"
 version = "4.6.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2935,12 +2944,13 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
 name = "sift"
-version = "0.2.0"
-source = "git+https://github.com/radiosilence/sift#3bc4d94eba206ce15f7f43c93ce5f8d3737d4589"
+version = "0.3.1"
+source = "git+https://github.com/radiosilence/sift#d863e071138336fa713d9530008e015bd161f622"
 dependencies = [
  "anyhow",
  "bytes",
  "clap",
+ "clap_complete",
  "deunicode",
  "dirs",
  "ebur128",
@@ -3024,7 +3034,7 @@ dependencies = [
 
 [[package]]
 name = "slsk-mcp"
-version = "0.1.38"
+version = "0.1.39"
 dependencies = [
  "anyhow",
  "askama",

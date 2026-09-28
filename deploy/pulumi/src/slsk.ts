@@ -75,6 +75,12 @@ export function createSlsk(
      * it.
      */
     account?: { username: pulumi.Input<string>; password: pulumi.Input<string> };
+    /**
+     * A Discogs personal access token. With `discogs` in the beets config's
+     * plugins, the importer consults Discogs when MusicBrainz has no strong
+     * match; without a token it does not.
+     */
+    discogsToken?: pulumi.Input<string>;
     /** Pod labels allowed to reach the internal port. */
     gatewayPodLabels?: Record<string, string>;
     /** Pod labels allowed to scrape the metrics port. */
@@ -144,6 +150,9 @@ export function createSlsk(
         ...(opts.account && {
           "slsk-username": pulumi.output(opts.account.username),
           "slsk-password": pulumi.output(opts.account.password),
+        }),
+        ...(opts.discogsToken && {
+          "discogs-token": pulumi.output(opts.discogsToken),
         }),
       },
     },
@@ -306,6 +315,9 @@ export function createSlsk(
                         { name: "SLSK_USERNAME", ...secretRef("slsk-username") },
                         { name: "SLSK_PASSWORD", ...secretRef("slsk-password") },
                       ]
+                    : []),
+                  ...(opts.discogsToken
+                    ? [{ name: "DISCOGS_TOKEN", ...secretRef("discogs-token") }]
                     : []),
                 ],
                 readinessProbe: {
