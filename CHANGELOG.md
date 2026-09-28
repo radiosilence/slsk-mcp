@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.49
+
+- **An import runs to the end even when whoever asked for it stops waiting** ([#13](https://github.com/radiosilence/slsk-mcp/issues/13)). `resolveJob`, `approveJob`, `importAsIs` and the page's as-is button ran the import inside the request, so a dropped request cancelled it partway: sift's file moves carried on in blocking threads and filed the album, but the job never recorded it, and the next start failed it with "no audio files". Imports now run in their own task, which holds the import lock until the job is recorded, so shutdown waits for them too. Each import logs its start and outcome with the job id.
+
 ## 0.1.48
 
 - **Imports file under the artist folder already there when names differ only in case** (sift 0.3.2). "The Squire Of Gothos" and "The Squire of Gothos" no longer make two folders; each part of the destination takes the spelling already on disk.

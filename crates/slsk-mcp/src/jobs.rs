@@ -721,7 +721,17 @@ impl Jobs {
         self.run_import(id, How::Match(release)).await
     }
 
+    /// In a task of its own, so a caller that stops waiting (a request its
+    /// client dropped) cannot cancel an import halfway: the file moves would
+    /// carry on in blocking threads, filing the album, and the job would
+    /// never record it. The task also holds the import lock until the job is
+    /// recorded, which is what `drain` waits on at shutdown.
     async fn run_import(self: &Arc<Self>, id: Uuid, how: How) -> Result<()> {
+        let jobs = self.clone();
+        tokio::spawn(async move { jobs.file(id, how).await }).await?
+    }
+
+    async fn file(self: &Arc<Self>, id: Uuid, how: How) -> Result<()> {
         let _lock = self.import_lock.lock().await;
         if self.closing.load(std::sync::atomic::Ordering::SeqCst) {
             return Ok(());
@@ -811,10 +821,18 @@ impl Jobs {
                 return Ok(());
             }
         }
+        tracing::info!(%id, title = %job.title, dir = %dir.display(), "import started");
         let outcome = match &how {
             How::Match(release) => self.tagger.import(&dir, release.as_deref()).await,
             How::AsIs(edits) => self.tagger.import_as_is(&dir, edits).await,
         };
+        match &outcome {
+            Ok(sift::Outcome::Imported { dir: path, .. }) => {
+                tracing::info!(%id, library = %path.display(), "import finished: filed")
+            }
+            Ok(sift::Outcome::Review { .. }) => tracing::info!(%id, "import finished: review"),
+            Err(e) => tracing::info!(%id, error = %e, "import finished: not filed"),
+        }
         match outcome {
             Ok(sift::Outcome::Imported { dir: path, log, .. }) => {
                 db::set_import_log(&self.db, id, &log).await?;
