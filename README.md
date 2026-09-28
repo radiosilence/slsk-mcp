@@ -90,7 +90,9 @@ different beets configurations disagrees with itself). `duplicates` and
 `refilePlan` only report; `binDuplicates` and `refile` act. Spare copies go to
 `<library>-bin`, beside the library rather than in it, so Navidrome and the
 shares stop seeing them and restoring one is a move back. Nothing deletes a
-file.
+file. `modifyAlbums` corrects tags on albums already filed (beets' `modify`,
+`field=value`) and re-files what the change moves, so a credit settled wrongly
+at import can be fixed later without touching the server by hand.
 
 Each import is followed by what beets' `replaygain`, `lastgenre` and `lyrics`
 plugins add: loudness normalisation for players, genres from MusicBrainz, and

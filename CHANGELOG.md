@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.42
+
+- `modifyAlbums(query, changes)` corrects tags on albums already in the library, with beets' `field=value` and `field!`, and re-files any the change moves; a move onto an existing album is refused and reported. Until now tags could only be settled while a job was in review. Backed by sift's `modify`.
+
 ## 0.1.41
 
 - A repeated `grab` returns the job the first one made. `grab` searches before it answers, which can outlast an MCP connector's timeout, and the retry started a second download of the same album. Grabs for one query now take turns, and each returns a job for that query made in the last day unless it failed.

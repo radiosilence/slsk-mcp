@@ -977,6 +977,28 @@ impl Mutation {
         Ok(app(ctx).library.refile(&query, true).await?)
     }
 
+    /// Correct tags on albums already in the library, then re-file any the
+    /// change moves: `modifyAlbums(query: ["album:consume the power"],
+    /// changes: ["albumartist=Black Sun Empire"])`. `query` is as for
+    /// `libraryAlbums` (check it matches only what is meant first); every
+    /// file of each matching album is changed. `changes` are `field=value`,
+    /// or `field!` to clear one. A move onto an existing album is refused,
+    /// never merged, and reported with the reason.
+    async fn modify_albums(
+        &self,
+        ctx: &Context<'_>,
+        query: Vec<String>,
+        changes: Vec<String>,
+    ) -> Result<Vec<crate::library::AlbumMove>> {
+        if query.iter().all(|q| q.trim().is_empty()) {
+            return Err(Error::new(
+                "give a query; this changes every file it matches",
+            ));
+        }
+        let (_, moves) = app(ctx).library.modify(&query, &changes).await?;
+        Ok(moves)
+    }
+
     /// Find an album and start fetching the best copy of it. The best copy is
     /// lossless (unless `filter.lossless` is false and nothing lossless
     /// exists), from a peer with a free slot, and mentions every word of the

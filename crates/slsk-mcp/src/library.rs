@@ -202,6 +202,56 @@ impl Library {
 
     /// Albums not where the current path rules put them. With `apply`, each
     /// is moved; albums whose plan collides with anything are left alone.
+    /// Set or clear tags on every file of the albums `query` matches, then
+    /// re-file those the change moves. `changes` are beets' `field=value` and
+    /// `field!`.
+    pub async fn modify(
+        &self,
+        query: &[String],
+        changes: &[String],
+    ) -> anyhow::Result<(usize, Vec<AlbumMove>)> {
+        let (stray, changes) =
+            manage::split_modify_args(changes).map_err(|e| anyhow::anyhow!(e))?;
+        if !stray.is_empty() {
+            anyhow::bail!(
+                "not a change: {}; changes are field=value or field!",
+                stray.join(" ")
+            );
+        }
+        if changes.is_empty() {
+            anyhow::bail!("no changes given");
+        }
+        let mut index = self.index.lock().await;
+        self.refresh(&mut index)?;
+        let report = manage::modify(
+            &self.cfg,
+            &mut index,
+            &Query::parse(query)?,
+            true,
+            &changes,
+            false,
+        )
+        .await?;
+        let mut moves: Vec<AlbumMove> = report
+            .moved
+            .into_iter()
+            .map(|(from, to)| AlbumMove {
+                from: from.to_string_lossy().into_owned(),
+                to: Some(to.to_string_lossy().into_owned()),
+                refused: None,
+                files: 0,
+            })
+            .collect();
+        moves.extend(report.left.into_iter().map(|(from, why)| AlbumMove {
+            from: from.to_string_lossy().into_owned(),
+            to: None,
+            refused: Some(why),
+            files: 0,
+        }));
+        tracing::info!(files = report.files.len(), query = ?query, "modified tags");
+        Ok((report.files.len(), moves))
+    }
+
     pub async fn refile(&self, query: &[String], apply: bool) -> anyhow::Result<Vec<AlbumMove>> {
         let mut index = self.index.lock().await;
         self.refresh(&mut index)?;
