@@ -877,6 +877,24 @@ pub(crate) async fn grab(
     wait: u64,
     filter: Option<Filter>,
 ) -> Result<db::Job> {
+    // A grab searches before it answers, which can outlast a caller's timeout,
+    // and a caller that times out asks again. Grabs for one query take turns,
+    // and each first looks for a job an earlier one made, so the retry gets
+    // that job rather than a second download of the same album.
+    let turn = {
+        static IN_FLIGHT: std::sync::LazyLock<
+            parking_lot::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+        > = std::sync::LazyLock::new(Default::default);
+        IN_FLIGHT
+            .lock()
+            .entry(query.trim().to_lowercase())
+            .or_default()
+            .clone()
+    };
+    let _turn = turn.lock().await;
+    if let Some(job) = db::live_grab(&app.db, query).await? {
+        return Ok(job);
+    }
     let strict = filter.is_some();
     let filter = filter.unwrap_or(Filter {
         lossless: true,
@@ -964,6 +982,11 @@ impl Mutation {
     /// exists), from a peer with a free slot, and mentions every word of the
     /// query in its path. The next four candidates are kept as fallbacks.
     /// Poll `job(id)` for progress; it ends `imported`, `review` or `failed`.
+    ///
+    /// The search takes `waitSeconds` or longer before this answers. Asking
+    /// again for the same query within a day, while that job has not failed,
+    /// returns that job rather than fetching the album twice, so a call that
+    /// timed out can simply be repeated. Grab one album per call.
     async fn grab(
         &self,
         ctx: &Context<'_>,

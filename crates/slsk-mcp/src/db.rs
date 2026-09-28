@@ -180,6 +180,18 @@ pub async fn job(db: &PgPool, id: Uuid) -> sqlx::Result<Option<Job>> {
         .await
 }
 
+/// The newest job a grab for `query` made in the last day, unless it failed:
+/// asking again for what is already on its way is the same request.
+pub async fn live_grab(db: &PgPool, query: &str) -> sqlx::Result<Option<Job>> {
+    sqlx::query_as(
+        "SELECT * FROM jobs WHERE lower(title) = lower($1) AND status <> 'failed' \
+         AND created_at > now() - interval '1 day' ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(query.trim())
+    .fetch_optional(db)
+    .await
+}
+
 pub async fn job_files(db: &PgPool, id: Uuid) -> sqlx::Result<Vec<JobFile>> {
     sqlx::query_as("SELECT * FROM job_files WHERE job_id = $1 ORDER BY subdir, remote")
         .bind(id)

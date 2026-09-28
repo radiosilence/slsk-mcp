@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.41
+
+- A repeated `grab` returns the job the first one made. `grab` searches before it answers, which can outlast an MCP connector's timeout, and the retry started a second download of the same album. Grabs for one query now take turns, and each returns a job for that query made in the last day unless it failed.
+
 ## 0.1.40
 
 - Lifetime totals that survive restarts: `slsk_lifetime_uploaded_bytes_total`, `slsk_lifetime_downloaded_bytes_total` and `slsk_lifetime_uploads_total{state}`, kept in a `totals` table. The engine's own counters start from zero with each process, and the upload history they could otherwise be read from is pruned after a few weeks.
