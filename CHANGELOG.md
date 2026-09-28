@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.50
+
+- **`duplicates` pairs one album tagged two ways** (sift 0.3.3, [#15](https://github.com/radiosilence/slsk-mcp/issues/15)). The same album under two album-artist spellings, or with track titles spelled differently, is paired when the album title and track count match and each track is within 3 seconds in length and closely titled. A spare paired only this way reads "the same album, tagged differently".
+
 ## 0.1.49
 
 - **An import runs to the end even when whoever asked for it stops waiting** ([#13](https://github.com/radiosilence/slsk-mcp/issues/13)). `resolveJob`, `approveJob`, `importAsIs` and the page's as-is button ran the import inside the request, so a dropped request cancelled it partway: sift's file moves carried on in blocking threads and filed the album, but the job never recorded it, and the next start failed it with "no audio files". Imports now run in their own task, which holds the import lock until the job is recorded, so shutdown waits for them too. Each import logs its start and outcome with the job id.
