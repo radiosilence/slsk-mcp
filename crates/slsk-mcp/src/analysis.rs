@@ -68,6 +68,10 @@ pub struct TrackAnalysis {
     pub estimate: Option<String>,
     #[graphql(skip)]
     pub spectrogram: Option<PathBuf>,
+    /// Frames that failed to decode. Any at all means the file is damaged
+    /// (a bad rip, or a transfer spliced from two copies) and is not imported.
+    #[serde(default)]
+    pub decode_errors: u32,
 }
 
 /// Analyse one file, writing its spectrogram to `spectrogram` if given.
@@ -127,6 +131,7 @@ struct Decoded {
     /// OR of every sample, as i32. Trailing zeros are padding.
     bit_mask: u32,
     frames: u64,
+    decode_errors: u32,
     /// Power spectrum per column, dB, FFT/2 bins.
     columns: Vec<Vec<f32>>,
     /// Mean linear power per bin across all columns.
@@ -182,6 +187,7 @@ fn decode(path: &Path) -> Result<Decoded> {
     let mut pending_start = 0usize;
     let mut next_column = 0usize;
     let mut frames = 0u64;
+    let mut decode_errors = 0u32;
     let mut bit_mask = 0u32;
     let mut interleaved: Vec<i32> = Vec::new();
     let mut columns = Vec::new();
@@ -200,7 +206,10 @@ fn decode(path: &Path) -> Result<Decoded> {
         }
         let audio = match decoder.decode(&packet) {
             Ok(a) => a,
-            Err(SymError::DecodeError(_)) => continue,
+            Err(SymError::DecodeError(_)) => {
+                decode_errors += 1;
+                continue;
+            }
             Err(e) => return Err(e.into()),
         };
         let channels = audio.spec().channels().count().max(1);
@@ -247,6 +256,7 @@ fn decode(path: &Path) -> Result<Decoded> {
         bits_per_sample: params.bits_per_sample,
         bit_mask,
         frames,
+        decode_errors,
         columns,
         mean_power,
     })
@@ -268,6 +278,7 @@ fn classify(d: &Decoded, file: String) -> TrackAnalysis {
         confidence: 0.0,
         estimate: None,
         spectrogram: None,
+        decode_errors: d.decode_errors,
     };
     if d.columns.len() < 8 {
         return out;
@@ -600,6 +611,7 @@ mod tests {
             confidence,
             estimate: None,
             spectrogram: None,
+            decode_errors: 0,
         };
         let tracks = [
             track(Verdict::Lossless, 0.9),
@@ -629,6 +641,7 @@ mod tests {
             confidence: 0.9,
             estimate: None,
             spectrogram: None,
+            decode_errors: 0,
         };
         let mut tracks = vec![track(Verdict::Lossless); 10];
         tracks.push(track(Verdict::Lossy));

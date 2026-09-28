@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.43
+
+- **Downloads are no longer spliced into damaged files.** Resuming a stalled transfer asks the peer to continue from what is already on disk; some peers send the whole file from the start regardless, and the engine appended that, producing a file of two copies joined together that plays as noise. Albums grabbed twice at once made this common, since the peer then served each file twice. The engine now compares the first bytes a resumed transfer sends with the start of the partial file, and starts the file over when they match.
+- **A copy that does not decode is never imported.** The pre-import analysis already decoded every file end to end, but skipped frames it could not decode without counting them. It counts them now (`decodeErrors` in a job's `analysis`), and a job with any damaged file fails with cause `corrupt_copy` and moves to the next source, whoever approved it.
+
 ## 0.1.42
 
 - `modifyAlbums(query, changes)` corrects tags on albums already in the library, with beets' `field=value` and `field!`, and re-files any the change moves; a move onto an existing album is refused and reported. Until now tags could only be settled while a job was in review. Backed by sift's `modify`.

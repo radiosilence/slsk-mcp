@@ -420,6 +420,16 @@ pub(crate) async fn on_file_connection(inner: Arc<Inner>, username: String, mut 
     }
 }
 
+/// How many bytes of a resumed file's start are compared with what the peer
+/// sends first.
+const RESUME_PROBE: u64 = 4096;
+
+/// Whether a peer asked to resume sent the file's start instead: its first
+/// bytes are the ones already at the start of the partial file.
+fn restarted(head: &[u8], first: &[u8]) -> bool {
+    !head.is_empty() && first.len() >= head.len() && first[..head.len()] == *head
+}
+
 async fn receive(inner: &Inner, d: &Download, mut conn: Conn) -> Result<(), Error> {
     let size = d.size.load(Ordering::Relaxed);
     let part = d.part();
@@ -439,8 +449,46 @@ async fn receive(inner: &Inner, d: &Download, mut conn: Conn) -> Result<(), Erro
     d.bytes.store(offset, Ordering::Relaxed);
     conn.stream.write_all(&file_offset(offset)).await?;
 
+    // What the peer sent before the loop below: the bytes already buffered
+    // with the token, and on a resume enough more to tell where it started.
+    let mut first: Vec<u8> = conn.buf.split().to_vec();
+    if offset > 0 {
+        // Asked to resume, a peer should send from `offset`. Some send the
+        // whole file from the start regardless, and appending that to what is
+        // already here splices two copies into one file that no longer
+        // decodes. Such a peer's first bytes are the file's own first bytes,
+        // which a continuation almost never is (every audio format opens with
+        // a header), so compare them and start over if they match.
+        let probe = offset.min(RESUME_PROBE) as usize;
+        let mut head = vec![0u8; probe];
+        tokio::fs::File::open(&part)
+            .await?
+            .read_exact(&mut head)
+            .await?;
+        while first.len() < probe {
+            let mut more = vec![0u8; probe - first.len()];
+            let n = tokio::time::timeout(Duration::from_secs(120), conn.stream.read(&mut more))
+                .await
+                .map_err(|_| Error::TimedOut)??;
+            if n == 0 {
+                break;
+            }
+            first.extend_from_slice(&more[..n]);
+        }
+        if restarted(&head, &first) {
+            tracing::warn!(
+                username = %d.username,
+                file = %d.filename,
+                offset,
+                "the peer ignored the resume offset and sent from the start; starting the file again"
+            );
+            file.set_len(0).await?;
+            offset = 0;
+            d.bytes.store(0, Ordering::Relaxed);
+        }
+    }
     let mut file = tokio::io::BufWriter::with_capacity(READ_CHUNK, file);
-    let leftover: Bytes = conn.buf.split().freeze();
+    let leftover: Bytes = first.into();
     let mut window = (Instant::now(), offset);
     let mut take = |n: usize, offset: &mut u64| {
         *offset += n as u64;
@@ -488,4 +536,21 @@ async fn receive(inner: &Inner, d: &Download, mut conn: Conn) -> Result<(), Erro
     // The downloader closes a finished transfer; the uploader must not.
     let _ = conn.stream.shutdown().await;
     Ok(())
+}
+
+#[cfg(test)]
+mod resume_tests {
+    use super::restarted;
+
+    #[test]
+    fn a_peer_that_starts_over_is_caught() {
+        let file = b"fLaC\x00\x00\x00\x22 the rest of a flac file, and its audio";
+        let head = &file[..16];
+        // Resumed properly: the bytes after the partial.
+        assert!(!restarted(head, &file[16..]));
+        // Sent from the start again.
+        assert!(restarted(head, file));
+        // Too little arrived to tell: not assumed to be a restart.
+        assert!(!restarted(head, &file[..8]));
+    }
 }

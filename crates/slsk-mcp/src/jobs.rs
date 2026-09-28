@@ -752,12 +752,34 @@ impl Jobs {
             incoming
         };
         db::set_status(&self.db, id, "importing", None).await?;
+        // A file that does not decode never goes in, whoever approved it: it
+        // plays as noise, and no judgement about the release changes that.
+        let tracks = self.analyse(id, &dir).await;
+        db::set_analysis(&self.db, id, &tracks).await?;
+        let damaged: Vec<_> = tracks.iter().filter(|t| t.decode_errors > 0).collect();
+        if !damaged.is_empty() {
+            let reason = format!(
+                "{} of {} files do not decode ({}): a damaged copy",
+                damaged.len(),
+                tracks.len(),
+                damaged
+                    .iter()
+                    .map(|t| format!("{}: {} bad frames", t.file, t.decode_errors))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            );
+            db::set_status(&self.db, id, "failed", Some(&reason)).await?;
+            self.event(&job, "failed", Some(cause::CORRUPT_COPY), Some(&reason))
+                .await;
+            if let Err(e) = self.next_source(id, cause::CORRUPT_COPY).await {
+                tracing::warn!(%id, error = %e, "damaged copy, and no other source: {reason}");
+            }
+            return Ok(());
+        }
         // A person who looked at the analysis and approved, or who named the
         // release, has already decided; everyone else gets the check.
         // An album sent here as-is was checked on its way to review.
         if !job.approved && matches!(how, How::Match(None)) {
-            let tracks = self.analyse(id, &dir).await;
-            db::set_analysis(&self.db, id, &tracks).await?;
             let (verdict, confidence) = crate::analysis::album_verdict(&tracks);
             if matches!(
                 verdict,
