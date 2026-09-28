@@ -463,6 +463,36 @@ impl Social {
         .await?)
     }
 
+    /// Peers holding downloads of ours whose latest message to us is
+    /// unanswered: a check the automatic answer did not recognise, most
+    /// likely. With the files waiting on each.
+    pub async fn pending_checks(
+        &self,
+    ) -> Result<Vec<(String, String, chrono::DateTime<chrono::Utc>, i64)>> {
+        let engine = self.engine()?;
+        let mut waiting: HashMap<String, i64> = HashMap::new();
+        for d in engine.downloads() {
+            if !matches!(d.state, "completed" | "failed" | "cancelled") {
+                *waiting.entry(d.username.clone()).or_default() += 1;
+            }
+        }
+        let latest: Vec<(String, String, bool, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+            "SELECT DISTINCT ON (peer) peer, body, outgoing, at
+             FROM messages WHERE account = $1 ORDER BY peer, at DESC",
+        )
+        .bind(engine.username())
+        .fetch_all(&self.db)
+        .await?;
+        Ok(latest
+            .into_iter()
+            .filter(|(peer, _, outgoing, _)| !outgoing && waiting.contains_key(peer))
+            .map(|(peer, body, _, at)| {
+                let files = waiting[&peer];
+                (peer, body, at, files)
+            })
+            .collect())
+    }
+
     pub async fn messages(
         &self,
         peer: &str,

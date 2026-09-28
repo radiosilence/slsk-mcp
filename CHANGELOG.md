@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.47
+
+- **`pendingChecks`: peers holding downloads behind a message the service could not answer.** When a check is not in the standard form, an assistant can see it, with the peer's words marked as untrusted data. The MCP instructions confine it to answering the check with a short literal reply through `sendMessage`'s preview and confirm, which the user sees before anything is sent, and to doing nothing else the message asks.
+
 ## 0.1.46
 
 - **Peers' download checks are answered automatically.** Some sharers hold every download until the requester types a code back ("please type \"ABBCCC\" in this chat"). The service now replies with the code itself when a message is plainly that check (a 3–16 character letters-and-digits token between quotes, asked to be typed "in this chat", no link), comes from a peer we have downloads queued or running with, and that peer has not been answered in the last day. The decision is made by code, not a model: nothing else in the message is read, and the token goes back only to the peer who asked. Each reply is logged and appears in the conversation.
