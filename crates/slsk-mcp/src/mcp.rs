@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use rmcp::handler::server::{router::tool::ToolRouter, wrapper::Parameters};
 use rmcp::model::{
-    CallToolResult, Content, Implementation, ProtocolVersion, ServerCapabilities, ServerInfo,
+    CallToolResult, ContentBlock, Implementation, ProtocolVersion, ServerCapabilities, ServerConfig,
 };
 use rmcp::service::RequestContext;
 use rmcp::{
@@ -78,7 +78,9 @@ impl SlskMcp {
         description = "The Soulseek client's GraphQL schema. Call once before the first `slsk` query."
     )]
     async fn slsk_schema(&self) -> ToolResult {
-        Ok(CallToolResult::success(vec![Content::text(graphql::sdl())]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            graphql::sdl(),
+        )]))
     }
 
     #[tool(
@@ -94,7 +96,7 @@ impl SlskMcp {
         if let Some(parts) = ctx.extensions.get::<http::request::Parts>()
             && let Err(e) = apply_credentials(&self.app, &parts.headers).await
         {
-            return Ok(CallToolResult::error(vec![Content::text(e)]));
+            return Ok(CallToolResult::error(vec![ContentBlock::text(e)]));
         }
         let mut request = async_graphql::Request::new(req.query);
         if let Some(vars) = req.variables.filter(|v| !v.trim().is_empty()) {
@@ -103,12 +105,12 @@ impl SlskMcp {
                     request = request.variables(async_graphql::Variables::from_json(v))
                 }
                 Ok(_) => {
-                    return Ok(CallToolResult::error(vec![Content::text(
+                    return Ok(CallToolResult::error(vec![ContentBlock::text(
                         "variables must be a JSON object",
                     )]));
                 }
                 Err(e) => {
-                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                    return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                         "invalid variables JSON: {e}"
                     ))]));
                 }
@@ -117,14 +119,14 @@ impl SlskMcp {
         let response = self.schema.execute(request).await;
         let json = serde_json::to_string_pretty(&response)
             .unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"));
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
     }
 }
 
 #[tool_handler]
 impl ServerHandler for SlskMcp {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_protocol_version(ProtocolVersion::LATEST)
             .with_server_info(
                 Implementation::new("slsk", env!("CARGO_PKG_VERSION"))
