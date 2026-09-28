@@ -876,6 +876,7 @@ pub(crate) async fn grab(
     query: &str,
     wait: u64,
     filter: Option<Filter>,
+    refetch: bool,
 ) -> Result<db::Job> {
     // A grab searches before it answers, which can outlast a caller's timeout,
     // and a caller that times out asks again. Grabs for one query take turns,
@@ -894,7 +895,8 @@ pub(crate) async fn grab(
     let _turn = turn.lock().await;
     // Unless what it imported has since left the library (binned as a spare
     // or a damaged copy): asking again is then asking for a new copy.
-    if let Some(job) = db::live_grab(&app.db, query).await?
+    if !refetch
+        && let Some(job) = db::live_grab(&app.db, query).await?
         && !(job.status == "imported"
             && job
                 .library_path
@@ -1017,15 +1019,18 @@ impl Mutation {
     /// again for the same query within a day, while that job has not failed,
     /// returns that job rather than fetching the album twice, so a call that
     /// timed out can simply be repeated. Grab one album per call.
+    /// `refetch: true` skips that and always fetches a new copy: for
+    /// replacing one that turned out bad.
     async fn grab(
         &self,
         ctx: &Context<'_>,
         query: String,
         #[graphql(default = 10)] wait_seconds: u64,
         filter: Option<Filter>,
+        #[graphql(default = false)] refetch: bool,
     ) -> Result<Job> {
         let app = app(ctx);
-        let job = grab(app, &query, wait_seconds, filter).await?;
+        let job = grab(app, &query, wait_seconds, filter, refetch).await?;
         job_view(app, job, true).await
     }
 

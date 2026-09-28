@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.45
+
+- `grab(refetch: true)` always fetches a new copy, skipping the check that hands back an earlier job for the same query: for replacing a copy that turned out bad while the old one is still in the library.
+
 ## 0.1.44
 
 - A repeated `grab` returns the earlier job only while what that job imported is still in the library. Once the album has been binned (a spare, or a damaged copy), asking again fetches a new copy instead of handing back the old job.

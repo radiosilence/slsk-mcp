@@ -870,7 +870,7 @@ async fn grab(State(s): State<UiState>, axum::Form(form): axum::Form<SearchForm>
         lossless: true,
         ..Default::default()
     });
-    match graphql::grab(&s.app, form.q.trim(), 10, filter).await {
+    match graphql::grab(&s.app, form.q.trim(), 10, filter, false).await {
         Ok(_) => one(jobs_html(&s.app).await),
         Err(e) => one(format!(
             r#"<div id="flash" class="flash error">{}</div>"#,
