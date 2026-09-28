@@ -137,6 +137,11 @@ received, answered and shed under load, distributed-network position, shared
 files, folders and bytes, jobs by status, unread messages and open wishes.
 Everything is a counter or a gauge with a small, fixed label set.
 
+The engine's counters start from zero with each process. What should outlast a
+deploy is kept in the database and read at scrape time: lifetime bytes up and
+down and uploads by outcome (`slsk_lifetime_*`), and distinct users served in
+the last day, week and ever (`slsk_served_users`).
+
 ## Configuration
 
 Read from the environment at start; a missing or malformed value fails

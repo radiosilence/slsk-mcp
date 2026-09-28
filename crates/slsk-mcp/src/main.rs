@@ -327,6 +327,44 @@ async fn state_metrics(app: &App, out: &mut String) {
         &[(String::new(), wishes)],
         "",
     );
+    let (day, week, ever) = db::served_user_counts(&app.db).await.unwrap_or_default();
+    gauge(
+        "slsk_served_users",
+        "Distinct users an upload has finished to, by how recently.",
+        &[
+            ("24h".to_string(), day),
+            ("7d".to_string(), week),
+            ("all".to_string(), ever),
+        ],
+        "window",
+    );
+    // Kept in the database, so a deploy does not reset them.
+    let totals = db::totals(&app.db).await.unwrap_or_default();
+    let total = |name: &str| {
+        totals
+            .iter()
+            .find(|(n, _)| n == name)
+            .map_or(0, |(_, v)| *v)
+    };
+    let _ = writeln!(
+        out,
+        "# HELP slsk_lifetime_uploaded_bytes_total Bytes sent to other users, ever.\n# TYPE slsk_lifetime_uploaded_bytes_total counter\nslsk_lifetime_uploaded_bytes_total {}",
+        total("uploaded_bytes")
+    );
+    let _ = writeln!(
+        out,
+        "# HELP slsk_lifetime_downloaded_bytes_total Bytes of files downloaded, ever.\n# TYPE slsk_lifetime_downloaded_bytes_total counter\nslsk_lifetime_downloaded_bytes_total {}",
+        total("downloaded_bytes")
+    );
+    let _ = writeln!(
+        out,
+        "# HELP slsk_lifetime_uploads_total Uploads that ended, ever, by how.\n# TYPE slsk_lifetime_uploads_total counter"
+    );
+    for (name, n) in &totals {
+        if let Some(state) = name.strip_prefix("uploads_") {
+            let _ = writeln!(out, "slsk_lifetime_uploads_total{{state=\"{state}\"}} {n}");
+        }
+    }
     // The history only grows, so its counts are counters: rate() over them
     // is how often each thing goes wrong.
     let _ = writeln!(

@@ -219,15 +219,29 @@ pub async fn set_file_state(
     state: &str,
     error: Option<&str>,
 ) -> sqlx::Result<()> {
-    sqlx::query("UPDATE job_files SET state = $4, error = $5 WHERE job_id = $1 AND peer = $2 AND remote = $3")
-        .bind(id)
-        .bind(peer)
-        .bind(remote)
-        .bind(state)
-        .bind(error)
-        .execute(db)
-        .await
-        .map(|_| ())
+    // A file's bytes count toward the lifetime total once, on the way into
+    // completed.
+    sqlx::query(
+        "WITH prev AS ( \
+             SELECT state, size FROM job_files \
+             WHERE job_id = $1 AND peer = $2 AND remote = $3 FOR UPDATE \
+         ), upd AS ( \
+             UPDATE job_files SET state = $4, error = $5 \
+             WHERE job_id = $1 AND peer = $2 AND remote = $3 \
+         ) \
+         INSERT INTO totals (name, value) \
+         SELECT 'downloaded_bytes', size FROM prev \
+         WHERE $4 = 'completed' AND prev.state <> 'completed' \
+         ON CONFLICT (name) DO UPDATE SET value = totals.value + EXCLUDED.value",
+    )
+    .bind(id)
+    .bind(peer)
+    .bind(remote)
+    .bind(state)
+    .bind(error)
+    .execute(db)
+    .await
+    .map(|_| ())
 }
 
 pub async fn delete_job(db: &PgPool, id: Uuid) -> sqlx::Result<()> {
@@ -415,6 +429,7 @@ pub async fn record_upload(
     t: &slsk_engine::TransferView,
     seconds: Option<f64>,
 ) -> sqlx::Result<()> {
+    let mut tx = db.begin().await?;
     sqlx::query(
         "INSERT INTO uploads (username, filename, size, bytes, state, error, seconds) \
          VALUES ($1, $2, $3, $4, $5, $6, $7)",
@@ -426,9 +441,29 @@ pub async fn record_upload(
     .bind(t.state)
     .bind(t.error.as_deref())
     .bind(seconds)
-    .execute(db)
+    .execute(&mut *tx)
     .await?;
-    Ok(())
+    sqlx::query(
+        "INSERT INTO totals (name, value) VALUES ('uploaded_bytes', $1), ('uploads_' || $2, 1) \
+         ON CONFLICT (name) DO UPDATE SET value = totals.value + EXCLUDED.value",
+    )
+    .bind(t.bytes as i64)
+    .bind(t.state)
+    .execute(&mut *tx)
+    .await?;
+    if t.state == "completed" {
+        sqlx::query(
+            "INSERT INTO served_users (username, first_served, last_served, uploads, bytes) \
+             VALUES (lower($1), now(), now(), 1, $2) \
+             ON CONFLICT (username) DO UPDATE SET last_served = now(), \
+                 uploads = served_users.uploads + 1, bytes = served_users.bytes + EXCLUDED.bytes",
+        )
+        .bind(&t.username)
+        .bind(t.bytes as i64)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await
 }
 
 pub async fn recent_uploads(db: &PgPool, limit: i64) -> sqlx::Result<Vec<UploadRow>> {
@@ -464,4 +499,26 @@ pub async fn prune_uploads(db: &PgPool, days: i32) -> sqlx::Result<u64> {
             .await?
             .rows_affected(),
     )
+}
+
+/// Lifetime totals by name: `uploaded_bytes`, `downloaded_bytes`, and
+/// `uploads_<state>`.
+pub async fn totals(db: &PgPool) -> sqlx::Result<Vec<(String, i64)>> {
+    sqlx::query_as("SELECT name, value FROM totals ORDER BY name")
+        .fetch_all(db)
+        .await
+}
+
+/// Distinct users an upload has finished to: in the last day, the last week,
+/// and ever.
+pub async fn served_user_counts(db: &PgPool) -> sqlx::Result<(i64, i64, i64)> {
+    sqlx::query_as(
+        "SELECT \
+             COUNT(*) FILTER (WHERE last_served >= now() - interval '1 day'), \
+             COUNT(*) FILTER (WHERE last_served >= now() - interval '7 days'), \
+             COUNT(*) \
+         FROM served_users",
+    )
+    .fetch_one(db)
+    .await
 }

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.40
+
+- Lifetime totals that survive restarts: `slsk_lifetime_uploaded_bytes_total`, `slsk_lifetime_downloaded_bytes_total` and `slsk_lifetime_uploads_total{state}`, kept in a `totals` table. The engine's own counters start from zero with each process, and the upload history they could otherwise be read from is pruned after a few weeks.
+- `slsk_served_users{window="24h"|"7d"|"all"}`: distinct users an upload has finished to, from a `served_users` table with each user's first and last upload. `slsk_upload_users` counted since the process started, so it read as zero after every deploy.
+- The migration seeds both from the history still held.
+
 ## 0.1.39
 
 - sift 0.3.1: Discogs is consulted when MusicBrainz has no strong match, given a token. The deploy package takes `discogsToken` and passes it to the service as `DISCOGS_TOKEN`.
