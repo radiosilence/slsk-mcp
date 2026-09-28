@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.46
+
+- **Peers' download checks are answered automatically.** Some sharers hold every download until the requester types a code back ("please type \"ABBCCC\" in this chat"). The service now replies with the code itself when a message is plainly that check (a 3–16 character letters-and-digits token between quotes, asked to be typed "in this chat", no link), comes from a peer we have downloads queued or running with, and that peer has not been answered in the last day. The decision is made by code, not a model: nothing else in the message is read, and the token goes back only to the peer who asked. Each reply is logged and appears in the conversation.
+
 ## 0.1.45
 
 - `grab(refetch: true)` always fetches a new copy, skipping the check that hands back an earlier job for the same query: for replacing a copy that turned out bad while the old one is still in the library.

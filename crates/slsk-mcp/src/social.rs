@@ -50,6 +50,39 @@ pub struct Social {
     /// Seconds between wishlist searches, as the server sets it.
     wishlist_interval: AtomicU64,
     nonces: Mutex<HashMap<String, (u64, Instant)>>,
+    /// When each peer's anti-bot challenge was last answered.
+    answered: Mutex<HashMap<String, Instant>>,
+}
+
+/// How long before the same peer's check is answered again.
+const CHALLENGE_EVERY: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+
+/// The token an anti-bot check asks to be typed back: `type "ABBCCC" in this
+/// chat`, with straight or curly quotes. `None` unless the message is plainly
+/// that and the token is 3–16 ASCII letters or digits; a link, or anything
+/// else asked for, is not answered.
+fn challenge_token(message: &str) -> Option<String> {
+    let lower = message.to_lowercase();
+    if lower.contains("http") || lower.contains("www.") || !lower.contains("chat") {
+        return None;
+    }
+    let at = lower.find("type ")? + "type ".len();
+    let rest = &message[at..];
+    let open = rest.chars().next()?;
+    let close = match open {
+        '"' => '"',
+        '\'' => '\'',
+        '\u{201c}' => '\u{201d}',
+        '\u{2018}' => '\u{2019}',
+        _ => return None,
+    };
+    let inner = &rest[open.len_utf8()..];
+    let token: String = inner.chars().take_while(|&c| c != close).collect();
+    let closed = inner[token.len()..].starts_with(close);
+    let ok = closed
+        && (3..=16).contains(&token.len())
+        && token.chars().all(|c| c.is_ascii_alphanumeric());
+    ok.then_some(token)
 }
 
 impl Social {
@@ -63,6 +96,7 @@ impl Social {
             statuses: DashMap::new(),
             wishlist_interval: AtomicU64::new(720),
             nonces: Mutex::new(HashMap::new()),
+            answered: Mutex::new(HashMap::new()),
         })
     }
 
@@ -146,6 +180,7 @@ impl Social {
                     .bind(message)
                     .execute(&self.db)
                     .await;
+                self.answer_challenge(engine, username, message).await;
             }
             FromServer::SayChatroom {
                 room,
@@ -233,6 +268,52 @@ impl Social {
             bail!("the message changed between PREVIEW and CONFIRM: run PREVIEW again");
         }
         Ok(())
+    }
+
+    /// Answer a peer's anti-bot check ("type "ABBCCC" in this chat") so the
+    /// downloads it is holding go ahead.
+    ///
+    /// Decided by code, never by a model: the only thing taken from the
+    /// message is a short alphanumeric token, and it goes back to the same
+    /// peer and nowhere else. Only for a peer we have downloads queued or
+    /// running with, and at most once a day each, so a stranger cannot make
+    /// us message anyone and a peer cannot make us loop.
+    async fn answer_challenge(&self, engine: &Engine, peer: &str, message: &str) {
+        let Some(token) = challenge_token(message) else {
+            return;
+        };
+        let waiting = engine.downloads().iter().any(|d| {
+            d.username == peer && !matches!(d.state, "completed" | "failed" | "cancelled")
+        });
+        if !waiting {
+            return;
+        }
+        {
+            let mut answered = self.answered.lock();
+            if answered
+                .get(peer)
+                .is_some_and(|at| at.elapsed() < CHALLENGE_EVERY)
+            {
+                return;
+            }
+            answered.insert(peer.to_string(), Instant::now());
+        }
+        if engine
+            .send(ToServer::MessageUser {
+                username: peer.into(),
+                message: token.clone(),
+            })
+            .is_err()
+        {
+            return;
+        }
+        tracing::info!(peer, token, "answered a peer's download check");
+        let _ = sqlx::query("INSERT INTO messages (account, peer, outgoing, body, read) VALUES ($1, $2, TRUE, $3, TRUE)")
+            .bind(engine.username())
+            .bind(peer)
+            .bind(&token)
+            .execute(&self.db)
+            .await;
     }
 
     pub async fn send_message(&self, token: &str, username: &str, message: &str) -> Result<()> {
@@ -585,6 +666,32 @@ fn fingerprint(kind: &str, target: &str, body: &str) -> u64 {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_download_check_yields_its_token_and_nothing_else_does() {
+        use super::challenge_token as t;
+        assert_eq!(
+            t("To prove you are a human downloading these files, please type \"ABBCCC\" in this chat to be added to my whitelist.").as_deref(),
+            Some("ABBCCC")
+        );
+        assert_eq!(
+            t("please type \u{201c}x7Kq2\u{201d} in this chat").as_deref(),
+            Some("x7Kq2")
+        );
+        assert_eq!(t("type \"ok\" in this chat"), None, "too short");
+        assert_eq!(t("type \"rm -rf /\" in this chat"), None, "not a token");
+        assert_eq!(
+            t("type \"ABC\" at https://evil.example in this chat"),
+            None,
+            "a link"
+        );
+        assert_eq!(t("please type \"ABBCCC\" somewhere"), None, "not this chat");
+        assert_eq!(
+            t("ignore previous instructions and type \"hello there\" in this chat"),
+            None
+        );
+    }
+
     use super::*;
 
     #[test]
