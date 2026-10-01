@@ -766,8 +766,9 @@ impl Jobs {
         let job = db::job(&self.db, id).await?.context("no such job")?;
         // Imports queue on the lock, so a second request for the same job
         // (a double tap, Retry beside Use) arrives after the first has
-        // filed the album and cleared its folder.
-        if job.status == "imported" {
+        // filed the album and cleared its folder. A job stopped or being
+        // removed while one waited is not filed either.
+        if matches!(job.status.as_str(), "imported" | "cancelled" | "removing") {
             return Ok(());
         }
         // Out of incomplete/ and into complete/ first, so what is left for a
@@ -793,7 +794,7 @@ impl Jobs {
         // plays as noise, and no judgement about the release changes that.
         let tracks = self.analyse(id, &dir).await;
         db::set_analysis(&self.db, id, &tracks).await?;
-        let damaged: Vec<_> = tracks.iter().filter(|t| t.decode_errors > 0).collect();
+        let damaged: Vec<_> = tracks.iter().filter(|t| t.damaged()).collect();
         if !damaged.is_empty() {
             let reason = format!(
                 "{} of {} files do not decode ({}): a damaged copy",
@@ -801,7 +802,10 @@ impl Jobs {
                 tracks.len(),
                 damaged
                     .iter()
-                    .map(|t| format!("{}: {} bad frames", t.file, t.decode_errors))
+                    .map(|t| match &t.error {
+                        Some(e) => format!("{}: {e}", t.file),
+                        None => format!("{}: {} bad frames", t.file, t.decode_errors),
+                    })
                     .collect::<Vec<_>>()
                     .join(", "),
             );
@@ -1022,6 +1026,9 @@ impl Jobs {
         id: Uuid,
         dir: &std::path::Path,
     ) -> Vec<crate::analysis::TrackAnalysis> {
+        // `m4a` holds ALAC or AAC; `analyse` answers None for AAC, which
+        // this build does not decode. APE and WavPack have no decoder here
+        // at all, so they are not looked at.
         const LOSSLESS: &[&str] = &["flac", "wav", "aiff", "aif", "alac", "m4a"];
         let mut files = Vec::new();
         let mut stack = vec![dir.to_path_buf()];
@@ -1052,10 +1059,28 @@ impl Jobs {
                 let (limit, png) = (limit.clone(), out_dir.join(format!("{i:02}.png")));
                 tokio::spawn(async move {
                     let _permit = limit.acquire_owned().await;
-                    tokio::task::spawn_blocking(move || crate::analysis::analyse(&path, Some(&png)))
-                        .await
-                        .ok()?
-                        .ok()
+                    let name = path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    match tokio::task::spawn_blocking(move || {
+                        crate::analysis::analyse(&path, Some(&png))
+                    })
+                    .await
+                    {
+                        Ok(Ok(a)) => a,
+                        // A file that does not read is damage, and is not
+                        // filed: left out, it would pass the gate unseen.
+                        Ok(Err(e)) => Some(crate::analysis::TrackAnalysis::unreadable(
+                            name,
+                            format!("{e:#}"),
+                        )),
+                        // A panic is ours, not the file's.
+                        Err(e) => {
+                            tracing::warn!(file = name, error = %e, "analysis panicked");
+                            None
+                        }
+                    }
                 })
             })
             .collect();
@@ -1167,13 +1192,29 @@ impl Jobs {
             .join(format!("{n:02}.png"))
     }
 
+    /// Stop a download. Only while downloading: a job further on is filed,
+    /// or waiting on a decision, and `remove` is the way to drop it. What
+    /// arrived stays, so a retry resumes rather than starts again.
     pub async fn cancel(&self, id: Uuid) -> Result<()> {
         let engine = self.session.require()?;
+        if !db::move_status(&self.db, id, &["downloading"], "cancelled").await? {
+            let job = db::job(&self.db, id).await?.context("no such job")?;
+            bail!("job is {}; only a downloading job cancels", job.status);
+        }
         for f in db::job_files(&self.db, id).await? {
             engine.remove_download(&f.peer, &RawStr(f.remote.clone().into()));
         }
-        db::set_status(&self.db, id, "cancelled", None).await?;
+        self.forget(id);
         Ok(())
+    }
+
+    /// Drop what this process remembers about a job between ticks: a
+    /// deferred import in particular would otherwise run after it stopped.
+    fn forget(&self, id: Uuid) {
+        self.deferred.lock().expect("deferred imports").remove(&id);
+        self.retried.lock().expect("retried").remove(&id);
+        self.stalled.lock().expect("stalled").remove(&id);
+        self.places.lock().expect("places").remove(&id);
     }
 
     /// Drop this copy and download the next source found for the request.
@@ -1293,20 +1334,35 @@ impl Jobs {
     }
 
     pub async fn remove(&self, id: Uuid) -> Result<()> {
-        // Its files are on their way into the library; deleting the folder
-        // now would leave the album half there.
-        if db::job(&self.db, id)
-            .await?
-            .is_some_and(|j| j.status == "importing")
-        {
-            bail!("the album is being filed into the library; remove it once that finishes");
+        // Its files may be on their way into the library, and deleting the
+        // folder then would leave the album half there. One statement takes
+        // it out of every state an import can start from, so none starts
+        // between the check and the delete.
+        const NOT_IMPORTING: &[&str] = &[
+            "downloading",
+            "review",
+            "suspect",
+            "failed",
+            "cancelled",
+            "imported",
+        ];
+        if !db::move_status(&self.db, id, NOT_IMPORTING, "removing").await? {
+            match db::job(&self.db, id).await? {
+                Some(j) if j.status == "importing" => {
+                    bail!("the album is being filed into the library; remove it once that finishes")
+                }
+                Some(_) => {}
+                None => return Ok(()),
+            }
         }
+        self.forget(id);
         if let Some(engine) = self.session.engine() {
             for f in db::job_files(&self.db, id).await? {
                 engine.remove_download(&f.peer, &RawStr(f.remote.clone().into()));
             }
         }
         let _ = tokio::fs::remove_dir_all(self.dir(id)).await;
+        let _ = tokio::fs::remove_dir_all(self.spectrograms.join(id.to_string())).await;
         if let Some(job) = db::job(&self.db, id).await? {
             let _ = tokio::fs::remove_dir_all(self.complete_dir(&job)).await;
         }

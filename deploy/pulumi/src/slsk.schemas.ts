@@ -21,8 +21,8 @@ export const SlskConfSchema = z.strictObject({
   /** Nominal; a local volume has whatever the drive has. */
   capacity: z.string().default("2Ti"),
   /**
-   * The service's own state on the node's internal disk: Postgres and the
-   * share-probe cache. Not the media drive —
+   * The service's own state on the node's internal disk: its SQLite
+   * database, the library index and the share-probe cache. Not the media drive —
    * this is the machine's state, and should not go missing when the drive
    * does. Created and handed to uid 1000 by an init container.
    */
@@ -49,12 +49,6 @@ export const SlskConfSchema = z.strictObject({
   description: z.string().default(""),
   limits: ResourcesSchema.default({ cpu: "2", memory: "1Gi" }),
   requests: ResourcesSchema.optional(),
-  postgres: z
-    .strictObject({
-      limits: ResourcesSchema.default({ cpu: "500m", memory: "256Mi" }),
-      requests: ResourcesSchema.optional(),
-    })
-    .prefault({}),
 });
 
 /** Every path the service uses must sit inside the one volume it mounts. */

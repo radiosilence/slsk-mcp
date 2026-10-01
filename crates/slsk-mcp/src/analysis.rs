@@ -72,13 +72,47 @@ pub struct TrackAnalysis {
     /// (a bad rip, or a transfer spliced from two copies) and is not imported.
     #[serde(default)]
     pub decode_errors: u32,
+    /// Why the file could not be read at all, when it could not: it counts as
+    /// damaged, like a file with frames that fail to decode.
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+impl TrackAnalysis {
+    /// A file that could not be read: damaged, whatever it claims to be.
+    pub fn unreadable(file: String, error: String) -> Self {
+        Self {
+            file,
+            sample_rate: 0,
+            bits_per_sample: None,
+            effective_bits: None,
+            duration_secs: 0.0,
+            cutoff_hz: None,
+            drop_db: None,
+            verdict: Verdict::Unknown,
+            confidence: 0.0,
+            estimate: None,
+            spectrogram: None,
+            decode_errors: 1,
+            error: Some(error),
+        }
+    }
+
+    pub fn damaged(&self) -> bool {
+        self.decode_errors > 0 || self.error.is_some()
+    }
 }
 
 /// Analyse one file, writing its spectrogram to `spectrogram` if given.
+/// `None` for audio in a codec this build does not decode (AAC in an `.m4a`,
+/// which is lossy and needs no analysis); an error for a file that does not
+/// read, which is damage.
 ///
 /// CPU-bound for a few seconds per track; call it from a blocking thread.
-pub fn analyse(path: &Path, spectrogram: Option<&Path>) -> Result<TrackAnalysis> {
-    let decoded = decode(path)?;
+pub fn analyse(path: &Path, spectrogram: Option<&Path>) -> Result<Option<TrackAnalysis>> {
+    let Some(decoded) = decode(path)? else {
+        return Ok(None);
+    };
     let file = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -90,7 +124,7 @@ pub fn analyse(path: &Path, spectrogram: Option<&Path>) -> Result<TrackAnalysis>
         render(&decoded, analysis.cutoff_hz, out)?;
         analysis.spectrogram = Some(out.to_path_buf());
     }
-    Ok(analysis)
+    Ok(Some(analysis))
 }
 
 /// Album-level reading: the album is suspect if a quarter of its tracks are
@@ -138,7 +172,7 @@ struct Decoded {
     mean_power: Vec<f64>,
 }
 
-fn decode(path: &Path) -> Result<Decoded> {
+fn decode(path: &Path) -> Result<Option<Decoded>> {
     let src = std::fs::File::open(path).with_context(|| format!("open {}", path.display()))?;
     let mss = MediaSourceStream::new(Box::new(src), Default::default());
     let mut hint = Hint::new();
@@ -167,9 +201,11 @@ fn decode(path: &Path) -> Result<Decoded> {
     let sample_rate = params
         .sample_rate
         .ok_or_else(|| anyhow!("unknown sample rate"))?;
-    let mut decoder = symphonia::default::get_codecs()
+    let Ok(mut decoder) = symphonia::default::get_codecs()
         .make_audio_decoder(&params, &AudioDecoderOptions::default())
-        .context("unsupported codec")?;
+    else {
+        return Ok(None);
+    };
 
     let hop = match total_frames {
         Some(n) if n > FFT as u64 => ((n - FFT as u64) / COLUMNS).max(FFT as u64 / 4),
@@ -251,7 +287,7 @@ fn decode(path: &Path) -> Result<Decoded> {
         let n = columns.len() as f64;
         mean_power.iter_mut().for_each(|p| *p /= n);
     }
-    Ok(Decoded {
+    Ok(Some(Decoded {
         sample_rate,
         bits_per_sample: params.bits_per_sample,
         bit_mask,
@@ -259,7 +295,7 @@ fn decode(path: &Path) -> Result<Decoded> {
         decode_errors,
         columns,
         mean_power,
-    })
+    }))
 }
 
 fn classify(d: &Decoded, file: String) -> TrackAnalysis {
@@ -279,6 +315,7 @@ fn classify(d: &Decoded, file: String) -> TrackAnalysis {
         estimate: None,
         spectrogram: None,
         decode_errors: d.decode_errors,
+        error: None,
     };
     if d.columns.len() < 8 {
         return out;
@@ -534,12 +571,23 @@ mod tests {
     }
 
     #[test]
+    fn a_file_that_does_not_read_is_an_error_and_counts_as_damage() {
+        let dir = tmp();
+        let path = dir.join("broken.flac");
+        std::fs::write(&path, b"fLaC but not really").unwrap();
+        let e = analyse(&path, None).unwrap_err();
+        let t = TrackAnalysis::unreadable("broken.flac".into(), format!("{e:#}"));
+        assert!(t.damaged());
+    }
+
+    #[test]
     fn full_band_noise_is_lossless() {
         let dir = tmp();
         let a = analyse(
             &wav(&dir, "full.wav", RATE, &noise(RATE, 8, None)),
             Some(&dir.join("full.png")),
         )
+        .unwrap()
         .unwrap();
         assert_eq!(a.verdict, Verdict::Lossless, "{a:?}");
         assert!(dir.join("full.png").exists());
@@ -552,6 +600,7 @@ mod tests {
             &wav(&dir, "lp.wav", RATE, &noise(RATE, 8, Some(16_000.0))),
             None,
         )
+        .unwrap()
         .unwrap();
         assert_eq!(a.verdict, Verdict::Lossy, "{a:?}");
         let cutoff = a.cutoff_hz.unwrap();
@@ -566,6 +615,7 @@ mod tests {
             &wav(&dir, "v0.wav", RATE, &noise(RATE, 8, Some(19_500.0))),
             None,
         )
+        .unwrap()
         .unwrap();
         assert_eq!(a.verdict, Verdict::Lossy, "{a:?}");
         assert!(a.confidence < 0.8);
@@ -580,6 +630,7 @@ mod tests {
             &wav(&dir, "up.wav", 96_000, &noise(96_000, 4, Some(21_000.0))),
             None,
         )
+        .unwrap()
         .unwrap();
         assert_eq!(a.verdict, Verdict::Upsampled, "{a:?}");
     }
@@ -593,6 +644,7 @@ mod tests {
             &wav(&dir, "real.wav", 96_000, &noise(96_000, 4, Some(44_000.0))),
             None,
         )
+        .unwrap()
         .unwrap();
         assert_eq!(a.verdict, Verdict::Lossless, "{a:?}");
     }
@@ -612,6 +664,7 @@ mod tests {
             estimate: None,
             spectrogram: None,
             decode_errors: 0,
+            error: None,
         };
         let tracks = [
             track(Verdict::Lossless, 0.9),
@@ -642,6 +695,7 @@ mod tests {
             estimate: None,
             spectrogram: None,
             decode_errors: 0,
+            error: None,
         };
         let mut tracks = vec![track(Verdict::Lossless); 10];
         tracks.push(track(Verdict::Lossy));

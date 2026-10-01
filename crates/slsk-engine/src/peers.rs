@@ -56,10 +56,13 @@ pub(crate) struct Peers {
 pub(crate) fn on_address(inner: &Inner, username: &str, ip: Ipv4Addr, port: u32) {
     let addr = SocketAddrV4::new(ip, port as u16);
     if port != 0 && !ip.is_unspecified() {
-        inner
-            .peers
-            .addresses
-            .insert(username.to_string(), (addr, Instant::now()));
+        let addresses = &inner.peers.addresses;
+        // Every peer ever asked about otherwise stays; past a few thousand,
+        // the stale go.
+        if addresses.len() >= 4096 {
+            addresses.retain(|_, (_, at)| at.elapsed() < ADDRESS_TTL);
+        }
+        addresses.insert(username.to_string(), (addr, Instant::now()));
     }
     if let Some((_, waiters)) = inner.peers.address_waiters.remove(username) {
         for w in waiters {
@@ -90,8 +93,9 @@ async fn address(inner: &Inner, username: &str) -> Result<SocketAddrV4> {
     inner.send_server(ToServer::GetPeerAddress {
         username: username.to_string(),
     })?;
-    let addr = tokio::time::timeout(Duration::from_secs(15), rx)
-        .await
+    let addr = tokio::time::timeout(Duration::from_secs(15), rx).await;
+    crate::forget_closed(&inner.peers.address_waiters, username);
+    let addr = addr
         .map_err(|_| Error::TimedOut)?
         .map_err(|_| Error::TimedOut)?;
     if addr.port() == 0 || addr.ip().is_unspecified() {

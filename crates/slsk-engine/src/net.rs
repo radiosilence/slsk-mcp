@@ -104,9 +104,12 @@ async fn read_frame<R: AsyncReadExt + Unpin>(
 /// queueing in memory.
 pub fn spawn_writer(mut half: OwnedWriteHalf, mut rx: mpsc::Receiver<bytes::Bytes>) {
     tokio::spawn(async move {
+        // A peer that stops reading while its connection stays up would
+        // hold this task, and the frames queued for it, for good.
         while let Some(frame) = rx.recv().await {
-            if half.write_all(&frame).await.is_err() {
-                break;
+            match tokio::time::timeout(Duration::from_secs(120), half.write_all(&frame)).await {
+                Ok(Ok(())) => {}
+                _ => break,
             }
         }
         let _ = half.shutdown().await;

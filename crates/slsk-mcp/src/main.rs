@@ -13,7 +13,6 @@ mod graphql;
 mod jobs;
 mod library;
 mod mcp;
-mod pg_import;
 mod session;
 mod social;
 mod ui;
@@ -54,7 +53,8 @@ async fn main() -> anyhow::Result<()> {
         Some("analyse") => {
             for path in std::env::args().skip(2) {
                 match analysis::analyse(std::path::Path::new(&path), None) {
-                    Ok(a) => println!("{}", serde_json::to_string(&a)?),
+                    Ok(Some(a)) => println!("{}", serde_json::to_string(&a)?),
+                    Ok(None) => eprintln!("{path}: a codec this build does not analyse"),
                     Err(e) => eprintln!("{path}: {e:#}"),
                 }
             }
@@ -80,16 +80,6 @@ async fn main() -> anyhow::Result<()> {
     let db = db::Db::open(&cfg.state_dir.join("slsk.db"))
         .await
         .context("database")?;
-    if let Some(url) = &cfg.import_from {
-        // History is worth keeping, not worth staying down for: the account
-        // also comes from the environment.
-        if let Err(e) = pg_import::run(&db, url).await {
-            tracing::error!(
-                error = format!("{e:#}"),
-                "importing from Postgres failed; starting without its history"
-            );
-        }
-    }
     {
         let db = db.clone();
         tokio::spawn(async move {
