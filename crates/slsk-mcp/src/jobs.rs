@@ -88,8 +88,8 @@ pub struct Jobs {
     /// Spectrograms, one directory per job.
     spectrograms: PathBuf,
     tagger: Arc<sift::Importer>,
-    /// Where a copy a replacing import sets aside goes: the library's bin.
-    bin: PathBuf,
+    /// Its bin is where a copy a replacing import sets aside goes.
+    library: Arc<crate::library::Library>,
     /// Imports touch the library tree; one at a time keeps two albums from
     /// racing for the same destination.
     import_lock: Mutex<()>,
@@ -127,10 +127,10 @@ impl Jobs {
         complete: PathBuf,
         spectrograms: PathBuf,
         tagger: Arc<sift::Importer>,
-        bin: PathBuf,
+        library: Arc<crate::library::Library>,
     ) -> Arc<Self> {
         Arc::new(Self {
-            bin,
+            library,
             db,
             session,
             staging,
@@ -831,7 +831,7 @@ impl Jobs {
         let outcome = match &how {
             How::Match(release) if job.replaces => {
                 self.tagger
-                    .import_replacing(&dir, release.as_deref(), &self.bin)
+                    .import_replacing(&dir, release.as_deref(), self.library.bin())
                     .await
             }
             How::Match(release) => self.tagger.import(&dir, release.as_deref()).await,
@@ -853,7 +853,12 @@ impl Jobs {
                 let _ = tokio::fs::remove_dir_all(&dir).await;
                 // Gain, genres and lyrics, off the import path: an album is
                 // playable as soon as it is filed, and these only add to it.
-                let (tagger, engine) = (self.tagger.clone(), self.session.engine().cloned());
+                self.library.changed();
+                let (tagger, engine, library) = (
+                    self.tagger.clone(),
+                    self.session.engine().cloned(),
+                    self.library.clone(),
+                );
                 tokio::spawn(async move {
                     match tagger.enrich(&path).await {
                         Ok(e) => tracing::info!(
@@ -868,6 +873,7 @@ impl Jobs {
                             tracing::warn!(album = %path.display(), error = %e, "could not enrich")
                         }
                     }
+                    library.changed();
                     if let Some(engine) = engine {
                         engine.rescan().await;
                     }

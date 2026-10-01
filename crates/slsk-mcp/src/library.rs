@@ -14,7 +14,14 @@ use sift::manage::{self, Plan};
 use tokio::sync::Mutex;
 
 pub struct Library {
-    index: Mutex<sift::library::Library>,
+    /// Answers queries, from the index as last refreshed. Its own
+    /// connection, so a read is never queued behind a scan: under SQLite's
+    /// WAL it sees the last committed state while the writer works.
+    reader: Mutex<sift::library::Library>,
+    /// Scans the files, and makes every change to them.
+    writer: Mutex<sift::library::Library>,
+    /// Wakes the refresh loop.
+    stale: tokio::sync::Notify,
     cfg: sift::Config,
     bin: PathBuf,
     tagger: std::sync::Arc<sift::Importer>,
@@ -91,7 +98,9 @@ impl Library {
         bin: PathBuf,
     ) -> anyhow::Result<Self> {
         Ok(Self {
-            index: Mutex::new(sift::library::Library::open(index)?.with_workers(2)),
+            writer: Mutex::new(sift::library::Library::open(index)?.with_workers(2)),
+            reader: Mutex::new(sift::library::Library::open(index)?),
+            stale: tokio::sync::Notify::new(),
             cfg: tagger.cfg.clone(),
             bin,
             tagger,
@@ -100,6 +109,11 @@ impl Library {
 
     pub fn root(&self) -> &Path {
         &self.cfg.directory
+    }
+
+    /// Where spare and replaced copies go.
+    pub fn bin(&self) -> &Path {
+        &self.bin
     }
 
     /// Bring the index up to date with the files. Incremental: only files
@@ -118,20 +132,50 @@ impl Library {
         Ok(())
     }
 
-    /// Index the library at startup, so the first query does not wait for a
-    /// full read of it.
-    pub async fn warm(&self) {
-        let mut index = self.index.lock().await;
-        if let Err(e) = self.refresh(&mut index) {
-            tracing::warn!(error = %e, "library index update failed");
+    /// Keep the index following the files: at startup, whenever
+    /// [`Self::changed`] is called, and every so often for changes made
+    /// outside this service. Requests that arrive during a refresh coalesce
+    /// into one more.
+    pub async fn follow(&self) {
+        const EVERY: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+        loop {
+            {
+                let mut index = self.writer.lock().await;
+                if let Err(e) = self.refresh(&mut index) {
+                    tracing::warn!(error = %e, "library index update failed");
+                }
+            }
+            tokio::select! {
+                () = self.stale.notified() => {}
+                () = tokio::time::sleep(EVERY) => {}
+            }
         }
     }
 
-    pub async fn albums(&self, query: &[String]) -> anyhow::Result<Vec<LibraryAlbum>> {
-        let mut index = self.index.lock().await;
+    /// The files changed under the index: have it read them again soon.
+    pub fn changed(&self) {
+        self.stale.notify_one();
+    }
+
+    /// The writer, after bringing the index up to date: a change is made
+    /// only to what is there now.
+    async fn write(&self) -> anyhow::Result<tokio::sync::MutexGuard<'_, sift::library::Library>> {
+        let mut index = self.writer.lock().await;
         self.refresh(&mut index)?;
-        Ok(index
-            .albums(&Query::parse(query)?)?
+        Ok(index)
+    }
+
+    /// Albums matching `query`, from the index as it stands.
+    async fn read(&self, query: &[String]) -> anyhow::Result<Vec<Album>> {
+        let query = Query::parse(query)?;
+        let index = self.reader.lock().await;
+        Ok(tokio::task::block_in_place(|| index.albums(&query))?)
+    }
+
+    pub async fn albums(&self, query: &[String]) -> anyhow::Result<Vec<LibraryAlbum>> {
+        Ok(self
+            .read(query)
+            .await?
             .iter()
             .map(LibraryAlbum::from)
             .collect())
@@ -144,15 +188,17 @@ impl Library {
         query: &[String],
         bin: bool,
     ) -> anyhow::Result<Vec<DuplicateSet>> {
-        let mut index = self.index.lock().await;
-        self.refresh(&mut index)?;
-        let albums = index.albums(&Query::parse(query)?)?;
+        let mut writer = if bin { Some(self.write().await?) } else { None };
+        let albums = match &writer {
+            Some(w) => tokio::task::block_in_place(|| w.albums(&Query::parse(query)?))?,
+            None => self.read(query).await?,
+        };
         let mut out = Vec::new();
         for d in manage::duplicates(&self.cfg, &albums) {
             let mut spares = Vec::new();
             for (album, reason) in &d.others {
-                let binned_to = if bin {
-                    let to = manage::bin(&mut index, &self.cfg.directory, &self.bin, album).await?;
+                let binned_to = if let Some(index) = writer.as_deref_mut() {
+                    let to = manage::bin(index, &self.cfg.directory, &self.bin, album).await?;
                     tracing::info!(
                         from = %album.dir.display(),
                         to = %to.display(),
@@ -181,13 +227,8 @@ impl Library {
     /// gets. Rewrites tags (only those fields) across what the query
     /// matches, so it is for a deliberate backfill.
     pub async fn enrich(&self, query: &[String]) -> anyhow::Result<Vec<EnrichedAlbum>> {
-        let albums = {
-            let mut index = self.index.lock().await;
-            self.refresh(&mut index)?;
-            index.albums(&Query::parse(query)?)?
-        };
         let mut out = Vec::new();
-        for a in albums {
+        for a in self.read(query).await? {
             let e = self.tagger.enrich(&a.dir).await?;
             out.push(EnrichedAlbum {
                 path: a.dir.to_string_lossy().into_owned(),
@@ -197,6 +238,7 @@ impl Library {
                 problems: e.problems,
             });
         }
+        self.changed();
         Ok(out)
     }
 
@@ -221,8 +263,7 @@ impl Library {
         if changes.is_empty() {
             anyhow::bail!("no changes given");
         }
-        let mut index = self.index.lock().await;
-        self.refresh(&mut index)?;
+        let mut index = self.write().await?;
         let report = manage::modify(
             &self.cfg,
             &mut index,
@@ -253,10 +294,17 @@ impl Library {
     }
 
     pub async fn refile(&self, query: &[String], apply: bool) -> anyhow::Result<Vec<AlbumMove>> {
-        let mut index = self.index.lock().await;
-        self.refresh(&mut index)?;
+        let mut writer = if apply {
+            Some(self.write().await?)
+        } else {
+            None
+        };
+        let albums = match &writer {
+            Some(w) => tokio::task::block_in_place(|| w.albums(&Query::parse(query)?))?,
+            None => self.read(query).await?,
+        };
         let mut out = Vec::new();
-        for album in index.albums(&Query::parse(query)?)? {
+        for album in albums {
             let from = album.dir.to_string_lossy().into_owned();
             match manage::plan_move(&self.cfg, &album) {
                 Plan::InPlace => {}
@@ -271,8 +319,8 @@ impl Library {
                         .first()
                         .and_then(|m| m.to.parent())
                         .map(|p| p.to_string_lossy().into_owned());
-                    if apply {
-                        manage::execute(&mut index, &album, &moves).await?;
+                    if let Some(index) = writer.as_deref_mut() {
+                        manage::execute(index, &album, &moves).await?;
                         tracing::info!(from, to = ?to, "re-filed an album");
                     }
                     out.push(AlbumMove {
