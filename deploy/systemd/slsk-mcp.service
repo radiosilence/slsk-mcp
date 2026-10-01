@@ -1,9 +1,9 @@
-# The static binary under systemd, for a host without containers. Postgres is
-# assumed local. Put the secrets in /etc/slsk-mcp/env (mode 600):
-#   DATABASE_URL, SEAL_KEY, SLSK_USERNAME, SLSK_PASSWORD, OIDC_CLIENT_SECRET
+# The static binary under systemd, for a host without containers. Put the
+# secrets in /etc/slsk-mcp/env (mode 600):
+#   SEAL_KEY, SLSK_USERNAME, SLSK_PASSWORD, OIDC_CLIENT_SECRET
 [Unit]
 Description=slsk-mcp Soulseek client
-After=network-online.target postgresql.service
+After=network-online.target
 Wants=network-online.target
 
 [Service]

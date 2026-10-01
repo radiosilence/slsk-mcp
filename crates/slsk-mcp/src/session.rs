@@ -10,7 +10,6 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use slsk_engine::{Engine, EngineConfig, Event, Status};
-use sqlx::PgPool;
 use tokio::sync::{Mutex, OnceCell};
 
 use crate::config::Config;
@@ -21,12 +20,12 @@ pub struct Session {
     engine: OnceCell<Engine>,
     start: Mutex<()>,
     cfg: Arc<Config>,
-    db: PgPool,
+    db: crate::db::Db,
     sealer: Sealer,
 }
 
 impl Session {
-    pub fn new(cfg: Arc<Config>, db: PgPool) -> Arc<Self> {
+    pub fn new(cfg: Arc<Config>, db: crate::db::Db) -> Arc<Self> {
         Arc::new(Self {
             sealer: Sealer::new(&cfg.seal_key),
             engine: OnceCell::new(),

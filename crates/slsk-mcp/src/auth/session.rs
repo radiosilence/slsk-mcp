@@ -14,8 +14,11 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use rand::Rng as _;
 use sha2::{Digest, Sha256};
-use sqlx::PgPool;
 use tokio::sync::RwLock;
+
+/// A signed-in session that has not expired.
+pub(crate) const SESSION: &str =
+    "SELECT sub FROM ui_sessions WHERE id_hash = ?1 AND expires_at > ?2";
 
 #[derive(Clone, Debug)]
 pub struct Session {
@@ -35,7 +38,7 @@ pub struct Flow {
 
 #[derive(Clone)]
 pub struct Sessions {
-    db: PgPool,
+    db: crate::db::Db,
     flows: Arc<RwLock<HashMap<String, Flow>>>,
 }
 
@@ -44,7 +47,7 @@ fn hash(id: &str) -> Vec<u8> {
 }
 
 impl Sessions {
-    pub fn new(db: PgPool) -> Self {
+    pub fn new(db: crate::db::Db) -> Self {
         Self {
             db,
             flows: Arc::default(),
@@ -61,17 +64,19 @@ impl Sessions {
     pub async fn create(&self, sub: &str, ttl: Duration) -> sqlx::Result<String> {
         let id = Self::token();
         // Expired rows go on each sign-in; there are too few to need a sweeper.
-        sqlx::query("DELETE FROM ui_sessions WHERE expires_at < now()")
-            .execute(&self.db)
+        let now = chrono::Utc::now();
+        sqlx::query("DELETE FROM ui_sessions WHERE expires_at < ?1")
+            .bind(now)
+            .execute(&self.db.write)
             .await?;
         sqlx::query(
             "INSERT INTO ui_sessions (id_hash, sub, expires_at) \
-             VALUES ($1, $2, now() + make_interval(secs => $3))",
+             VALUES (?1, ?2, ?3)",
         )
         .bind(hash(&id))
         .bind(sub)
-        .bind(ttl.as_secs_f64())
-        .execute(&self.db)
+        .bind(now + ttl)
+        .execute(&self.db.write)
         .await?;
         Ok(id)
     }
@@ -79,22 +84,21 @@ impl Sessions {
     /// `None` for an unknown or expired id, and when the database cannot be
     /// asked: a sign-in page is the safe answer to not knowing.
     pub async fn get(&self, id: &str) -> Option<Session> {
-        sqlx::query_scalar::<_, String>(
-            "SELECT sub FROM ui_sessions WHERE id_hash = $1 AND expires_at > now()",
-        )
-        .bind(hash(id))
-        .fetch_optional(&self.db)
-        .await
-        .inspect_err(|e| tracing::warn!(error = %e, "session lookup failed"))
-        .ok()
-        .flatten()
-        .map(|sub| Session { sub })
+        sqlx::query_scalar::<_, String>(SESSION)
+            .bind(hash(id))
+            .bind(chrono::Utc::now())
+            .fetch_optional(&self.db.read)
+            .await
+            .inspect_err(|e| tracing::warn!(error = %e, "session lookup failed"))
+            .ok()
+            .flatten()
+            .map(|sub| Session { sub })
     }
 
     pub async fn delete(&self, id: &str) {
-        if let Err(e) = sqlx::query("DELETE FROM ui_sessions WHERE id_hash = $1")
+        if let Err(e) = sqlx::query("DELETE FROM ui_sessions WHERE id_hash = ?1")
             .bind(hash(id))
-            .execute(&self.db)
+            .execute(&self.db.write)
             .await
         {
             tracing::warn!(error = %e, "session delete failed");
@@ -139,13 +143,13 @@ impl Sessions {
 mod tests {
     use super::*;
 
-    fn sessions() -> Sessions {
-        Sessions::new(PgPool::connect_lazy("postgres://unused").unwrap())
+    async fn sessions() -> Sessions {
+        Sessions::new(crate::db::Db::memory().await)
     }
 
     #[tokio::test]
     async fn take_flow_returns_once_then_none() {
-        let sessions = sessions();
+        let sessions = sessions().await;
         let id = sessions
             .begin_flow("verifier", "csrf", Duration::from_secs(60))
             .await;

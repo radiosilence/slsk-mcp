@@ -16,7 +16,6 @@ use anyhow::{Context, Result, bail};
 use slsk_engine::Engine;
 use slsk_engine::slsk_proto::RawStr;
 use slsk_engine::slsk_proto::peer::Directory;
-use sqlx::PgPool;
 use sqlx::types::Json;
 use tokio::sync::{Mutex, Notify};
 use uuid::Uuid;
@@ -81,7 +80,7 @@ const SEARCH_WAIT: Duration = Duration::from_secs(15);
 const STARTUP_GRACE: Duration = Duration::from_secs(3 * 60);
 
 pub struct Jobs {
-    db: PgPool,
+    db: crate::db::Db,
     session: Arc<Session>,
     staging: PathBuf,
     complete: PathBuf,
@@ -121,7 +120,7 @@ pub struct Jobs {
 
 impl Jobs {
     pub fn new(
-        db: PgPool,
+        db: crate::db::Db,
         session: Arc<Session>,
         staging: PathBuf,
         complete: PathBuf,
@@ -1313,9 +1312,9 @@ impl Jobs {
         }
         // A wish that found this album would otherwise find it again on its
         // next pass: removing the album is the answer to the wish too.
-        sqlx::query("DELETE FROM wishes WHERE job_id = $1")
+        sqlx::query("DELETE FROM wishes WHERE job_id = ?1")
             .bind(id)
-            .execute(&self.db)
+            .execute(&self.db.write)
             .await?;
         db::delete_job(&self.db, id).await?;
         Ok(())

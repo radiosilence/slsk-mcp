@@ -15,7 +15,9 @@ pub struct Oidc {
 }
 
 pub struct Config {
-    pub database_url: String,
+    /// The Postgres earlier versions kept their state in. Read once, into
+    /// an empty SQLite database, and not again.
+    pub import_from: Option<String>,
     /// Seals credentials at rest. 32 bytes, base64.
     pub seal_key: [u8; 32],
     /// An account to log in with at boot, so the client shares from the
@@ -123,7 +125,7 @@ impl Config {
             );
         }
         Ok(Self {
-            database_url: var("DATABASE_URL")?,
+            import_from: std::env::var("DATABASE_URL").ok().filter(|u| !u.is_empty()),
             seal_key,
             account,
             server: or("SLSK_SERVER", "server.slsknet.org:2242"),
