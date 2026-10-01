@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.55
+
+- **One job's error no longer stops every other job.** The download loop walked the jobs in one pass and any database error part-way through ended the pass, so every older job waited behind it, every two seconds, for as long as the error lasted. Each job is now followed on its own and its error logged against it. A job with no files to download, which nothing would ever move, now fails with that reason.
+- **Job lists read every job's files in one query**, not one per job: the download loop every two seconds, the jobs panel (once a second per open tab) and `jobs(first: 500)`.
+- **The chat list counts unread messages once per conversation**, not once per message.
+
 ## 0.1.54
 
 - **A chat message could stop the chat.** The download-check reader found its place in a lowercased copy of the message and cut the original there; a character whose lowercase is longer (`İ`) shifted the offset, and one landing inside a character panicked the task that handles every server message, so chat, rooms and check answers stopped until restart. It now lowercases ASCII only, which keeps offsets.

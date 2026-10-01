@@ -154,6 +154,23 @@ pub(crate) struct Job {
 
 pub(crate) async fn job_view(app: &App, job: db::Job, with_files: bool) -> Result<Job> {
     let rows = db::job_files(&app.db, job.id).await?;
+    Ok(view_of(app, job, rows, with_files))
+}
+
+/// Jobs for a list, without their files: one query for every job's files.
+pub(crate) async fn job_views(app: &App, jobs: Vec<db::Job>) -> Result<Vec<Job>> {
+    let ids: Vec<_> = jobs.iter().map(|j| j.id).collect();
+    let mut files = db::files_of_jobs(&app.db, &ids).await?;
+    Ok(jobs
+        .into_iter()
+        .map(|j| {
+            let rows = files.remove(&j.id).unwrap_or_default();
+            view_of(app, j, rows, false)
+        })
+        .collect())
+}
+
+fn view_of(app: &App, job: db::Job, rows: Vec<db::JobFile>, with_files: bool) -> Job {
     let engine = app.session.engine();
     let mut files = Vec::with_capacity(rows.len());
     let (mut total, mut done) = (0u64, 0u64);
@@ -186,7 +203,7 @@ pub(crate) async fn job_view(app: &App, job: db::Job, with_files: bool) -> Resul
         } => (Some(username.clone()), Some(folder.clone())),
         Source::Files { username } => (Some(username.clone()), None),
     };
-    Ok(Job {
+    Job {
         id: ID(job.id.to_string()),
         title: job.title,
         status: job.status,
@@ -207,7 +224,7 @@ pub(crate) async fn job_view(app: &App, job: db::Job, with_files: bool) -> Resul
         as_is_blocker: job.as_is_blocker,
         created_at: job.created_at,
         updated_at: job.updated_at,
-    })
+    }
 }
 
 /// A file in a job and the tags it carries now.
@@ -568,11 +585,11 @@ impl Query {
         #[graphql(default = 50)] first: i64,
     ) -> Result<Vec<Job>> {
         let app = app(ctx);
-        let mut out = Vec::new();
-        for j in db::jobs(&app.db, status.as_deref(), first.clamp(1, 500)).await? {
-            out.push(job_view(app, j, false).await?);
-        }
-        Ok(out)
+        job_views(
+            app,
+            db::jobs(&app.db, status.as_deref(), first.clamp(1, 500)).await?,
+        )
+        .await
     }
 
     async fn job(&self, ctx: &Context<'_>, id: ID) -> Result<Option<Job>> {
