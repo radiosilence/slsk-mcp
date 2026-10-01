@@ -209,6 +209,24 @@ pub async fn job_files(db: &PgPool, id: Uuid) -> sqlx::Result<Vec<JobFile>> {
         .await
 }
 
+/// The files of every job in `ids`, by job, in one query.
+pub async fn files_of_jobs(
+    db: &PgPool,
+    ids: &[Uuid],
+) -> sqlx::Result<std::collections::HashMap<Uuid, Vec<JobFile>>> {
+    let rows: Vec<JobFile> = sqlx::query_as(
+        "SELECT * FROM job_files WHERE job_id = ANY($1) ORDER BY job_id, subdir, remote",
+    )
+    .bind(ids)
+    .fetch_all(db)
+    .await?;
+    let mut by_job: std::collections::HashMap<Uuid, Vec<JobFile>> = Default::default();
+    for f in rows {
+        by_job.entry(f.job_id).or_default().push(f);
+    }
+    Ok(by_job)
+}
+
 pub async fn set_status(
     db: &PgPool,
     id: Uuid,

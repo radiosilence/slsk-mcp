@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.54
+
+- **A file is no longer written by two transfers at once.** An uploader's "upload failed" during a transfer put the download back in the queue while the transfer was still writing its `.part` file; the uploader's next offer started a second one appending to the same file. A running transfer now ends on its own (its connection closes, or 2 minutes pass with no data) and is re-queued from there.
+- **A peer that offers a file and never sends it is given up on** after the usual 8 attempts. Each 2-minute wait for its connection had sent the download back to the queue without counting, so it was asked forever. The offer's token is forgotten when it lapses.
+- **A file connection must come from the uploader whose token it names.**
+
+- **One job's error no longer stops every other job.** The download loop walked the jobs in one pass and any database error part-way through ended the pass, so every older job waited behind it, every two seconds, for as long as the error lasted. Each job is now followed on its own and its error logged against it. A job with no files to download, which nothing would ever move, now fails with that reason.
+- **Job lists read every job's files in one query**, not one per job: the download loop every two seconds, the jobs panel (once a second per open tab) and `jobs(first: 500)`.
+- **The chat list counts unread messages once per conversation**, not once per message.
+
+- **A chat message could stop the chat.** The download-check reader found its place in a lowercased copy of the message and cut the original there; a character whose lowercase is longer (`İ`) shifted the offset, and one landing inside a character panicked the task that handles every server message, so chat, rooms and check answers stopped until restart. It now lowercases ASCII only, which keeps offsets.
+- **Peers can no longer make us inflate what we did not ask for.** A share list nobody requested is dropped before it is inflated (it may expand to 256 MiB); search responses and folder listings inflate to at most 16 MiB. A frame's announced length is no longer reserved before its bytes arrive, so a peer that announces 128 MiB and sends nothing costs nothing.
+- **Search requests are shed before the share index is searched**, not after, so load costs no index work. A `*tail` term alongside whole words filters their matches instead of scanning the whole vocabulary.
+- **Browse and user-info requests that time out no longer leave their waiters behind.** Abandoned sign-ins expire from memory, and at most 1024 are kept.
+
 ## 0.1.53
 
 - **Library queries no longer walk the library.** `libraryAlbums`, `duplicates`, `refilePlan` and the Library page each statted every file before answering, holding the one index lock while they did, so on a large library the page took minutes and requests queued behind one another. Reads now come straight from the index, on a connection of their own. The index is refreshed in the background at startup, after each import and every 15 minutes; changes still refresh before acting. Enriching the library album by album no longer re-reads the whole library per album.

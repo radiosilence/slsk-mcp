@@ -470,170 +470,192 @@ impl Jobs {
         let Some(engine) = self.session.engine().cloned() else {
             return Ok(());
         };
-        for job in db::jobs(&self.db, Some("downloading"), 10_000).await? {
-            let rows = db::job_files(&self.db, job.id).await?;
-            let mut states: HashMap<&str, usize> = HashMap::new();
-            let mut received = 0u64;
-            let mut place: Option<u32> = None;
-            let mut transferring = false;
-            for f in &rows {
-                let remote = RawStr(f.remote.clone().into());
-                let (state, error) = match engine.download_view(&f.peer, &remote) {
-                    Some(v) => {
-                        received += v.bytes;
-                        transferring |= v.state == "transferring";
-                        place = match (place, v.place) {
-                            (Some(a), Some(b)) => Some(a.min(b)),
-                            (a, b) => a.or(b),
-                        };
-                        (v.state.to_string(), v.error)
-                    }
-                    // Not in the engine: completed before a restart, or lost.
-                    None if f.state == "completed" => ("completed".to_string(), None),
-                    None => {
-                        engine.download(&f.peer, remote, f.size as u64, self.dest(f));
-                        ("queued".to_string(), None)
-                    }
-                };
-                if state != f.state {
-                    db::set_file_state(
-                        &self.db,
-                        job.id,
-                        &f.peer,
-                        &f.remote,
-                        &state,
-                        error.as_deref(),
-                    )
-                    .await?;
-                }
-                *states
-                    .entry(match state.as_str() {
-                        "completed" => "completed",
-                        "failed" | "cancelled" => "failed",
-                        _ => "active",
-                    })
-                    .or_default() += 1;
+        let jobs = db::jobs(&self.db, Some("downloading"), 10_000).await?;
+        let ids: Vec<Uuid> = jobs.iter().map(|j| j.id).collect();
+        let mut files = db::files_of_jobs(&self.db, &ids).await?;
+        // One job's failure is that job's: the rest still move.
+        for job in jobs {
+            let rows = files.remove(&job.id).unwrap_or_default();
+            if let Err(e) = self.tick_job(&engine, &job, rows).await {
+                tracing::warn!(job = %job.id, error = %e, "job tick failed");
             }
-            let (done, failed, active) = (
-                states.get("completed"),
-                states.get("failed"),
-                states.get("active"),
-            );
-            if active.is_some() {
-                // A peer that queues every file and never sends one (no free
-                // slot for strangers, or a queue it never works through)
-                // would hold the album forever while other sources sit
-                // untried. A slow peer that is sending is left alone.
-                {
-                    let mut places = self.places.lock().expect("places");
-                    match place.filter(|_| !transferring) {
-                        Some(p) => places.insert(job.id, p),
-                        None => places.remove(&job.id),
+        }
+        Ok(())
+    }
+
+    /// Follow one downloading job: record its files' states, and start its
+    /// import, a retry or another source as they call for.
+    async fn tick_job(
+        self: &Arc<Self>,
+        engine: &Engine,
+        job: &Job,
+        rows: Vec<JobFile>,
+    ) -> Result<()> {
+        if rows.is_empty() {
+            db::set_status(&self.db, job.id, "failed", Some("no files to download")).await?;
+            return Ok(());
+        }
+        let mut states: HashMap<&str, usize> = HashMap::new();
+        let mut received = 0u64;
+        let mut place: Option<u32> = None;
+        let mut transferring = false;
+        for f in &rows {
+            let remote = RawStr(f.remote.clone().into());
+            let (state, error) = match engine.download_view(&f.peer, &remote) {
+                Some(v) => {
+                    received += v.bytes;
+                    transferring |= v.state == "transferring";
+                    place = match (place, v.place) {
+                        (Some(a), Some(b)) => Some(a.min(b)),
+                        (a, b) => a.or(b),
                     };
+                    (v.state.to_string(), v.error)
                 }
-                let now = tokio::time::Instant::now();
-                let since = {
-                    let mut stalled = self.stalled.lock().expect("stalled");
-                    let entry = stalled.entry(job.id).or_insert_with(|| {
-                        // From when this source was taken on, which the job
-                        // row records, so a restart does not forgive a peer
-                        // that has sent nothing.
-                        let waited = (chrono::Utc::now() - job.updated_at)
-                            .to_std()
-                            .unwrap_or_default();
-                        (now.checked_sub(waited).unwrap_or(now), received)
-                    });
-                    if received > entry.1 {
-                        *entry = (now, received);
-                    }
-                    entry.0
-                };
-                let stalled = now.duration_since(self.started) >= STARTUP_GRACE
-                    && now.duration_since(since) >= STALL;
-                if stalled && job.alternates.0.is_empty() {
-                    // Nothing left to fall back to. Peers come and go, so a
-                    // copy that was not there when the job began may be now.
-                    // Restarting the clock spaces the searches a stall apart.
-                    self.stalled
-                        .lock()
-                        .expect("stalled")
-                        .insert(job.id, (now, received));
-                    let (jobs, engine, job) = (self.clone(), engine.clone(), job.clone());
-                    tokio::spawn(async move {
-                        if let Err(e) = jobs
-                            .search_again(&engine, &job, cause::STALLED_PEER)
-                            .await
-                            .map(drop)
-                        {
-                            tracing::warn!(job = %job.id, error = %e, "search for another copy failed");
-                        }
-                    });
-                } else if stalled {
-                    self.stalled.lock().expect("stalled").remove(&job.id);
-                    tracing::info!(job = %job.id, "no data from the peer; trying another source");
-                    if let Some(peer) = rows.first().map(|r| r.peer.clone()) {
-                        self.stalled_peers
-                            .lock()
-                            .expect("stalled peers")
-                            .insert(peer, now);
-                    }
-                    self.fall_back(&engine, &job, &rows, cause::STALLED_PEER)
-                        .await?;
+                // Not in the engine: completed before a restart, or lost.
+                None if f.state == "completed" => ("completed".to_string(), None),
+                None => {
+                    engine.download(&f.peer, remote, f.size as u64, self.dest(f));
+                    ("queued".to_string(), None)
                 }
-                continue;
+            };
+            if state != f.state {
+                db::set_file_state(
+                    &self.db,
+                    job.id,
+                    &f.peer,
+                    &f.remote,
+                    &state,
+                    error.as_deref(),
+                )
+                .await?;
             }
-            self.stalled.lock().expect("stalled").remove(&job.id);
-            self.places.lock().expect("places").remove(&job.id);
-            if failed.is_none() && done.is_some() {
-                self.retried.lock().expect("retried").remove(&job.id);
-                db::set_status(&self.db, job.id, "importing", None).await?;
-                let jobs = self.clone();
-                tokio::spawn(async move { jobs.import(job.id, None).await });
-            } else if failed.is_some() {
-                // Most failures are a peer dropping off for a moment. Asking
-                // the same peer again, spaced out, resumes from the partial
-                // files; a new source would start the album from nothing.
-                let now = tokio::time::Instant::now();
-                let round = {
-                    let mut retried = self.retried.lock().expect("retried");
-                    let (rounds, next) = retried.entry(job.id).or_insert((0, now));
-                    if *rounds >= RETRY_ROUNDS {
-                        retried.remove(&job.id);
-                        None
-                    } else if now < *next {
-                        Some(false)
-                    } else {
-                        *rounds += 1;
-                        *next = now + Duration::from_secs(60 * u64::from(*rounds));
-                        Some(true)
-                    }
+            *states
+                .entry(match state.as_str() {
+                    "completed" => "completed",
+                    "failed" | "cancelled" => "failed",
+                    _ => "active",
+                })
+                .or_default() += 1;
+        }
+        let (done, failed, active) = (
+            states.get("completed"),
+            states.get("failed"),
+            states.get("active"),
+        );
+        if active.is_some() {
+            // A peer that queues every file and never sends one (no free
+            // slot for strangers, or a queue it never works through)
+            // would hold the album forever while other sources sit
+            // untried. A slow peer that is sending is left alone.
+            {
+                let mut places = self.places.lock().expect("places");
+                match place.filter(|_| !transferring) {
+                    Some(p) => places.insert(job.id, p),
+                    None => places.remove(&job.id),
                 };
-                match round {
-                    Some(true) => {
-                        for f in rows
-                            .iter()
-                            .filter(|f| matches!(f.state.as_str(), "failed" | "cancelled"))
-                        {
-                            let remote = RawStr(f.remote.clone().into());
-                            if !engine.retry_download(&f.peer, &remote) {
-                                engine.download(&f.peer, remote, f.size as u64, self.dest(f));
-                            }
+            }
+            let now = tokio::time::Instant::now();
+            let since = {
+                let mut stalled = self.stalled.lock().expect("stalled");
+                let entry = stalled.entry(job.id).or_insert_with(|| {
+                    // From when this source was taken on, which the job
+                    // row records, so a restart does not forgive a peer
+                    // that has sent nothing.
+                    let waited = (chrono::Utc::now() - job.updated_at)
+                        .to_std()
+                        .unwrap_or_default();
+                    (now.checked_sub(waited).unwrap_or(now), received)
+                });
+                if received > entry.1 {
+                    *entry = (now, received);
+                }
+                entry.0
+            };
+            let stalled = now.duration_since(self.started) >= STARTUP_GRACE
+                && now.duration_since(since) >= STALL;
+            if stalled && job.alternates.0.is_empty() {
+                // Nothing left to fall back to. Peers come and go, so a
+                // copy that was not there when the job began may be now.
+                // Restarting the clock spaces the searches a stall apart.
+                self.stalled
+                    .lock()
+                    .expect("stalled")
+                    .insert(job.id, (now, received));
+                let (jobs, engine, job) = (self.clone(), engine.clone(), job.clone());
+                tokio::spawn(async move {
+                    if let Err(e) = jobs
+                        .search_again(&engine, &job, cause::STALLED_PEER)
+                        .await
+                        .map(drop)
+                    {
+                        tracing::warn!(job = %job.id, error = %e, "search for another copy failed");
+                    }
+                });
+            } else if stalled {
+                self.stalled.lock().expect("stalled").remove(&job.id);
+                tracing::info!(job = %job.id, "no data from the peer; trying another source");
+                if let Some(peer) = rows.first().map(|r| r.peer.clone()) {
+                    self.stalled_peers
+                        .lock()
+                        .expect("stalled peers")
+                        .insert(peer, now);
+                }
+                self.fall_back(engine, job, &rows, cause::STALLED_PEER)
+                    .await?;
+            }
+            return Ok(());
+        }
+        self.stalled.lock().expect("stalled").remove(&job.id);
+        self.places.lock().expect("places").remove(&job.id);
+        if failed.is_none() && done.is_some() {
+            self.retried.lock().expect("retried").remove(&job.id);
+            db::set_status(&self.db, job.id, "importing", None).await?;
+            let (jobs, id) = (self.clone(), job.id);
+            tokio::spawn(async move { jobs.import(id, None).await });
+        } else if failed.is_some() {
+            // Most failures are a peer dropping off for a moment. Asking
+            // the same peer again, spaced out, resumes from the partial
+            // files; a new source would start the album from nothing.
+            let now = tokio::time::Instant::now();
+            let round = {
+                let mut retried = self.retried.lock().expect("retried");
+                let (rounds, next) = retried.entry(job.id).or_insert((0, now));
+                if *rounds >= RETRY_ROUNDS {
+                    retried.remove(&job.id);
+                    None
+                } else if now < *next {
+                    Some(false)
+                } else {
+                    *rounds += 1;
+                    *next = now + Duration::from_secs(60 * u64::from(*rounds));
+                    Some(true)
+                }
+            };
+            match round {
+                Some(true) => {
+                    for f in rows
+                        .iter()
+                        .filter(|f| matches!(f.state.as_str(), "failed" | "cancelled"))
+                    {
+                        let remote = RawStr(f.remote.clone().into());
+                        if !engine.retry_download(&f.peer, &remote) {
+                            engine.download(&f.peer, remote, f.size as u64, self.dest(f));
                         }
                     }
-                    Some(false) => {}
-                    // Out of stored fallbacks, as a folder picked by hand
-                    // always is: a peer that refuses (a daily file limit, a
-                    // ban) will not relent, but another may have the album.
-                    None if job.alternates.0.is_empty() => {
-                        if !self.search_again(&engine, &job, cause::PEER_FAILED).await? {
-                            self.fall_back(&engine, &job, &rows, cause::PEER_FAILED)
-                                .await?
-                        }
-                    }
-                    None => {
-                        self.fall_back(&engine, &job, &rows, cause::PEER_FAILED)
+                }
+                Some(false) => {}
+                // Out of stored fallbacks, as a folder picked by hand
+                // always is: a peer that refuses (a daily file limit, a
+                // ban) will not relent, but another may have the album.
+                None if job.alternates.0.is_empty() => {
+                    if !self.search_again(engine, job, cause::PEER_FAILED).await? {
+                        self.fall_back(engine, job, &rows, cause::PEER_FAILED)
                             .await?
                     }
+                }
+                None => {
+                    self.fall_back(engine, job, &rows, cause::PEER_FAILED)
+                        .await?
                 }
             }
         }

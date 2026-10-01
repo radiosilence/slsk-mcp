@@ -10,6 +10,9 @@ use crate::wire::{DecodeError, RawStr, Reader, Result, Writer, deflate, inflate}
 /// collection inflates to tens of megabytes; this leaves room for that and
 /// refuses anything that could only be an attack.
 pub const MAX_INFLATED: usize = 256 << 20;
+/// For a search response or one folder's contents: thousands of files, a
+/// few megabytes at most.
+const MAX_INFLATED_PART: usize = 16 << 20;
 
 /// The first message on any peer connection.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -357,7 +360,7 @@ impl PeerMessage {
                 P::SharedFileList { dirs, private_dirs }
             }
             9 => {
-                let mut r = Reader::new(inflate(&outer.rest(), MAX_INFLATED)?);
+                let mut r = Reader::new(inflate(&outer.rest(), MAX_INFLATED_PART)?);
                 let username = r.string()?;
                 let token = r.u32()?;
                 let files = r.list(MIN_FILE, FileEntry::read)?;
@@ -399,7 +402,7 @@ impl PeerMessage {
                 folder: outer.raw()?,
             },
             37 => {
-                let mut r = Reader::new(inflate(&outer.rest(), MAX_INFLATED)?);
+                let mut r = Reader::new(inflate(&outer.rest(), MAX_INFLATED_PART)?);
                 P::FolderContentsResponse {
                     token: r.u32()?,
                     folder: r.raw()?,

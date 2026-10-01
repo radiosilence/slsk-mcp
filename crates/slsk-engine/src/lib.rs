@@ -465,11 +465,16 @@ impl Engine {
             .entry(username.to_string())
             .or_default()
             .push(tx);
-        peers::send(&self.0, username, PeerMessage::GetSharedFileList.encode()).await?;
-        tokio::time::timeout(Duration::from_secs(180), rx)
-            .await
-            .map_err(|_| Error::TimedOut)?
-            .map_err(|_| Error::TimedOut)
+        let result = async {
+            peers::send(&self.0, username, PeerMessage::GetSharedFileList.encode()).await?;
+            tokio::time::timeout(Duration::from_secs(180), rx)
+                .await
+                .map_err(|_| Error::TimedOut)?
+                .map_err(|_| Error::TimedOut)
+        }
+        .await;
+        forget_closed(&self.0.browse_waiters, username);
+        result
     }
 
     pub async fn folder_contents(&self, username: &str, folder: &RawStr) -> Result<Vec<Directory>> {
@@ -499,11 +504,16 @@ impl Engine {
             .entry(username.to_string())
             .or_default()
             .push(tx);
-        peers::send(&self.0, username, PeerMessage::UserInfoRequest.encode()).await?;
-        tokio::time::timeout(Duration::from_secs(60), rx)
-            .await
-            .map_err(|_| Error::TimedOut)?
-            .map_err(|_| Error::TimedOut)
+        let result = async {
+            peers::send(&self.0, username, PeerMessage::UserInfoRequest.encode()).await?;
+            tokio::time::timeout(Duration::from_secs(60), rx)
+                .await
+                .map_err(|_| Error::TimedOut)?
+                .map_err(|_| Error::TimedOut)
+        }
+        .await;
+        forget_closed(&self.0.info_waiters, username);
+        result
     }
 
     /// Queue a download. `dest` is the final path; data lands beside it as
@@ -543,4 +553,13 @@ impl Engine {
     pub fn distributed(&self) -> (Option<String>, i32, String, usize) {
         self.0.dist.summary()
     }
+}
+
+/// Drop waiters nobody is waiting on any more, and the entry once empty: a
+/// peer that never answers would otherwise keep them for good.
+fn forget_closed<T>(waiters: &DashMap<String, Vec<oneshot::Sender<T>>>, username: &str) {
+    if let Some(mut w) = waiters.get_mut(username) {
+        w.retain(|tx| !tx.is_closed());
+    }
+    waiters.remove_if(username, |_, w| w.is_empty());
 }

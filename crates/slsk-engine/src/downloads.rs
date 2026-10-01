@@ -307,7 +307,17 @@ async fn drive(inner: Arc<Inner>, d: Arc<Download>) {
                 tokio::select! {
                     _ = d.wake.notified() => {}
                     _ = tokio::time::sleep(START_TIMEOUT) => {
-                        d.transition(DownloadState::Starting, DownloadState::Queued);
+                        if d.transition(DownloadState::Starting, DownloadState::Queued) {
+                            inner.downloads.by_token.retain(|_, t| !Arc::ptr_eq(t, &d));
+                            let attempts = d.attempts.fetch_add(1, Ordering::Relaxed) + 1;
+                            if attempts >= MAX_ATTEMPTS {
+                                inner
+                                    .metrics
+                                    .downloads_failed
+                                    .fetch_add(1, Ordering::Relaxed);
+                                d.fail("offered and never sent");
+                            }
+                        }
                     }
                 }
             }
@@ -345,11 +355,9 @@ pub(crate) fn on_transfer_request(
 
 pub(crate) fn on_upload_failed(inner: &Inner, username: &str, filename: &RawStr) {
     if let Some(d) = inner.downloads.get(username, filename) {
-        for from in [
-            DownloadState::Starting,
-            DownloadState::Transferring,
-            DownloadState::Remote,
-        ] {
+        // Not while transferring: the receiver still holds the `.part` file,
+        // and its own error, when the connection ends, re-queues it.
+        for from in [DownloadState::Starting, DownloadState::Remote] {
             if d.transition(from, DownloadState::Queued) {
                 break;
             }
@@ -376,7 +384,13 @@ pub(crate) async fn on_file_connection(inner: Arc<Inner>, username: String, mut 
         Ok(Ok(t)) => t,
         _ => return,
     };
-    let Some((_, d)) = inner.downloads.by_token.remove(&token) else {
+    // A token is the uploader's to use: another peer naming it is not
+    // let into someone else's transfer.
+    let Some((_, d)) = inner
+        .downloads
+        .by_token
+        .remove_if(&token, |_, d| d.username == username)
+    else {
         tracing::debug!(%username, token, "file connection for an unknown transfer");
         return;
     };

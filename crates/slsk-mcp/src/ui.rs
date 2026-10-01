@@ -548,18 +548,16 @@ impl JobsView {
 }
 
 async fn jobs_html(app: &App) -> String {
-    let mut jobs = Vec::new();
-    match crate::db::jobs(&app.db, None, 40).await {
-        Ok(rows) => {
-            for j in rows {
-                match graphql::job_view(app, j, false).await {
-                    Ok(v) => jobs.push(v),
-                    Err(e) => tracing::warn!(error = ?e, "could not show a job"),
-                }
-            }
+    let jobs = match crate::db::jobs(&app.db, None, 40).await {
+        Ok(rows) => graphql::job_views(app, rows).await.unwrap_or_else(|e| {
+            tracing::warn!(error = ?e, "could not show jobs");
+            Vec::new()
+        }),
+        Err(e) => {
+            tracing::warn!(error = %e, "could not list jobs");
+            Vec::new()
         }
-        Err(e) => tracing::warn!(error = %e, "could not list jobs"),
-    }
+    };
     let places = jobs
         .iter()
         .filter_map(|j| {
