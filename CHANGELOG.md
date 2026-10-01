@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.55
+
+- **Planning where albums go no longer lists the library per track** (sift 0.3.6). Matching a folder's existing spelling read the library root and statted every artist folder for each track, so `refilePlan`, `duplicates` alongside it and the Library page still took minutes after 0.1.53 stopped them walking the library. A folder of exactly the name is now checked with one stat, and a listing read only when that misses. Imports, which plan each track the same way, gain the same.
+
 ## 0.1.54
 
 - **A file is no longer written by two transfers at once.** An uploader's "upload failed" during a transfer put the download back in the queue while the transfer was still writing its `.part` file; the uploader's next offer started a second one appending to the same file. A running transfer now ends on its own (its connection closes, or 2 minutes pass with no data) and is re-queued from there.
