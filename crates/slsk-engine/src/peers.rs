@@ -231,6 +231,11 @@ fn spawn_peer(inner: Arc<Inner>, username: String, conn: Conn) -> mpsc::Sender<B
                     break;
                 }
             };
+            // A share list is inflated only when we asked for it: unasked
+            // for, it is up to 256 MiB of work for nothing.
+            if frame.code == 5 && !inner.browse_waiters.contains_key(&username) {
+                continue;
+            }
             match PeerMessage::decode(frame.code, frame.body) {
                 Ok(msg) => on_message(&inner, &username, msg, &reply).await,
                 Err(e) => {
@@ -504,6 +509,14 @@ pub(crate) fn respond_to_search(inner: &Arc<Inner>, username: &str, token: u32, 
     {
         return;
     }
+    // Shed before searching, so load costs no index work either.
+    let Ok(permit) = inner.responders.clone().try_acquire_owned() else {
+        inner
+            .metrics
+            .search_responses_dropped
+            .fetch_add(1, Ordering::Relaxed);
+        return;
+    };
     let files: Vec<_> = {
         let index = inner.shares.load();
         let excluded = inner.excluded.read();
@@ -516,13 +529,6 @@ pub(crate) fn respond_to_search(inner: &Arc<Inner>, username: &str, token: u32, 
     if files.is_empty() {
         return;
     }
-    let Ok(permit) = inner.responders.clone().try_acquire_owned() else {
-        inner
-            .metrics
-            .search_responses_dropped
-            .fetch_add(1, Ordering::Relaxed);
-        return;
-    };
     let (queued, free) = inner.uploads.queue_summary();
     let response = PeerMessage::SearchResponse(SearchResponse {
         username: inner.username(),

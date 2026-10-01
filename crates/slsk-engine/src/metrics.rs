@@ -79,7 +79,7 @@ impl Metrics {
             ),
             (
                 "slsk_search_responses_dropped_total",
-                "Matching searches dropped under load.",
+                "Searches dropped under load, unanswered.",
                 &self.search_responses_dropped,
             ),
             (

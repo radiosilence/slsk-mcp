@@ -118,7 +118,7 @@ impl ShareIndex {
     /// dropped.
     pub fn search(&self, query: &str, limit: usize, excluded: &[String]) -> Vec<&SharedFile> {
         let mut include: Vec<&[u32]> = Vec::new();
-        let mut partial: Vec<Vec<u32>> = Vec::new();
+        let mut tails: Vec<String> = Vec::new();
         let mut exclude: Vec<&[u32]> = Vec::new();
         for term in query.split_whitespace() {
             let (negate, term) = match term.strip_prefix('-') {
@@ -127,18 +127,9 @@ impl ShareIndex {
             };
             if let Some(tail) = term.strip_prefix('*') {
                 let tail = tail.to_lowercase();
-                if tail.is_empty() || negate {
-                    continue;
+                if !tail.is_empty() && !negate {
+                    tails.push(tail);
                 }
-                let mut ids: Vec<u32> = self
-                    .postings
-                    .iter()
-                    .filter(|(w, _)| w.ends_with(&tail))
-                    .flat_map(|(_, ids)| ids.iter().copied())
-                    .collect();
-                ids.sort_unstable();
-                ids.dedup();
-                partial.push(ids);
                 continue;
             }
             // A term with punctuation in it is several words to the index.
@@ -151,10 +142,28 @@ impl ShareIndex {
                 }
             }
         }
+        // A `*tail` filters what whole words found. Alone, it is resolved
+        // through the vocabulary, the one time every word is looked at.
+        let partial: Vec<u32> = match tails.first() {
+            Some(first) if include.is_empty() => {
+                let mut ids: Vec<u32> = self
+                    .postings
+                    .iter()
+                    .filter(|(w, _)| w.ends_with(first.as_str()))
+                    .flat_map(|(_, ids)| ids.iter().copied())
+                    .collect();
+                ids.sort_unstable();
+                ids.dedup();
+                ids
+            }
+            _ => Vec::new(),
+        };
         let mut sets: Vec<&[u32]> = include;
-        sets.extend(partial.iter().map(Vec::as_slice));
         if sets.is_empty() {
-            return Vec::new();
+            if partial.is_empty() {
+                return Vec::new();
+            }
+            sets.push(&partial);
         }
         sets.sort_by_key(|s| s.len());
         let excluded: Vec<String> = excluded.iter().map(|p| p.to_lowercase()).collect();
@@ -164,6 +173,15 @@ impl ShareIndex {
             .filter(|id| sets[1..].iter().all(|s| s.binary_search(id).is_ok()))
             .filter(|id| exclude.iter().all(|s| s.binary_search(id).is_err()))
             .map(|id| &self.files[id as usize])
+            .filter(|f| {
+                tails.is_empty() || {
+                    let path = f.virtual_path.to_string_lossy();
+                    let words: Vec<String> = words(&path).collect();
+                    tails
+                        .iter()
+                        .all(|t| words.iter().any(|w| w.ends_with(t.as_str())))
+                }
+            })
             .filter(|f| {
                 excluded.is_empty() || {
                     let path = f.virtual_path.to_string_lossy().to_lowercase();
@@ -492,6 +510,9 @@ mod tests {
         ]);
         assert_eq!(idx.search("canada -mp3", 10, &[]).len(), 2);
         assert_eq!(idx.search("*gaddi", 10, &[]).len(), 2);
+        assert_eq!(idx.search("canada *gaddi", 10, &[]).len(), 2);
+        assert_eq!(idx.search("canada *gaddi -mp3", 10, &[]).len(), 1);
+        assert!(idx.search("canada *nothing", 10, &[]).is_empty());
         assert_eq!(idx.search("canada", 10, &["boards of".into()]).len(), 1);
         assert_eq!(idx.search("canada", 1, &[]).len(), 1);
     }

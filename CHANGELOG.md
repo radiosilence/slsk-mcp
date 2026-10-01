@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.54
+
+- **A chat message could stop the chat.** The download-check reader found its place in a lowercased copy of the message and cut the original there; a character whose lowercase is longer (`İ`) shifted the offset, and one landing inside a character panicked the task that handles every server message, so chat, rooms and check answers stopped until restart. It now lowercases ASCII only, which keeps offsets.
+- **Peers can no longer make us inflate what we did not ask for.** A share list nobody requested is dropped before it is inflated (it may expand to 256 MiB); search responses and folder listings inflate to at most 16 MiB. A frame's announced length is no longer reserved before its bytes arrive, so a peer that announces 128 MiB and sends nothing costs nothing.
+- **Search requests are shed before the share index is searched**, not after, so load costs no index work. A `*tail` term alongside whole words filters their matches instead of scanning the whole vocabulary.
+- **Browse and user-info requests that time out no longer leave their waiters behind.** Abandoned sign-ins expire from memory, and at most 1024 are kept.
+
 ## 0.1.53
 
 - **Library queries no longer walk the library.** `libraryAlbums`, `duplicates`, `refilePlan` and the Library page each statted every file before answering, holding the one index lock while they did, so on a large library the page took minutes and requests queued behind one another. Reads now come straight from the index, on a connection of their own. The index is refreshed in the background at startup, after each import and every 15 minutes; changes still refresh before acting. Enriching the library album by album no longer re-reads the whole library per album.

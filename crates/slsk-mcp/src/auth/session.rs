@@ -108,7 +108,23 @@ impl Sessions {
             csrf: csrf.to_string(),
             expires: Instant::now() + ttl,
         };
-        self.flows.write().await.insert(id.clone(), flow);
+        // Anyone can start a login, and most never finish one: expired flows
+        // go, and past a cap the oldest make room.
+        const MAX_FLOWS: usize = 1024;
+        let mut flows = self.flows.write().await;
+        let now = Instant::now();
+        flows.retain(|_, f| f.expires > now);
+        while flows.len() >= MAX_FLOWS {
+            let Some(oldest) = flows
+                .iter()
+                .min_by_key(|(_, f)| f.expires)
+                .map(|(k, _)| k.clone())
+            else {
+                break;
+            };
+            flows.remove(&oldest);
+        }
+        flows.insert(id.clone(), flow);
         id
     }
 
