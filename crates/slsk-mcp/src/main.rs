@@ -107,7 +107,7 @@ async fn main() -> anyhow::Result<()> {
     let library = Arc::new(library::Library::open(
         &cfg.state_dir.join("library.db"),
         importer.clone(),
-        bin.clone(),
+        bin,
     )?);
 
     let session = Session::new(cfg.clone(), db.clone());
@@ -119,7 +119,7 @@ async fn main() -> anyhow::Result<()> {
         cfg.complete_dir.clone(),
         cfg.state_dir.join("spectrograms"),
         importer,
-        bin,
+        library.clone(),
     );
     let social = social::Social::new(db.clone(), session.clone(), jobs.clone());
     let app = Arc::new(App {
@@ -130,7 +130,7 @@ async fn main() -> anyhow::Result<()> {
         social: social.clone(),
         library: library.clone(),
     });
-    tokio::spawn(async move { library.warm().await });
+    tokio::spawn(async move { library.follow().await });
     jobs.spawn();
     social.spawn();
     uploads_log::spawn(app.clone());

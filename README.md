@@ -82,12 +82,17 @@ is a fix to make in code; the version then identifies the jobs to repair.
 
 ### The library after import
 
-sift keeps an index of the whole library, derived from the files and rebuilt
-incrementally before each library query, so the service can answer questions
-about what is already there: which albums are held twice, and which are not
-where the current naming rules put them (a library filed over years by
-different beets configurations disagrees with itself). `duplicates` and
-`refilePlan` only report; `binDuplicates` and `refile` act. Spare copies go to
+sift keeps an index of the whole library, derived from the files, so the
+service can answer questions about what is already there: which albums are
+held twice, and which are not where the current naming rules put them (a
+library filed over years by different beets configurations disagrees with
+itself). Queries read the index as it stands. Refreshing it stats every file,
+which takes seconds to minutes on a large library, so it runs in the
+background at startup, after each import and every 15 minutes, while reads go
+through a separate SQLite connection and never wait for it. Changes
+(`binDuplicates`, `refile`, `modifyAlbums`) refresh first, so they act on the
+files as they are now.
+`duplicates` and `refilePlan` only report; `binDuplicates` and `refile` act. Spare copies go to
 `<library>-bin`, beside the library rather than in it, so Navidrome and the
 shares stop seeing them and restoring one is a move back. Nothing deletes a
 file. `modifyAlbums` corrects tags on albums already filed (beets' `modify`,

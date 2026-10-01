@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.53
+
+- **Library queries no longer walk the library.** `libraryAlbums`, `duplicates`, `refilePlan` and the Library page each statted every file before answering, holding the one index lock while they did, so on a large library the page took minutes and requests queued behind one another. Reads now come straight from the index, on a connection of their own. The index is refreshed in the background at startup, after each import and every 15 minutes; changes still refresh before acting. Enriching the library album by album no longer re-reads the whole library per album.
+- **Postgres indexes for the job list, unread counts, triage and wishes.**
+
 ## 0.1.52
 
 - **`grab(refetch: true)` replaces the filed copy** (sift 0.3.4). A refetched album that finished downloading while the bad copy was still in the library was taken for a repeat of it (same folder, format and stated lengths), marked imported, and deleted, leaving only the bad copy. A refetched job now imports with `import_replacing`: the folder already there moves to the bin beside the library and the new copy is filed. The bad copy no longer needs moving out by hand first.

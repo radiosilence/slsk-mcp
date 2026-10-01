@@ -752,8 +752,9 @@ impl Query {
     /// Albums in the library matching a beets query, one term per list
     /// element: `artist:burial`, `year:1990..1999`, `format:FLAC`,
     /// `album::^The` (regex), `^genre:rock` (negated), `year-` (sort).
-    /// Empty lists everything. The index follows the files, so this is
-    /// current.
+    /// Empty lists everything. Answered from the index, which is refreshed
+    /// after every import and every 15 minutes: an album filed moments ago
+    /// may take a few seconds to appear.
     async fn library_albums(
         &self,
         ctx: &Context<'_>,
