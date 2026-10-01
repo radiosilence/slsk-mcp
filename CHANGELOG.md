@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.56
+
+- **State is kept in SQLite, not Postgres.** Jobs, sealed credentials, bans, messages, wishes, upload history and the lifetime totals are in `STATE_DIR/slsk.db`. One process is the only writer, so a database server added a process, a password and a network hop and took no load off. The file is opened once, at startup: reads share a pool of read-only connections, every write goes through one connection, and each connection runs on its own thread. The queries that run on every tick or page load are checked against SQLite's query plan in the tests and each is answered from an index.
+- **Upgrading carries everything over.** With `DATABASE_URL` still set, the first start copies every table from the old Postgres into the new, empty `slsk.db`, then never reads Postgres again. Unset `DATABASE_URL` and stop the Postgres once it has started; the Kubernetes component keeps its Postgres for this release so the copy can happen, and drops it in the next.
+
 ## 0.1.55
 
 - **Planning where albums go no longer lists the library per track** (sift 0.3.6). Matching a folder's existing spelling read the library root and statted every artist folder for each track, so `refilePlan`, `duplicates` alongside it and the Library page still took minutes after 0.1.53 stopped them walking the library. A folder of exactly the name is now checked with one stat, and a listing read only when that misses. Imports, which plan each track the same way, gain the same.
