@@ -136,6 +136,22 @@ Whatever runs it, three things matter:
 Open files: every peer connection is a socket, and a well-connected client
 holds hundreds. Raise `LimitNOFILE`/`ulimit -n` above the default 1024.
 
+### State
+
+Everything that must survive a restart is in `STATE_DIR/slsk.db`, a SQLite
+file. One process holds one Soulseek login and is the only writer, so a
+database server would add a process, a password and a network hop without
+taking any load off. The file is opened once: reads go through a pool of
+read-only connections, which WAL lets run beside a write, and every write
+through a single connection, so writes queue in the process rather than
+contend for SQLite's lock. Each connection runs on its own thread, so no query
+holds an async worker. Hot queries are checked against `EXPLAIN QUERY PLAN` in
+the tests, so one that stops using its index fails rather than slows down.
+
+To back it up while running, `sqlite3 slsk.db ".backup slsk-copy.db"`; copying
+the file alone can catch a write half-done. Encryption at rest belongs to the
+disk the state directory is on.
+
 ## Monitoring
 
 `/metrics` on the metrics port is Prometheus text: bytes up and down, uploads
