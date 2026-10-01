@@ -175,3 +175,6 @@ button.link:disabled { opacity: .6; }
   animation: fade 4s forwards; }
 @keyframes fade { 0%, 80% { opacity: 1; } 100% { opacity: 0; visibility: hidden; } }
 @media (prefers-reduced-motion: reduce) { #flash.ok { animation: fade 4s steps(1, end) forwards; } }
+.version { padding: 24px 16px; text-align: center; font-size: 12px; }
+.version a { color: var(--dim); text-decoration: none; }
+.version a:hover { color: var(--text); }

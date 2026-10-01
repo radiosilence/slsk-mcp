@@ -9,7 +9,7 @@ description = "What CI checks: format, lint with warnings as errors, tests, the 
 run = [
   "git diff --quiet Cargo.lock || { echo 'Cargo.lock has uncommitted changes'; exit 1; }",
   "cargo fmt --all -- --check",
-  "cargo clippy --workspace --all-targets -- -D warnings",
+  "cargo clippy --workspace --all-targets --locked -- -D warnings",
   "cargo test --workspace --locked",
   "cd deploy/pulumi && npm run -s check",
 ]
