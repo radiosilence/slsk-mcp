@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.56
+
+- **A file is no longer written by two transfers at once.** An uploader's "upload failed" during a transfer put the download back in the queue while the transfer was still writing its `.part` file; the uploader's next offer started a second one appending to the same file. A running transfer now ends on its own (its connection closes, or 2 minutes pass with no data) and is re-queued from there.
+- **A peer that offers a file and never sends it is given up on** after the usual 8 attempts. Each 2-minute wait for its connection had sent the download back to the queue without counting, so it was asked forever. The offer's token is forgotten when it lapses.
+- **A file connection must come from the uploader whose token it names.**
+
 ## 0.1.55
 
 - **One job's error no longer stops every other job.** The download loop walked the jobs in one pass and any database error part-way through ended the pass, so every older job waited behind it, every two seconds, for as long as the error lasted. Each job is now followed on its own and its error logged against it. A job with no files to download, which nothing would ever move, now fails with that reason.
