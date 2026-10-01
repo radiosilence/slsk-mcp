@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.59
+
+- **The Library page opens at once.** Planning where every album belongs takes seconds on a large library, and the page did it, with a second full read of the index, on every visit. The whole library's duplicates and re-file plan are now worked out once per change to the index, in the background right after each refresh, and served from there; `duplicates` and `refilePlan` without a query answer the same way. Re-filing still plans each album as it moves it, so a plan never acts on stale information. Planning also no longer runs on an async worker.
+
 ## 0.1.58
 
 - **The web UI shows its version**, at the foot of every page, linked to that release's notes.
