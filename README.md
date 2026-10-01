@@ -111,14 +111,14 @@ pick by what the host already runs.
 
 - **Container** — `ghcr.io/radiosilence/slsk-mcp`, a static binary on
   `scratch`, for amd64 and arm64. `deploy/compose/docker-compose.yml` runs it
-  with Postgres.
+  with its state in a directory beside it.
 - **systemd** — the same binary is attached to each release;
   `deploy/systemd/slsk-mcp.service` runs it confined to the library and
   download directories.
 - **Kubernetes** — `deploy/pulumi` is a Pulumi component
   (`@radiosilence/slsk-mcp-pulumi`, at the image's version): local volumes for
-  the library and downloads pinned to the node that holds them, Postgres in
-  the pod, a UPnP mapper for the peer port, and a NetworkPolicy confining it.
+  the library and downloads pinned to the node that holds them, state on the
+  node's own disk, a UPnP mapper for the peer port, and a NetworkPolicy confining it.
 
 Whatever runs it, three things matter:
 
@@ -156,14 +156,14 @@ startup.
 
 | Variable | Default | |
 |---|---|---|
-| `DATABASE_URL` | — | Postgres. Jobs, sealed credentials, bans. |
+| `DATABASE_URL` | — | The Postgres versions before 0.1.56 kept their state in. Read once into an empty `slsk.db`; unset it afterwards. |
 | `SEAL_KEY` | — | 32 bytes, base64. Seals Soulseek credentials at rest. |
 | `SLSK_USERNAME`, `SLSK_PASSWORD` | — | Log in at start. Credentials from the gateway or the UI replace them. |
 | `LIBRARY_DIR` | `/music` | Where imports are filed. |
 | `SHARE_DIRS` | the library | Comma-separated. |
 | `STAGING_DIR` | `/data/incomplete` | Downloads in progress. |
 | `COMPLETE_DIR` | `/data/complete` | Finished downloads waiting for import, or for a person when the tagger could not place them. Best on the library's filesystem, where an import is a rename. |
-| `STATE_DIR` | `/data` | The share-probe cache. |
+| `STATE_DIR` | `/data` | `slsk.db` (jobs, sealed credentials, bans, messages), the library index and the share-probe cache. On a local disk: SQLite over a network filesystem loses its locking. |
 | `LISTEN_PORT` | `2234` | The peer port. Must be reachable for peers behind NAT to connect. |
 | `UPLOAD_SLOTS`, `UPLOAD_LIMIT`, `DOWNLOAD_LIMIT` | `5`, `0`, `0` | Limits in bytes per second; 0 is unlimited. |
 | `BEETS_CONFIG` | — | A beets `config.yaml` for the importer's template and replacements. |
@@ -232,5 +232,5 @@ cargo test --workspace
 ```
 
 The network tests run real engines against `slsk-testserver` over loopback.
-To run the service locally: Postgres, a `SEAL_KEY`, and
+To run the service locally: a `SEAL_KEY`, and
 `UI_INSECURE_NO_AUTH=1 UI_ADDR=127.0.0.1:8080`.

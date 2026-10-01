@@ -16,12 +16,35 @@ use dashmap::DashMap;
 use parking_lot::{Mutex, RwLock};
 use slsk_engine::slsk_proto::server::{FromServer, ToServer, UserStatus};
 use slsk_engine::{Engine, Event, Status};
-use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::folders::Filter;
 use crate::jobs::Jobs;
 use crate::session::Session;
+
+/// The open wish searched least recently.
+pub(crate) const NEXT_WISH: &str =
+    "SELECT id, query, lossless, grab, searched_at, job_id FROM wishes
+             WHERE account = ?1 AND job_id IS NULL ORDER BY searched_at NULLS FIRST LIMIT 1";
+
+/// Unread messages for an account.
+pub(crate) const UNREAD: &str =
+    "SELECT count(*) FROM messages WHERE account = ?1 AND NOT read AND NOT outgoing";
+
+/// A conversation, newest first.
+pub(crate) const THREAD: &str = "SELECT body, outgoing, at FROM messages WHERE account = ?1 AND peer = ?2 ORDER BY at DESC LIMIT ?3";
+
+/// The latest message with each peer. With max(), SQLite takes the other
+/// columns from the row holding the maximum, read off `messages_peer`.
+pub(crate) const LATEST_PER_PEER: &str = "SELECT peer, body, outgoing, max(at) AS at
+             FROM messages WHERE account = ?1 GROUP BY peer";
+
+/// One row per peer: the latest message (as `LATEST_PER_PEER`) and how many
+/// are unread, counted once per peer off `messages_unread`.
+pub(crate) const CONVERSATIONS: &str = "SELECT peer, body, outgoing, max(at) AS at,
+                    (SELECT count(*) FROM messages u
+                     WHERE u.account = ?1 AND u.peer = m.peer AND NOT u.read AND NOT u.outgoing)
+             FROM messages m WHERE account = ?1 GROUP BY peer ORDER BY peer";
 
 const ROOM_TAIL: usize = 500;
 /// How long a preview stays confirmable.
@@ -41,7 +64,7 @@ struct Room {
 }
 
 pub struct Social {
-    db: PgPool,
+    db: crate::db::Db,
     session: Arc<Session>,
     jobs: Arc<Jobs>,
     rooms: RwLock<HashMap<String, Room>>,
@@ -87,7 +110,7 @@ fn challenge_token(message: &str) -> Option<String> {
 }
 
 impl Social {
-    pub fn new(db: PgPool, session: Arc<Session>, jobs: Arc<Jobs>) -> Arc<Self> {
+    pub fn new(db: crate::db::Db, session: Arc<Session>, jobs: Arc<Jobs>) -> Arc<Self> {
         Arc::new(Self {
             db,
             session,
@@ -140,9 +163,9 @@ impl Social {
         let account = engine.username();
         self.rooms.write().clear();
         let _ = engine.send(ToServer::RoomList);
-        for room in sqlx::query_scalar::<_, String>("SELECT name FROM rooms WHERE account = $1")
+        for room in sqlx::query_scalar::<_, String>("SELECT name FROM rooms WHERE account = ?1")
             .bind(&account)
-            .fetch_all(&self.db)
+            .fetch_all(&self.db.read)
             .await
             .unwrap_or_default()
         {
@@ -155,10 +178,10 @@ impl Social {
             let _ = engine.send(ToServer::WatchUser { username });
         }
         for (item, liked) in sqlx::query_as::<_, (String, bool)>(
-            "SELECT item, liked FROM interests WHERE account = $1",
+            "SELECT item, liked FROM interests WHERE account = ?1",
         )
         .bind(&account)
-        .fetch_all(&self.db)
+        .fetch_all(&self.db.read)
         .await
         .unwrap_or_default()
         {
@@ -175,11 +198,11 @@ impl Social {
             FromServer::MessageUser {
                 username, message, ..
             } => {
-                let _ = sqlx::query("INSERT INTO messages (account, peer, outgoing, body) VALUES ($1, $2, FALSE, $3)")
+                let _ = sqlx::query("INSERT INTO messages (account, peer, outgoing, body) VALUES (?1, ?2, FALSE, ?3)")
                     .bind(engine.username())
                     .bind(username)
                     .bind(message)
-                    .execute(&self.db)
+                    .execute(&self.db.write)
                     .await;
                 self.answer_challenge(engine, username, message).await;
             }
@@ -309,11 +332,11 @@ impl Social {
             return;
         }
         tracing::info!(peer, token, "answered a peer's download check");
-        let _ = sqlx::query("INSERT INTO messages (account, peer, outgoing, body, read) VALUES ($1, $2, TRUE, $3, TRUE)")
+        let _ = sqlx::query("INSERT INTO messages (account, peer, outgoing, body, read) VALUES (?1, ?2, TRUE, ?3, TRUE)")
             .bind(engine.username())
             .bind(peer)
             .bind(&token)
-            .execute(&self.db)
+            .execute(&self.db.write)
             .await;
     }
 
@@ -324,11 +347,11 @@ impl Social {
             username: username.into(),
             message: message.into(),
         })?;
-        sqlx::query("INSERT INTO messages (account, peer, outgoing, body, read) VALUES ($1, $2, TRUE, $3, TRUE)")
+        sqlx::query("INSERT INTO messages (account, peer, outgoing, body, read) VALUES (?1, ?2, TRUE, ?3, TRUE)")
             .bind(engine.username())
             .bind(username)
             .bind(message)
-            .execute(&self.db)
+            .execute(&self.db.write)
             .await?;
         Ok(())
     }
@@ -346,10 +369,10 @@ impl Social {
 
     pub async fn join_room(&self, room: &str) -> Result<()> {
         let engine = self.engine()?;
-        sqlx::query("INSERT INTO rooms (account, name) VALUES ($1, $2) ON CONFLICT DO NOTHING")
+        sqlx::query("INSERT INTO rooms (account, name) VALUES (?1, ?2) ON CONFLICT DO NOTHING")
             .bind(engine.username())
             .bind(room)
-            .execute(&self.db)
+            .execute(&self.db.write)
             .await?;
         engine.send(ToServer::JoinRoom {
             room: room.into(),
@@ -360,10 +383,10 @@ impl Social {
 
     pub async fn leave_room(&self, room: &str) -> Result<()> {
         let engine = self.engine()?;
-        sqlx::query("DELETE FROM rooms WHERE account = $1 AND name = $2")
+        sqlx::query("DELETE FROM rooms WHERE account = ?1 AND name = ?2")
             .bind(engine.username())
             .bind(room)
-            .execute(&self.db)
+            .execute(&self.db.write)
             .await?;
         engine.send(ToServer::LeaveRoom { room: room.into() })?;
         Ok(())
@@ -396,9 +419,9 @@ impl Social {
     // --- Buddies -------------------------------------------------------------
 
     async fn buddy_names(&self, account: &str) -> Vec<String> {
-        sqlx::query_scalar("SELECT username FROM buddies WHERE account = $1 ORDER BY username")
+        sqlx::query_scalar("SELECT username FROM buddies WHERE account = ?1 ORDER BY username")
             .bind(account)
-            .fetch_all(&self.db)
+            .fetch_all(&self.db.read)
             .await
             .unwrap_or_default()
     }
@@ -406,10 +429,10 @@ impl Social {
     pub async fn buddies(&self) -> Result<Vec<(String, String, Option<UserStatus>, bool)>> {
         let engine = self.engine()?;
         let rows: Vec<(String, String)> = sqlx::query_as(
-            "SELECT username, note FROM buddies WHERE account = $1 ORDER BY username",
+            "SELECT username, note FROM buddies WHERE account = ?1 ORDER BY username",
         )
         .bind(engine.username())
-        .fetch_all(&self.db)
+        .fetch_all(&self.db.read)
         .await?;
         Ok(rows
             .into_iter()
@@ -422,11 +445,11 @@ impl Social {
 
     pub async fn add_buddy(&self, username: &str, note: &str) -> Result<()> {
         let engine = self.engine()?;
-        sqlx::query("INSERT INTO buddies (account, username, note) VALUES ($1, $2, $3) ON CONFLICT (account, username) DO UPDATE SET note = EXCLUDED.note")
+        sqlx::query("INSERT INTO buddies (account, username, note) VALUES (?1, ?2, ?3) ON CONFLICT (account, username) DO UPDATE SET note = EXCLUDED.note")
             .bind(engine.username())
             .bind(username)
             .bind(note)
-            .execute(&self.db)
+            .execute(&self.db.write)
             .await?;
         engine.send(ToServer::WatchUser {
             username: username.into(),
@@ -436,10 +459,10 @@ impl Social {
 
     pub async fn remove_buddy(&self, username: &str) -> Result<()> {
         let engine = self.engine()?;
-        sqlx::query("DELETE FROM buddies WHERE account = $1 AND username = $2")
+        sqlx::query("DELETE FROM buddies WHERE account = ?1 AND username = ?2")
             .bind(engine.username())
             .bind(username)
-            .execute(&self.db)
+            .execute(&self.db.write)
             .await?;
         engine.send(ToServer::UnwatchUser {
             username: username.into(),
@@ -449,23 +472,16 @@ impl Social {
 
     // --- Messages ------------------------------------------------------------
 
-    /// One row per peer: the latest message and how many are unread.
+    /// One row per peer: the latest message (as `LATEST_PER_PEER`) and how many
+    /// are unread, counted once per peer off `messages_unread`.
     pub async fn conversations(
         &self,
     ) -> Result<Vec<(String, String, bool, chrono::DateTime<chrono::Utc>, i64)>> {
         let engine = self.engine()?;
-        Ok(sqlx::query_as(
-            "SELECT l.peer, l.body, l.outgoing, l.at, coalesce(u.n, 0)
-             FROM (SELECT DISTINCT ON (peer) peer, body, outgoing, at
-                   FROM messages WHERE account = $1 ORDER BY peer, at DESC) l
-             LEFT JOIN (SELECT peer, count(*) AS n FROM messages
-                        WHERE account = $1 AND NOT read AND NOT outgoing GROUP BY peer) u
-             USING (peer)
-             ORDER BY l.peer",
-        )
-        .bind(engine.username())
-        .fetch_all(&self.db)
-        .await?)
+        Ok(sqlx::query_as(CONVERSATIONS)
+            .bind(engine.username())
+            .fetch_all(&self.db.read)
+            .await?)
     }
 
     /// Peers holding downloads of ours whose latest message to us is
@@ -481,13 +497,11 @@ impl Social {
                 *waiting.entry(d.username.clone()).or_default() += 1;
             }
         }
-        let latest: Vec<(String, String, bool, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
-            "SELECT DISTINCT ON (peer) peer, body, outgoing, at
-             FROM messages WHERE account = $1 ORDER BY peer, at DESC",
-        )
-        .bind(engine.username())
-        .fetch_all(&self.db)
-        .await?;
+        let latest: Vec<(String, String, bool, chrono::DateTime<chrono::Utc>)> =
+            sqlx::query_as(LATEST_PER_PEER)
+                .bind(engine.username())
+                .fetch_all(&self.db.read)
+                .await?;
         Ok(latest
             .into_iter()
             .filter(|(peer, _, outgoing, _)| !outgoing && waiting.contains_key(peer))
@@ -504,13 +518,12 @@ impl Social {
         limit: i64,
     ) -> Result<Vec<(String, bool, chrono::DateTime<chrono::Utc>)>> {
         let engine = self.engine()?;
-        let mut rows: Vec<(String, bool, chrono::DateTime<chrono::Utc>)> =
-            sqlx::query_as("SELECT body, outgoing, at FROM messages WHERE account = $1 AND peer = $2 ORDER BY at DESC LIMIT $3")
-                .bind(engine.username())
-                .bind(peer)
-                .bind(limit)
-                .fetch_all(&self.db)
-                .await?;
+        let mut rows: Vec<(String, bool, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(THREAD)
+            .bind(engine.username())
+            .bind(peer)
+            .bind(limit)
+            .fetch_all(&self.db.read)
+            .await?;
         rows.reverse();
         Ok(rows)
     }
@@ -518,22 +531,20 @@ impl Social {
     /// Private messages received and not yet read, across everyone.
     pub async fn unread(&self) -> Result<i64> {
         let engine = self.engine()?;
-        Ok(sqlx::query_scalar(
-            "SELECT count(*) FROM messages WHERE account = $1 AND NOT read AND NOT outgoing",
-        )
-        .bind(engine.username())
-        .fetch_one(&self.db)
-        .await?)
+        Ok(sqlx::query_scalar(UNREAD)
+            .bind(engine.username())
+            .fetch_one(&self.db.read)
+            .await?)
     }
 
     pub async fn mark_read(&self, peer: &str) -> Result<()> {
         let engine = self.engine()?;
         sqlx::query(
-            "UPDATE messages SET read = TRUE WHERE account = $1 AND peer = $2 AND NOT read",
+            "UPDATE messages SET read = TRUE WHERE account = ?1 AND peer = ?2 AND NOT read",
         )
         .bind(engine.username())
         .bind(peer)
-        .execute(&self.db)
+        .execute(&self.db.write)
         .await?;
         Ok(())
     }
@@ -544,11 +555,11 @@ impl Social {
         let engine = self.engine()?;
         let account = engine.username();
         let previous: Option<bool> = sqlx::query_scalar(
-            "DELETE FROM interests WHERE account = $1 AND item = $2 RETURNING liked",
+            "DELETE FROM interests WHERE account = ?1 AND item = ?2 RETURNING liked",
         )
         .bind(&account)
         .bind(item)
-        .fetch_optional(&self.db)
+        .fetch_optional(&self.db.write)
         .await?;
         match previous {
             Some(true) => engine.send(ToServer::RemoveThingILike { item: item.into() })?,
@@ -556,11 +567,11 @@ impl Social {
             None => {}
         }
         if let Some(liked) = liked {
-            sqlx::query("INSERT INTO interests (account, item, liked) VALUES ($1, $2, $3)")
+            sqlx::query("INSERT INTO interests (account, item, liked) VALUES (?1, ?2, ?3)")
                 .bind(&account)
                 .bind(item)
                 .bind(liked)
-                .execute(&self.db)
+                .execute(&self.db.write)
                 .await?;
             engine.send(if liked {
                 ToServer::AddThingILike { item: item.into() }
@@ -574,9 +585,9 @@ impl Social {
     pub async fn interests(&self) -> Result<Vec<(String, bool)>> {
         let engine = self.engine()?;
         Ok(
-            sqlx::query_as("SELECT item, liked FROM interests WHERE account = $1 ORDER BY item")
+            sqlx::query_as("SELECT item, liked FROM interests WHERE account = ?1 ORDER BY item")
                 .bind(engine.username())
-                .fetch_all(&self.db)
+                .fetch_all(&self.db.read)
                 .await?,
         )
     }
@@ -587,31 +598,31 @@ impl Social {
         let engine = self.engine()?;
         let id = Uuid::new_v4();
         sqlx::query(
-            "INSERT INTO wishes (id, account, query, lossless, grab) VALUES ($1, $2, $3, $4, $5)",
+            "INSERT INTO wishes (id, account, query, lossless, grab) VALUES (?1, ?2, ?3, ?4, ?5)",
         )
         .bind(id)
         .bind(engine.username())
         .bind(query)
         .bind(lossless)
         .bind(grab)
-        .execute(&self.db)
+        .execute(&self.db.write)
         .await?;
         Ok(id)
     }
 
     pub async fn remove_wish(&self, id: Uuid) -> Result<()> {
-        sqlx::query("DELETE FROM wishes WHERE id = $1")
+        sqlx::query("DELETE FROM wishes WHERE id = ?1")
             .bind(id)
-            .execute(&self.db)
+            .execute(&self.db.write)
             .await?;
         Ok(())
     }
 
     pub async fn wishes(&self) -> Result<Vec<Wish>> {
         let engine = self.engine()?;
-        Ok(sqlx::query_as("SELECT id, query, lossless, grab, searched_at, job_id FROM wishes WHERE account = $1 ORDER BY created_at")
+        Ok(sqlx::query_as("SELECT id, query, lossless, grab, searched_at, job_id FROM wishes WHERE account = ?1 ORDER BY created_at")
             .bind(engine.username())
-            .fetch_all(&self.db)
+            .fetch_all(&self.db.read)
             .await?)
     }
 
@@ -632,20 +643,21 @@ impl Social {
 
     async fn wishlist_tick(&self) -> Result<()> {
         let engine = self.engine()?;
-        let Some(wish): Option<Wish> = sqlx::query_as(
-            "SELECT id, query, lossless, grab, searched_at, job_id FROM wishes
-             WHERE account = $1 AND job_id IS NULL ORDER BY searched_at NULLS FIRST LIMIT 1",
-        )
-        .bind(engine.username())
-        .fetch_optional(&self.db)
-        .await?
+        let Some(wish): Option<Wish> = sqlx::query_as(NEXT_WISH)
+            .bind(engine.username())
+            .fetch_optional(&self.db.read)
+            .await?
         else {
             return Ok(());
         };
-        sqlx::query("UPDATE wishes SET searched_at = now() WHERE id = $1")
-            .bind(wish.id)
-            .execute(&self.db)
-            .await?;
+        sqlx::query(concat!(
+            "UPDATE wishes SET searched_at = ",
+            crate::db::now!(),
+            " WHERE id = ?1"
+        ))
+        .bind(wish.id)
+        .execute(&self.db.write)
+        .await?;
         engine.pace().await;
         let mut rx = engine.wishlist_search(&wish.query)?;
         let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
@@ -670,10 +682,10 @@ impl Social {
                     .jobs
                     .from_folder(&best, Some(wish.query.clone()), alternates)
                     .await?;
-                sqlx::query("UPDATE wishes SET job_id = $2 WHERE id = $1")
+                sqlx::query("UPDATE wishes SET job_id = ?2 WHERE id = ?1")
                     .bind(wish.id)
                     .bind(job.id)
-                    .execute(&self.db)
+                    .execute(&self.db.write)
                     .await?;
             }
         }

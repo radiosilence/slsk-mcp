@@ -13,6 +13,7 @@ mod graphql;
 mod jobs;
 mod library;
 mod mcp;
+mod pg_import;
 mod session;
 mod social;
 mod ui;
@@ -29,7 +30,7 @@ use crate::session::Session;
 
 pub struct App {
     pub cfg: Arc<Config>,
-    pub db: sqlx::PgPool,
+    pub db: crate::db::Db,
     pub session: Arc<Session>,
     pub jobs: Arc<jobs::Jobs>,
     pub social: Arc<social::Social>,
@@ -71,12 +72,30 @@ async fn main() -> anyhow::Result<()> {
         "library {} does not exist; is the drive mounted?",
         cfg.library_dir.display()
     );
-    let db = db::connect(&cfg.database_url).await.context("database")?;
     for dir in [&cfg.staging_dir, &cfg.complete_dir] {
         std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     }
     std::fs::create_dir_all(&cfg.state_dir)
         .with_context(|| format!("creating {}", cfg.state_dir.display()))?;
+    let db = db::Db::open(&cfg.state_dir.join("slsk.db"))
+        .await
+        .context("database")?;
+    if let Some(url) = &cfg.import_from {
+        pg_import::run(&db, url)
+            .await
+            .context("importing from Postgres")?;
+    }
+    {
+        let db = db.clone();
+        tokio::spawn(async move {
+            let mut every = tokio::time::interval(std::time::Duration::from_secs(60 * 60));
+            every.tick().await;
+            loop {
+                every.tick().await;
+                db.optimize().await;
+            }
+        });
+    }
 
     let mut sift_cfg = match &cfg.beets_config {
         Some(p) => {
@@ -298,7 +317,7 @@ async fn state_metrics(app: &App, out: &mut String) {
     }
     let jobs: Vec<(String, i64)> =
         sqlx::query_as("SELECT status, count(*) FROM jobs GROUP BY status ORDER BY status")
-            .fetch_all(&app.db)
+            .fetch_all(&app.db.read)
             .await
             .unwrap_or_default();
     gauge(
@@ -309,7 +328,7 @@ async fn state_metrics(app: &App, out: &mut String) {
     );
     let unread: i64 =
         sqlx::query_scalar("SELECT count(*) FROM messages WHERE NOT read AND NOT outgoing")
-            .fetch_one(&app.db)
+            .fetch_one(&app.db.read)
             .await
             .unwrap_or(0);
     gauge(
@@ -319,7 +338,7 @@ async fn state_metrics(app: &App, out: &mut String) {
         "",
     );
     let wishes: i64 = sqlx::query_scalar("SELECT count(*) FROM wishes WHERE job_id IS NULL")
-        .fetch_one(&app.db)
+        .fetch_one(&app.db.read)
         .await
         .unwrap_or(0);
     gauge(
