@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.58
+
+- **The web UI shows its version**, at the foot of every page, linked to that release's notes.
+
 ## 0.1.57
 
 - **Postgres is gone.** 0.1.56 copied its state into SQLite; this release stops reading `DATABASE_URL`, and the Kubernetes component no longer runs a Postgres container. Its data directory (`statePath/postgres`) is left on disk to delete by hand. The component's `databasePassword` is still accepted, and ignored, so callers keep compiling until they drop it.

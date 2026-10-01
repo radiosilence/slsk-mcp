@@ -269,6 +269,7 @@ struct Page {
     up_count: String,
     chat_count: String,
     enrich: String,
+    version: &'static str,
 }
 
 async fn page(State(s): State<UiState>) -> Result<Html<String>, crate::error::AppError> {
@@ -280,6 +281,7 @@ async fn page(State(s): State<UiState>) -> Result<Html<String>, crate::error::Ap
         up_count: up_count_html(&s.app),
         chat_count: chat::count_html(&s.app).await,
         enrich: library::enrich_html(&s),
+        version: env!("CARGO_PKG_VERSION"),
     };
     Ok(Html(page.render().map_err(anyhow::Error::from)?))
 }
