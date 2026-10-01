@@ -81,9 +81,14 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("database")?;
     if let Some(url) = &cfg.import_from {
-        pg_import::run(&db, url)
-            .await
-            .context("importing from Postgres")?;
+        // History is worth keeping, not worth staying down for: the account
+        // also comes from the environment.
+        if let Err(e) = pg_import::run(&db, url).await {
+            tracing::error!(
+                error = format!("{e:#}"),
+                "importing from Postgres failed; starting without its history"
+            );
+        }
     }
     {
         let db = db.clone();
