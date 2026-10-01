@@ -937,8 +937,10 @@ pub(crate) async fn grab(
         static IN_FLIGHT: std::sync::LazyLock<
             parking_lot::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
         > = std::sync::LazyLock::new(Default::default);
-        IN_FLIGHT
-            .lock()
+        let mut in_flight = IN_FLIGHT.lock();
+        // A query nobody is grabbing holds only the map's reference.
+        in_flight.retain(|_, turn| Arc::strong_count(turn) > 1);
+        in_flight
             .entry(query.trim().to_lowercase())
             .or_default()
             .clone()

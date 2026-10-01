@@ -172,7 +172,6 @@ startup.
 
 | Variable | Default | |
 |---|---|---|
-| `DATABASE_URL` | — | The Postgres versions before 0.1.56 kept their state in. Read once into an empty `slsk.db`; unset it afterwards. |
 | `SEAL_KEY` | — | 32 bytes, base64. Seals Soulseek credentials at rest. |
 | `SLSK_USERNAME`, `SLSK_PASSWORD` | — | Log in at start. Credentials from the gateway or the UI replace them. |
 | `LIBRARY_DIR` | `/music` | Where imports are filed. |

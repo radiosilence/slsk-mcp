@@ -578,6 +578,22 @@ pub async fn claim_import(db: &Db, id: Uuid) -> sqlx::Result<bool> {
     .map(|row| row.is_some())
 }
 
+/// Move a job from one of `from` to `to`, in one statement, so a job that
+/// has moved on meanwhile is left alone. Whether it moved.
+pub async fn move_status(db: &Db, id: Uuid, from: &[&str], to: &str) -> sqlx::Result<bool> {
+    sqlx::query(concat!(
+        "UPDATE jobs SET status = ?2, updated_at = ",
+        now!(),
+        " WHERE id = ?1 AND status IN (SELECT value FROM json_each(?3)) RETURNING id"
+    ))
+    .bind(id)
+    .bind(to)
+    .bind(serde_json::to_string(from).unwrap_or_default())
+    .fetch_optional(&db.write)
+    .await
+    .map(|row| row.is_some())
+}
+
 pub async fn set_as_is_blocker(db: &Db, id: Uuid, blocker: &str) -> sqlx::Result<()> {
     sqlx::query("UPDATE jobs SET as_is_blocker = ?2 WHERE id = ?1")
         .bind(id)
@@ -914,5 +930,30 @@ mod tests {
         for suffix in ["", "-wal", "-shm"] {
             let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
         }
+    }
+
+    #[tokio::test]
+    async fn a_status_moves_only_from_the_states_named() {
+        let db = Db::memory().await;
+        let j = job("a", "imported");
+        insert_job(&db, &j, &[]).await.unwrap();
+        assert!(
+            !move_status(&db, j.id, &["downloading"], "cancelled")
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            super::job(&db, j.id).await.unwrap().unwrap().status,
+            "imported"
+        );
+        assert!(
+            move_status(&db, j.id, &["downloading", "imported"], "removing")
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            super::job(&db, j.id).await.unwrap().unwrap().status,
+            "removing"
+        );
     }
 }

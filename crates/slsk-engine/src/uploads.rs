@@ -193,6 +193,10 @@ impl Uploads {
             && let Some(i) = list.iter().position(|u| &u.filename == filename)
         {
             let u = list.remove(i).unwrap();
+            if list.is_empty() {
+                q.by_user.remove(username);
+                q.order.retain(|o| o != username);
+            }
             u.set(UploadState::Cancelled);
             push_history(&mut q.history, u);
             return true;
@@ -252,16 +256,21 @@ pub(crate) fn enqueue(
     {
         return Ok(());
     }
-    let list = q.by_user.entry(username.to_string()).or_default();
-    if list.iter().any(|u| u.filename == filename) {
+    let list = q.by_user.get(username);
+    if list.is_some_and(|l| l.iter().any(|u| u.filename == filename)) {
         return Ok(());
     }
-    if list.len() >= inner.cfg.max_queued_files_per_user {
+    if list.map_or(0, VecDeque::len) >= inner.cfg.max_queued_files_per_user {
         return Err(reason::TOO_MANY_FILES);
     }
-    if list.iter().map(|u| u.size).sum::<u64>() + size > inner.cfg.max_queued_bytes_per_user {
+    // A refusal leaves no entry behind: a file bigger than the cap is asked
+    // for by strangers, and each would otherwise stay in the queue empty.
+    if list.map_or(0, |l| l.iter().map(|u| u.size).sum::<u64>()) + size
+        > inner.cfg.max_queued_bytes_per_user
+    {
         return Err(reason::TOO_MANY_MEGABYTES);
     }
+    let list = q.by_user.entry(username.to_string()).or_default();
     list.push_back(Arc::new(Upload {
         id: inner.uploads.next_id.fetch_add(1, Ordering::Relaxed),
         username: username.to_string(),
@@ -364,7 +373,9 @@ async fn run(inner: Arc<Inner>, u: Arc<Upload>) {
             }
             *u.error.lock() = Some(e.to_string());
             inner.metrics.uploads_failed.fetch_add(1, Ordering::Relaxed);
-            if u.bytes.load(Ordering::Relaxed) > 0 {
+            // Told whether or not a byte went: a downloader not told waits
+            // in a queue we have already left, and never asks again.
+            if u.state() != UploadState::Cancelled {
                 let frame = PeerMessage::UploadFailed {
                     filename: u.filename.clone(),
                 }
@@ -500,6 +511,16 @@ mod tests {
             }
         }
         q
+    }
+
+    #[test]
+    fn cancelling_a_users_last_file_leaves_nothing_queued_for_them() {
+        let uploads = Uploads::new(1);
+        *uploads.queue.lock() = queue(&[("a", "1"), ("b", "1")]);
+        assert!(uploads.cancel("a", &"1".into()));
+        let q = uploads.queue.lock();
+        assert!(!q.by_user.contains_key("a"));
+        assert_eq!(q.order, ["b"]);
     }
 
     #[test]

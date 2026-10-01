@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.57
+
+- **Postgres is gone.** 0.1.56 copied its state into SQLite; this release stops reading `DATABASE_URL`, and the Kubernetes component no longer runs a Postgres container. Its data directory (`statePath/postgres`) is left on disk to delete by hand. The component's `databasePassword` is still accepted, and ignored, so callers keep compiling until they drop it.
+- **A file that cannot be read stops an import** ([#20](https://github.com/radiosilence/slsk-mcp/issues/20)). Analysis left out any track it could not open or decode at all, so the damaged-copy check never saw it and a broken file could be filed. Such a track is now recorded with the reason and counts as damage. A codec this build does not decode (AAC in an `.m4a`) is still skipped, not mistaken for damage.
+- **Cancel and remove leave a job consistent** ([#21](https://github.com/radiosilence/slsk-mcp/issues/21)). `cancelJob` changed any job, an imported one included, to cancelled; it now cancels only a download in progress, and a deferred import of a cancelled job no longer runs later. `removeJob` takes the job out of every state an import starts from in one statement, so an import cannot start between its check and its delete, and it deletes the job's spectrograms.
+- **Bookkeeping that only grew** ([#22](https://github.com/radiosilence/slsk-mcp/issues/22)). A queued download whose peer has gone is asked for again rather than waiting for good. A downloader is told when an upload to them fails before any bytes went, so they do not wait in a queue we have left. Peer addresses, unread searches, address requests that timed out, refused or cancelled upload queue entries and idle grab locks no longer accumulate. A peer that stops reading a browse or search reply loses the connection after 2 minutes instead of holding it.
+
 ## 0.1.56
 
 - **State is kept in SQLite, not Postgres.** Jobs, sealed credentials, bans, messages, wishes, upload history and the lifetime totals are in `STATE_DIR/slsk.db`. One process is the only writer, so a database server added a process, a password and a network hop and took no load off. The file is opened once, at startup: reads share a pool of read-only connections, every write goes through one connection, and each connection runs on its own thread. The queries that run on every tick or page load are checked against SQLite's query plan in the tests and each is answered from an index.

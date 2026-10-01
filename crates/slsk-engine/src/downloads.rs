@@ -299,7 +299,11 @@ async fn drive(inner: Arc<Inner>, d: Arc<Download>) {
                     _ = d.wake.notified() => {}
                     _ = tokio::time::sleep(Duration::from_secs(300)) => {
                         let frame = PeerMessage::PlaceInQueueRequest { filename: d.filename.clone() }.encode();
-                        let _ = peers::send(&inner, &d.username, frame).await;
+                        // Gone, or restarted and holding nothing for us: ask
+                        // again from the top.
+                        if peers::send(&inner, &d.username, frame).await.is_err() {
+                            d.transition(DownloadState::Remote, DownloadState::Queued);
+                        }
                     }
                 }
             }

@@ -449,6 +449,9 @@ impl Engine {
     ) -> Result<mpsc::Receiver<SearchResponse>> {
         let token = self.0.next_token();
         let (tx, rx) = mpsc::channel(1024);
+        // Searches whose results nobody reads any more go here, not only when
+        // a late result happens to arrive for one.
+        self.0.searches.retain(|_, t| !t.is_closed());
         self.0.searches.insert(token, tx);
         if let Err(e) = self.0.send_server(msg(token)) {
             self.0.searches.remove(&token);
@@ -557,7 +560,7 @@ impl Engine {
 
 /// Drop waiters nobody is waiting on any more, and the entry once empty: a
 /// peer that never answers would otherwise keep them for good.
-fn forget_closed<T>(waiters: &DashMap<String, Vec<oneshot::Sender<T>>>, username: &str) {
+pub(crate) fn forget_closed<T>(waiters: &DashMap<String, Vec<oneshot::Sender<T>>>, username: &str) {
     if let Some(mut w) = waiters.get_mut(username) {
         w.retain(|tx| !tx.is_closed());
     }

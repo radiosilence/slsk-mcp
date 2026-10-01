@@ -44,14 +44,9 @@ const PRIVATE = [
 ];
 
 /**
- * slsk-mcp: a Soulseek client, the Postgres it keeps jobs in, and a UPnP
- * mapper for its peer port.
- *
- * Postgres is a container in the same pod rather than a deployment of its
- * own. It holds one service's jobs and sealed credentials, listens on the
- * pod's loopback only, and lives and dies with the pod on the node whose disk
- * holds its data — a separate deployment would add a Service, a policy and a
- * scheduling constraint to reach the same place.
+ * slsk-mcp: a Soulseek client and a UPnP mapper for its peer port. Its state
+ * (jobs, sealed credentials, history) is a SQLite file in `statePath`, on the
+ * node's own disk.
  */
 export function createSlsk(
   provider: k8s.Provider,
@@ -68,7 +63,12 @@ export function createSlsk(
     oidcClientSecret: pulumi.Input<string>;
     /** 32 random bytes, base64. Seals Soulseek credentials at rest. */
     sealKey: pulumi.Input<string>;
-    databasePassword: pulumi.Input<string>;
+    /**
+     * @deprecated Ignored: state is in SQLite since 0.1.56, and nothing reads
+     * a password. Kept so a caller still passing it compiles; remove it from
+     * the call.
+     */
+    databasePassword?: pulumi.Input<string>;
     /**
      * An account to log in with at start, so the client is sharing before
      * anyone asks it anything. Credentials from the gateway or the UI replace
@@ -145,8 +145,6 @@ export function createSlsk(
       stringData: {
         "oidc-client-secret": pulumi.output(opts.oidcClientSecret),
         "seal-key": pulumi.output(opts.sealKey),
-        "database-password": pulumi.output(opts.databasePassword),
-        "database-url": pulumi.interpolate`postgres://slsk:${opts.databasePassword}@127.0.0.1:5432/slsk`,
         ...(opts.account && {
           "slsk-username": pulumi.output(opts.account.username),
           "slsk-password": pulumi.output(opts.account.password),
@@ -232,7 +230,7 @@ export function createSlsk(
                 command: [
                   "sh",
                   "-c",
-                  `test -d ${conf.library} && mkdir -p ${state}/postgres ${state}/data ${downloads}/incomplete ${downloads}/complete && chown 1000:1000 ${state} ${state}/postgres ${state}/data ${downloads} ${downloads}/incomplete ${downloads}/complete && chmod 700 ${state}/postgres`,
+                  `test -d ${conf.library} && mkdir -p ${state}/data ${downloads}/incomplete ${downloads}/complete && chown 1000:1000 ${state} ${state}/data ${downloads} ${downloads}/incomplete ${downloads}/complete && chmod 700 ${state}/data`,
                 ],
                 securityContext: {
                   runAsUser: 0,
@@ -249,32 +247,6 @@ export function createSlsk(
             ],
             containers: [
               {
-                name: "postgres",
-                image: VERSIONS.postgres,
-                imagePullPolicy: "IfNotPresent",
-                // Loopback only: the pod's own containers are the only clients.
-                args: ["-c", "listen_addresses=127.0.0.1"],
-                env: [
-                  { name: "POSTGRES_USER", value: "slsk" },
-                  { name: "POSTGRES_DB", value: "slsk" },
-                  { name: "POSTGRES_PASSWORD", ...secretRef("database-password") },
-                  { name: "PGDATA", value: `${state}/postgres/pgdata` },
-                ],
-                readinessProbe: {
-                  exec: { command: ["pg_isready", "-h", "127.0.0.1", "-U", "slsk"] },
-                  periodSeconds: 10,
-                },
-                resources: {
-                  limits: conf.postgres.limits,
-                  ...(conf.postgres.requests && { requests: conf.postgres.requests }),
-                },
-                securityContext: {
-                  allowPrivilegeEscalation: false,
-                  capabilities: { drop: ["ALL"] },
-                },
-                volumeMounts: [{ name: "state", mountPath: state }],
-              },
-              {
                 name: NAME,
                 image: VERSIONS.slsk,
                 imagePullPolicy: "IfNotPresent",
@@ -290,7 +262,6 @@ export function createSlsk(
                   },
                 ],
                 env: [
-                  { name: "DATABASE_URL", ...secretRef("database-url") },
                   { name: "SEAL_KEY", ...secretRef("seal-key") },
                   { name: "LIBRARY_DIR", value: conf.library },
                   { name: "SHARE_DIRS", value: shares.join(",") },
