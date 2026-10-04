@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.61
+
+- **The address keeps your place, not only your tab.** An album search (`/?q=…`), a library search (`/library?q=…`), a user's shares and the folder in them (`/browse?username=…&key=…`) and an open conversation (`/chat?kind=pm&name=…`) are each in the address, so reloading, sharing the link, or going back and forward returns to the same place. Each tab also remembers where it was, so leaving a conversation for another tab and coming back reopens it.
+
 ## 0.1.60
 
 - **Re-file shows exactly what it would do.** Each album on the Library page opens to the list of every file it would move, from and to, worked out from the files as they are when it is opened, including the cover and other files that follow the album.

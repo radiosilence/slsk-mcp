@@ -3034,7 +3034,7 @@ dependencies = [
 
 [[package]]
 name = "slsk-mcp"
-version = "0.1.60"
+version = "0.1.61"
 dependencies = [
  "anyhow",
  "askama",

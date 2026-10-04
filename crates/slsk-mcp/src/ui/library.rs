@@ -240,12 +240,16 @@ async fn html(app: &App) -> String {
     view.render().unwrap_or_default()
 }
 
-/// Reading the whole library takes a moment on a large one, so say so first.
-async fn view(State(s): State<UiState>) -> Response {
-    let app = s.app.clone();
+/// The library's overview, and the albums `q` finds when the address has a
+/// search: what `find` showed, back after a reload.
+async fn view(State(s): State<UiState>, Query(q): Query<Vec<(String, String)>>) -> Response {
+    let find = super::field(&q, "q").map(str::to_string);
     sse(async_stream::stream! {
         yield Ok(patch(r#"<div id="library"><p class="note">Reading the library…</p></div>"#));
-        yield Ok(patch(&html(&app).await));
+        if let Some(find) = find {
+            yield Ok(patch(&found_html(&s, find).await));
+        }
+        yield Ok(patch(&html(&s.app).await));
     })
     .into_response()
 }
@@ -276,6 +280,13 @@ struct FindForm {
 
 async fn find(State(s): State<UiState>, axum::Form(f): axum::Form<FindForm>) -> Response {
     let q = f.q.trim().to_string();
+    super::many(vec![
+        patch(&found_html(&s, q.clone()).await),
+        super::place("library", &super::place_url("/library", &[("q", &q)])),
+    ])
+}
+
+async fn found_html(s: &UiState, q: String) -> String {
     let terms: Vec<String> = q.split_whitespace().map(String::from).collect();
     let root = s.app.library.root().to_string_lossy().into_owned();
     let view = match s.app.library.albums(&terms).await {
@@ -294,7 +305,7 @@ async fn find(State(s): State<UiState>, axum::Form(f): axum::Form<FindForm>) -> 
             error: Some(format!("{e:#}")),
         },
     };
-    one(view.render().unwrap_or_default())
+    view.render().unwrap_or_default()
 }
 
 /// A background enrichment and how far it has got. Enriching reads every

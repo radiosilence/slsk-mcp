@@ -26,7 +26,7 @@ use super::{UiState, failed, fields, flash_ok, human, jobs_html, one, patch, sse
 
 pub(super) fn routes() -> Router<UiState> {
     Router::new()
-        .route("/browse", post(browse))
+        .route("/browse", post(browse).get(browse_get))
         .route("/browse/files", post(download_files))
         .route("/browse/tree", post(download_tree))
 }
@@ -246,19 +246,35 @@ struct Fresh {
 /// Open a user's shares at a folder (the top when none is given). The
 /// username arrives in a form field, never in the URL or an expression.
 async fn browse(State(s): State<UiState>, Query(q): Query<Fresh>, body: Bytes) -> Response {
-    let form = fields(&body);
-    let Some(username) = super::field(&form, "username").map(|u| u.trim().to_string()) else {
+    browse_at(s, &fields(&body), q.fresh)
+}
+
+/// The same, from the address: `/browse?username=…&key=…`, which `browse`
+/// reports as the place it drew.
+async fn browse_get(State(s): State<UiState>, Query(q): Query<Vec<(String, String)>>) -> Response {
+    let fresh = super::field(&q, "fresh").is_some();
+    browse_at(s, &q, fresh)
+}
+
+fn browse_at(s: UiState, form: &[(String, String)], fresh: bool) -> Response {
+    let Some(username) = super::field(form, "username").map(|u| u.trim().to_string()) else {
         return failed(&anyhow::anyhow!("Say whose shares to browse."));
     };
-    let Ok(at) = URL_SAFE_NO_PAD.decode(super::field(&form, "key").unwrap_or_default()) else {
+    let key = super::field(form, "key").unwrap_or_default().to_string();
+    let Ok(at) = URL_SAFE_NO_PAD.decode(&key) else {
         return failed(&anyhow::anyhow!("not a folder key"));
     };
+    let here = super::place(
+        "browse",
+        &super::place_url("/browse", &[("username", &username), ("key", &key)]),
+    );
     let Some(engine) = s.app.session.engine().cloned() else {
         return failed(&anyhow::anyhow!("Sign in to Soulseek first."));
     };
     let cache = s.browsed.clone();
     sse(async_stream::stream! {
-        let listing = match cache.get(&username).filter(|_| !q.fresh) {
+        yield Ok(here);
+        let listing = match cache.get(&username).filter(|_| !fresh) {
             Some(l) => l,
             None => {
                 yield Ok(patch(&note(&username, format!("Asking {username} for their shares…"))));
