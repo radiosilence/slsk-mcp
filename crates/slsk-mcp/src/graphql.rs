@@ -1255,10 +1255,7 @@ impl Mutation {
     }
 
     async fn set_upload_slots(&self, ctx: &Context<'_>, slots: usize) -> Result<bool> {
-        app(ctx)
-            .session
-            .require()?
-            .set_upload_slots(slots.clamp(1, 100));
+        app(ctx).session.require()?.set_upload_slots(slots.max(1));
         Ok(true)
     }
 

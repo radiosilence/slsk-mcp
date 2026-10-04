@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.62
+
+- **Upload slots have no ceiling, and default to 500.** The Settings page and `setUploadSlots` held the count to 100 for no reason the engine has. Each running upload costs a socket and a 256 KiB buffer, and past what saturates the uplink more slots share it more ways rather than send more, so the number to pick follows the connection.
+
 ## 0.1.61
 
 - **The address keeps your place, not only your tab.** An album search (`/?q=…`), a library search (`/library?q=…`), a user's shares and the folder in them (`/browse?username=…&key=…`) and an open conversation (`/chat?kind=pm&name=…`) are each in the address, so reloading, sharing the link, or going back and forward returns to the same place. Each tab also remembers where it was, so leaving a conversation for another tab and coming back reopens it.

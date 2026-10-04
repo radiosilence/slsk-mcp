@@ -158,7 +158,7 @@ fn number(form: &[(String, String)], name: &str, what: &str) -> anyhow::Result<u
 async fn slots(State(s): State<UiState>, body: Bytes) -> Response {
     let form = fields(&body);
     let result = async {
-        let n = number(&form, "slots", "Upload slots")?.clamp(1, 100) as usize;
+        let n = number(&form, "slots", "Upload slots")?.max(1) as usize;
         s.app.session.require()?.set_upload_slots(n);
         anyhow::Ok(n)
     }
