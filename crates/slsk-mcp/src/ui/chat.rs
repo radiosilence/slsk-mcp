@@ -48,6 +48,15 @@ struct Thread {
 }
 
 impl Thread {
+    /// Its address, as the thread form names it.
+    fn url(&self) -> String {
+        let kind = match self.kind {
+            Kind::Room => "room",
+            Kind::Private => "pm",
+        };
+        super::place_url("/chat", &[("kind", kind), ("name", &self.name)])
+    }
+
     fn from_fields(form: &[(String, String)]) -> Option<Self> {
         let name = super::field(form, "name")?.to_string();
         let kind = match super::field(form, "kind")? {
@@ -297,9 +306,12 @@ async fn view(State(s): State<UiState>, Query(q): Query<Poll>) -> Response {
         .collect();
     let thread = Thread::from_fields(&form);
     // The lines first: drawing a private conversation marks it read, which
-    // the lists and the badge then reflect.
+    // the lists and the badge then reflect. A poll refreshes the lines of
+    // the open thread; otherwise the thread is drawn whole, as when the
+    // address names it.
     let mut html = match &thread {
-        Some(t) => lines_html(&s.app, t).await + "\n",
+        Some(t) if q.poll => lines_html(&s.app, t).await + "\n",
+        Some(t) => thread_html(&s.app, Some(t)).await + "\n",
         None => String::new(),
     };
     html.push_str(&side_html(&s.app).await);
@@ -309,7 +321,10 @@ async fn view(State(s): State<UiState>, Query(q): Query<Poll>) -> Response {
     }
     html.push('\n');
     html.push_str(&count_html(&s.app).await);
-    one(html)
+    match thread.filter(|_| !q.poll) {
+        Some(t) => many(vec![patch(&html), super::place("chat", &t.url())]),
+        None => one(html),
+    }
 }
 
 /// Open a room (`room`) or a private conversation (`username`).
@@ -343,6 +358,7 @@ async fn opened(app: &App, t: &Thread, flash: Option<String>) -> Response {
             flash.unwrap_or_else(|| "<div id=\"flash\"></div>".into())
         )),
         signals(r#"{"_msg":""}"#),
+        super::place("chat", &t.url()),
     ])
 }
 

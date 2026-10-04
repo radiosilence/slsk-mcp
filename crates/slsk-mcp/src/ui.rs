@@ -64,9 +64,8 @@ pub fn router(app: Arc<App>) -> Router {
     };
     let protected = Router::new()
         .route("/", get(page))
-        // No content of their own to fetch; `tab_pages` answers a browser.
+        // No content of its own to fetch.
         .route("/uploads", get(page))
-        .route("/browse", get(page))
         .route("/stream", get(stream))
         .route("/search", post(search))
         .route("/grab", post(grab))
@@ -282,6 +281,11 @@ struct Page {
     version: &'static str,
     /// The tab the address names, open on arrival.
     tab: &'static str,
+    /// The page's starting signals, from the address: the tab, where in it,
+    /// and a search to fill in.
+    signals: String,
+    /// The address carries an album search; run it again on arrival.
+    search: bool,
 }
 
 /// Tabs with an address of their own, `/<tab>`. The albums tab is `/`.
@@ -299,7 +303,7 @@ async fn tab_pages(State(s): State<UiState>, request: Request, next: Next) -> Re
             .iter()
             .find(|t| request.uri().path().strip_prefix('/') == Some(**t))
     {
-        return match render_page(&s, tab).await {
+        return match render_page(&s, tab, request.uri()).await {
             Ok(html) => html.into_response(),
             Err(e) => e.into_response(),
         };
@@ -307,14 +311,64 @@ async fn tab_pages(State(s): State<UiState>, request: Request, next: Next) -> Re
     next.run(request).await
 }
 
-async fn page(State(s): State<UiState>) -> Result<Html<String>, crate::error::AppError> {
-    render_page(&s, "albums").await
+async fn page(
+    State(s): State<UiState>,
+    uri: http::Uri,
+) -> Result<Html<String>, crate::error::AppError> {
+    let tab = TABS
+        .iter()
+        .find(|t| uri.path().strip_prefix('/') == Some(**t))
+        .copied()
+        .unwrap_or("albums");
+    render_page(&s, tab, &uri).await
+}
+
+/// An address with its query, as the page keeps it.
+fn place_url(path: &str, params: &[(&str, &str)]) -> String {
+    let query: String = url::form_urlencoded::Serializer::new(String::new())
+        .extend_pairs(params.iter().filter(|(_, v)| !v.is_empty()))
+        .finish();
+    if query.is_empty() {
+        path.to_string()
+    } else {
+        format!("{path}?{query}")
+    }
+}
+
+/// Where `tab` now is, for the address bar (`_url`) and for coming back to
+/// the tab (`_at`). Every action that moves within a tab reports it, so a
+/// reload, a shared link or back and forward return to the same place: the
+/// address is the one the page fetches to draw it.
+fn place(tab: &str, url: &str) -> Event {
+    signals(&serde_json::json!({ "_url": url, "_at": { tab: url } }).to_string())
 }
 
 async fn render_page(
     s: &UiState,
     tab: &'static str,
+    uri: &http::Uri,
 ) -> Result<Html<String>, crate::error::AppError> {
+    let url = uri.path_and_query().map_or("/", |p| p.as_str()).to_string();
+    let params: Vec<(String, String)> =
+        url::form_urlencoded::parse(uri.query().unwrap_or("").as_bytes())
+            .into_owned()
+            .collect();
+    let param = |k: &str| field(&params, k).unwrap_or_default().to_string();
+    let q = if tab == "albums" {
+        param("q")
+    } else {
+        String::new()
+    };
+    let signals = serde_json::json!({
+        "q": q,
+        "lossless": q.is_empty() || !param("lossless").is_empty(),
+        "busy": false,
+        "tab": tab,
+        "_url": url,
+        "_at": { tab: url },
+        "_libq": if tab == "library" { param("q") } else { String::new() },
+    })
+    .to_string();
     let page = Page {
         status: status_html(&s.app).await,
         jobs: jobs_html(&s.app).await,
@@ -325,6 +379,8 @@ async fn render_page(
         enrich: library::enrich_html(s),
         version: env!("CARGO_PKG_VERSION"),
         tab,
+        search: !q.is_empty(),
+        signals,
     };
     Ok(Html(page.render().map_err(anyhow::Error::from)?))
 }
@@ -876,9 +932,20 @@ async fn search(State(s): State<UiState>, axum::Form(form): axum::Form<SearchFor
         lossless: form.lossless,
         ..Default::default()
     };
+    let here = place(
+        "albums",
+        &place_url(
+            "/",
+            &[
+                ("q", &query),
+                ("lossless", if form.lossless { "1" } else { "" }),
+            ],
+        ),
+    );
     engine.pace().await;
     let rx = engine.search(&query);
     let events = async_stream::stream! {
+        yield Ok(here);
         let Ok(mut rx) = rx else {
             yield Ok(patch(r#"<div id="results" class="note">Not connected.</div>"#));
             return;

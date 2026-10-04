@@ -10,7 +10,7 @@
       </div>
       <div class="meta">
         {% if r.wish.lossless %}lossless · {% endif %}{% if r.wish.grab %}grabs when found{% else %}search only{% endif %} · {{ self.searched(r.wish) }}
-        {% match r.job %}{% when Some with (j) %} · became <a href="#job-{{ r.wish.job_id.unwrap_or_default() }}" data-on:click="$tab = 'albums'">{{ j.0 }}</a> ({{ self.label(j.1) }}){% when None %}{% endmatch %}
+        {% match r.job %}{% when Some with (j) %} · became <a href="#job-{{ r.wish.job_id.unwrap_or_default() }}" data-on:click="$tab = 'albums'; $_url = $_at.albums || '/'">{{ j.0 }}</a> ({{ self.label(j.1) }}){% when None %}{% endmatch %}
       </div>
     </li>
   {% endfor %}
