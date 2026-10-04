@@ -131,7 +131,7 @@ impl Config {
             complete_dir: PathBuf::from(or("COMPLETE_DIR", "/data/complete")),
             state_dir: PathBuf::from(or("STATE_DIR", "/data")),
             listen_port: num("LISTEN_PORT", 2234)?,
-            upload_slots: num("UPLOAD_SLOTS", 5)?,
+            upload_slots: num("UPLOAD_SLOTS", 500)?,
             upload_limit: num("UPLOAD_LIMIT", 0)?,
             download_limit: num("DOWNLOAD_LIMIT", 0)?,
             internal_addr: or("INTERNAL_ADDR", "0.0.0.0:8081"),

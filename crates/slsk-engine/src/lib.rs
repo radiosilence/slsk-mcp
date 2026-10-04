@@ -73,7 +73,7 @@ impl EngineConfig {
             listen_port: 2234,
             share_dirs: Vec::new(),
             state_dir: std::env::temp_dir(),
-            upload_slots: 5,
+            upload_slots: 500,
             upload_limit: 0,
             download_limit: 0,
             accept_children: true,

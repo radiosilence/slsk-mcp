@@ -35,7 +35,7 @@ export const SlskConfSchema = z.strictObject({
   listenPort: z.number().int().min(1024).max(65535).default(2240),
   /** Keep a UPnP forward for `listenPort` on the router. */
   upnp: z.boolean().default(true),
-  uploadSlots: z.number().int().positive().default(5),
+  uploadSlots: z.number().int().positive().default(500),
   /** Bytes per second, 0 for unlimited. */
   uploadLimit: z.number().int().nonnegative().default(0),
   downloadLimit: z.number().int().nonnegative().default(0),

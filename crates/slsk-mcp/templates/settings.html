@@ -8,7 +8,7 @@
   </div>
   <h3 class="section">Uploads</h3>
   <form id="set-slots" class="inline-form" data-indicator="_slots" data-on:submit__prevent="@post('/settings/slots', {contentType: 'form', selector: '#set-slots'})">
-    <label>Upload slots <input name="slots" type="number" inputmode="numeric" min="1" max="100" value="{{ slots }}" required></label>
+    <label>Upload slots <input name="slots" type="number" inputmode="numeric" min="1" value="{{ slots }}" required></label>
     <button type="submit" data-attr:disabled="$_slots" data-class:busy="$_slots">Save</button>
   </form>
   <form id="set-limits" class="inline-form" data-indicator="_limits" data-on:submit__prevent="@post('/settings/limits', {contentType: 'form', selector: '#set-limits'})">
