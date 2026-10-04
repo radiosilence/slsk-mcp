@@ -1,0 +1,10 @@
+<div id="pv-{{ key }}" class="preview">
+{% match note %}{% when Some with (n) %}<p class="note">{{ n }}</p>{% when None %}
+{% match into %}{% when Some with (dir) %}<p class="meta">Into <span class="path">{{ dir }}</span></p>{% when None %}{% endmatch %}
+<ul class="rows tight moves">
+{% for (from, to) in moves %}
+  <li>{% if from == to %}<span class="path">{{ from }}</span>{% else %}<span class="path from">{{ from }}</span><span class="path to">→ {{ to }}</span>{% endif %}</li>
+{% endfor %}
+</ul>
+{% endmatch %}
+</div>

@@ -7,8 +7,9 @@
     <button class="primary" data-indicator="_bin_all" data-attr:disabled="$_bin_all" data-class:busy="$_bin_all" data-on:click="confirm('Move every spare copy listed here to the bin?') && @post('/library/bin-all')">Bin all spares ({{ spares }})</button>
   </div>
   {% for d in dups %}
-  <article class="job" data-class:busy="$_bin_{{ loop.index }}">
-    <form id="bin-{{ loop.index }}"><input type="hidden" name="path" value="{{ d.keep.path }}">{% for sp in d.spares %}<input type="hidden" name="path" value="{{ sp.album.path }}">{% endfor %}</form>
+  {% let dk = self.key(d.keep.path) %}
+  <article class="job" data-class:busy="$_bin_{{ dk }}">
+    <form id="bin-{{ dk }}"><input type="hidden" name="path" value="{{ d.keep.path }}">{% for sp in d.spares %}<input type="hidden" name="path" value="{{ sp.album.path }}">{% endfor %}</form>
     <div class="row"><span class="pill keep">keep</span><span class="title path">{{ self.rel(d.keep.path) }}</span></div>
     <div class="meta">{{ self.album(d.keep) }}</div>
     <ul class="rows tight">
@@ -17,7 +18,7 @@
     {% endfor %}
     </ul>
     <div class="actions">
-      <button data-indicator="_bin_{{ loop.index }}" data-attr:disabled="$_bin_{{ loop.index }}" data-class:busy="$_bin_{{ loop.index }}" data-on:click="confirm('Move the spare copies of this album to the bin?') && @post('/library/bin', {contentType: 'form', selector: '#bin-{{ loop.index }}'})">Bin spares</button>
+      <button data-indicator="_bin_{{ dk }}" data-attr:disabled="$_bin_{{ dk }}" data-class:busy="$_bin_{{ dk }}" data-on:click="confirm('Move the spare copies of this album to the bin?') && @post('/library/bin', {contentType: 'form', selector: '#bin-{{ dk }}'})">Bin spares</button>
     </div>
   </article>
   {% endfor %}
@@ -25,34 +26,38 @@
 
   <h3 class="section">Re-file</h3>
   {% if groups.is_empty() %}<p class="note">Every album is where the current rules file it.</p>{% else %}
-  <p class="note">Albums the current naming rules would file elsewhere.</p>
-  {% if safe > 0 %}
+  <p class="note">Albums the current naming rules would file elsewhere. Open one to see every file it would move.</p>
+  <form id="refile-sel" data-signals="{_sel: 0}" data-init="$_sel = document.querySelectorAll('#refile-sel input[name=path]:checked').length" data-on:change="$_sel = document.querySelectorAll('#refile-sel input[name=path]:checked').length">
   <div class="actions">
-    <button class="primary" data-indicator="_refile_safe" data-attr:disabled="$_refile_safe" data-class:busy="$_refile_safe" data-on:click="confirm('Re-file every album whose change only corrects its file or folder names?') && @post('/library/refile-safe')">Re-file {{ safe }} safe</button>
+    <button type="button" class="primary" data-indicator="_refiling" data-attr:disabled="$_sel == 0" data-class:busy="$_refiling" data-text="$_sel ? 'Re-file ' + $_sel + ' selected' : 'Re-file selected'" data-on:click="confirm('Move ' + $_sel + ' albums to where the rules file them?') && @post('/library/refile', {contentType: 'form', selector: '#refile-sel'})">Re-file selected</button>
+    {% if safe > 0 %}
+    <button type="button" data-indicator="_refile_safe" data-attr:disabled="$_refile_safe" data-class:busy="$_refile_safe" data-on:click="confirm('Re-file every album whose change only corrects its file or folder names?') && @post('/library/refile-safe')">Re-file {{ safe }} safe</button>
+    {% endif %}
   </div>
-  {% endif %}
   {% for g in groups %}
-  {% let gi = loop.index %}
   <details class="group-list"{% if !g.change.safe() %} open{% endif %}>
-    <summary><strong>{{ g.change.label() }}</strong> <span class="count">{{ g.moves.len() }}</span>{% if g.change.safe() %} <span class="ok">safe</span>{% endif %}</summary>
+    <summary>{% if g.change != Change::Refused %}<input type="checkbox" class="all" title="Select all in this group" data-on:change="el.closest('details').querySelectorAll('input[name=path]').forEach(c => c.checked = el.checked)"> {% endif %}<strong>{{ g.change.label() }}</strong> <span class="count">{{ g.moves.len() }}</span>{% if g.change.safe() %} <span class="ok">safe</span>{% endif %}</summary>
     <p class="note">{{ g.change.why() }}</p>
     <ul class="rows">
     {% for m in self.shown(g) %}
-      <li data-class:busy="$_rf_{{ gi }}_{{ loop.index }}">
-        <span class="path">{{ self.rel(m.from) }}</span>
-        {% match m.to %}{% when Some with (to) %}
-        {% if g.change != Change::FileNames %}<span class="meta">→ {{ self.rel(to) }}</span>{% endif %}
-        <span class="meta">{{ m.files }} files</span>
-        <button type="button" name="path" value="{{ m.from }}" data-indicator="_rf_{{ gi }}_{{ loop.index }}" data-attr:disabled="$_rf_{{ gi }}_{{ loop.index }}" data-class:busy="$_rf_{{ gi }}_{{ loop.index }}" data-on:click="confirm('Move this album to where the rules file it?') && @post('/library/refile', {contentType: 'form', selector: '#act'})">Re-file</button>
-        {% when None %}
-        {% match m.refused %}{% when Some with (why) %}<span class="meta">{{ self.reason(why) }}</span>{% when None %}{% endmatch %}
-        {% endmatch %}
+      {% let k = self.key(m.from) %}
+      <li id="rf-{{ k }}" data-path="{{ m.from }}">
+        {% if m.to.is_some() %}<input type="checkbox" name="path" value="{{ m.from }}">{% endif %}
+        <details class="album" data-on:toggle="if (el.open && !el.dataset.loaded) { el.dataset.loaded = 1; @get('/library/preview?path=' + encodeURIComponent(el.closest('li').dataset.path)) }">
+          <summary><span class="path">{{ self.rel(m.from) }}</span>
+          {% match m.to %}{% when Some with (to) %}{% if g.change != Change::FileNames %}<span class="meta">→ {{ self.rel(to) }}</span>{% endif %}<span class="meta">{{ m.files }} files</span>
+          {% when None %}{% match m.refused %}{% when Some with (why) %}<span class="meta">{{ self.reason(why) }}</span>{% when None %}{% endmatch %}{% endmatch %}
+          </summary>
+          <div id="pv-{{ k }}" class="preview"><p class="note">Working out each file…</p></div>
+        </details>
+        <span id="st-{{ k }}"></span>
       </li>
     {% endfor %}
     </ul>
     {% if self.hidden(g) > 0 %}<p class="note">and {{ self.hidden(g) }} more</p>{% endif %}
   </details>
   {% endfor %}
+  </form>
   {% endif %}
 {% endmatch %}
 </div>

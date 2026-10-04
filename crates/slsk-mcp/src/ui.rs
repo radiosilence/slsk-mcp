@@ -45,6 +45,8 @@ pub struct UiState {
     pub http: reqwest::Client,
     enrich: Arc<parking_lot::Mutex<library::EnrichRun>>,
     browsed: browse::Cache,
+    /// Re-file batches still running; the last to finish redraws the page.
+    refiling: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 const CSP: &str = "default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self'; img-src 'self' data:; \
@@ -58,9 +60,13 @@ pub fn router(app: Arc<App>) -> Router {
         http: reqwest::Client::new(),
         enrich: Default::default(),
         browsed: Default::default(),
+        refiling: Default::default(),
     };
     let protected = Router::new()
         .route("/", get(page))
+        // No content of their own to fetch; `tab_pages` answers a browser.
+        .route("/uploads", get(page))
+        .route("/browse", get(page))
         .route("/stream", get(stream))
         .route("/search", post(search))
         .route("/grab", post(grab))
@@ -78,6 +84,10 @@ pub fn router(app: Arc<App>) -> Router {
         .merge(chat::routes())
         .merge(admin::routes())
         .layer(axum::middleware::from_fn(require_datastar_on_post))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            tab_pages,
+        ))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             crate::auth::extract::require_session,
@@ -270,9 +280,41 @@ struct Page {
     chat_count: String,
     enrich: String,
     version: &'static str,
+    /// The tab the address names, open on arrival.
+    tab: &'static str,
+}
+
+/// Tabs with an address of their own, `/<tab>`. The albums tab is `/`.
+const TABS: &[&str] = &[
+    "uploads", "wishlist", "library", "browse", "chat", "bans", "settings", "triage",
+];
+
+/// A browser asking for a tab's address gets the page open on that tab. The
+/// same address fetched by the page itself (`Datastar-Request`) is the
+/// tab's content, and goes on to its own handler.
+async fn tab_pages(State(s): State<UiState>, request: Request, next: Next) -> Response {
+    if request.method() == http::Method::GET
+        && !request.headers().contains_key("datastar-request")
+        && let Some(tab) = TABS
+            .iter()
+            .find(|t| request.uri().path().strip_prefix('/') == Some(**t))
+    {
+        return match render_page(&s, tab).await {
+            Ok(html) => html.into_response(),
+            Err(e) => e.into_response(),
+        };
+    }
+    next.run(request).await
 }
 
 async fn page(State(s): State<UiState>) -> Result<Html<String>, crate::error::AppError> {
+    render_page(&s, "albums").await
+}
+
+async fn render_page(
+    s: &UiState,
+    tab: &'static str,
+) -> Result<Html<String>, crate::error::AppError> {
     let page = Page {
         status: status_html(&s.app).await,
         jobs: jobs_html(&s.app).await,
@@ -280,8 +322,9 @@ async fn page(State(s): State<UiState>) -> Result<Html<String>, crate::error::Ap
         uploads: uploads_html(&s.app).await,
         up_count: up_count_html(&s.app),
         chat_count: chat::count_html(&s.app).await,
-        enrich: library::enrich_html(&s),
+        enrich: library::enrich_html(s),
         version: env!("CARGO_PKG_VERSION"),
+        tab,
     };
     Ok(Html(page.render().map_err(anyhow::Error::from)?))
 }

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.60
+
+- **Re-file shows exactly what it would do.** Each album on the Library page opens to the list of every file it would move, from and to, worked out from the files as they are when it is opened, including the cover and other files that follow the album.
+- **Re-file what is ticked.** Albums are selected with a checkbox, or a whole group at once, and re-filed together; each row shows its outcome as it lands. Re-filing one album and then another no longer loses track of either: rows are found by the album they show, not their place in the list, and the page is redrawn once, when the last batch finishes. A batch reads the library once, not once per album.
+- **Every tab has an address**: `/library`, `/chat`, `/uploads` and so on open on that tab, the address follows the tab, and back and forward move between tabs.
+
 ## 0.1.59
 
 - **The Library page opens at once.** Planning where every album belongs takes seconds on a large library, and the page did it, with a second full read of the index, on every visit. The whole library's duplicates and re-file plan are now worked out once per change to the index, in the background right after each refresh, and served from there; `duplicates` and `refilePlan` without a query answer the same way. Re-filing still plans each album as it moves it, so a plan never acts on stale information. Planning also no longer runs on an async worker.
