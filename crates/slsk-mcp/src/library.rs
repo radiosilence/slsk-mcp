@@ -75,6 +75,15 @@ pub struct SpareCopy {
     pub binned_to: Option<String>,
 }
 
+/// See [`Library::preview`].
+pub enum Preview {
+    InPlace,
+    Refused(String),
+    /// Every file, from and to: the tracks, and the rest of the folder when
+    /// the whole album moves together.
+    Moves(Vec<(PathBuf, PathBuf)>),
+}
+
 /// See [`Library::overview`].
 pub struct Overview {
     pub duplicates: Vec<DuplicateSet>,
@@ -395,14 +404,38 @@ impl Library {
             let albums = self.read(query).await?;
             return Ok(tokio::task::block_in_place(|| self.plan_of(&albums)));
         }
+        let mut out = Vec::new();
+        self.refile_each(query, |m| {
+            if m.to.is_some() || m.refused.is_some() {
+                out.push(m);
+            }
+        })
+        .await?;
+        Ok(out)
+    }
+
+    /// Move each album `query` matches to where the rules file it, telling
+    /// `done` about each as it goes: moved (`to`), left with the reason
+    /// (`refused`), or already in place (neither). The index is brought up
+    /// to date once, before the first; each album is planned again as it
+    /// moves, so nothing acts on a plan older than that.
+    pub async fn refile_each(
+        &self,
+        query: &[String],
+        mut done: impl FnMut(AlbumMove),
+    ) -> anyhow::Result<()> {
         let mut index = self.write().await?;
         let albums = tokio::task::block_in_place(|| index.albums(&Query::parse(query)?))?;
-        let mut out = Vec::new();
         for album in albums {
             let from = album.dir.to_string_lossy().into_owned();
             match tokio::task::block_in_place(|| manage::plan_move(&self.cfg, &album)) {
-                Plan::InPlace => {}
-                Plan::Refused(why) => out.push(AlbumMove {
+                Plan::InPlace => done(AlbumMove {
+                    from,
+                    to: None,
+                    refused: None,
+                    files: 0,
+                }),
+                Plan::Refused(why) => done(AlbumMove {
                     from,
                     to: None,
                     refused: Some(why),
@@ -416,7 +449,7 @@ impl Library {
                     manage::execute(&mut index, &album, &moves).await?;
                     self.bump();
                     tracing::info!(from, to = ?to, "re-filed an album");
-                    out.push(AlbumMove {
+                    done(AlbumMove {
                         from,
                         to,
                         refused: None,
@@ -425,6 +458,23 @@ impl Library {
                 }
             }
         }
-        Ok(out)
+        Ok(())
+    }
+
+    /// Exactly what re-filing the album at `query` would do now: every file
+    /// it would move, from and to, or why it would be left.
+    pub async fn preview(&self, query: &[String]) -> anyhow::Result<Option<Preview>> {
+        let Some(album) = self.read(query).await?.into_iter().next() else {
+            return Ok(None);
+        };
+        Ok(Some(
+            match tokio::task::block_in_place(|| manage::plan_move(&self.cfg, &album)) {
+                Plan::InPlace => Preview::InPlace,
+                Plan::Refused(why) => Preview::Refused(why),
+                Plan::Moves(moves) => {
+                    Preview::Moves(moves.into_iter().map(|m| (m.from, m.to)).collect())
+                }
+            },
+        ))
     }
 }

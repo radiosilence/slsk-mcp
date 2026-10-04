@@ -11,23 +11,24 @@
 <link rel="stylesheet" href="/assets/app.css">
 <script type="module" src="/assets/datastar.js"></script>
 </head>
-<body data-init="@get('/stream')"
+<body data-init="@get('/stream'); setTimeout(() => document.querySelector('[data-tab={{ tab }}]')?.click())"
+  data-on:popstate__window="document.querySelector('[data-tab=' + (location.pathname.slice(1) || 'albums') + ']')?.click()"
   data-on-interval__duration.20s="@get('/stream')"
   data-on:visibilitychange__document="!document.hidden && @get('/stream')"
-  data-signals="{q: '', lossless: true, busy: false, tab: 'albums'}">
+  data-signals="{q: '', lossless: true, busy: false, tab: '{{ tab }}'}">
 <header>
   {{ status|safe }}
 </header>
 <nav class="tabs">
-  <button type="button" data-class:active="$tab == 'albums'" data-on:click="$tab = 'albums'">Albums</button>
-  <button type="button" data-class:active="$tab == 'uploads'" data-on:click="$tab = 'uploads'">Uploads {{ up_count|safe }}</button>
-  <button type="button" data-class:active="$tab == 'wishlist'" data-indicator="_t_wish" data-class:busy="$_t_wish" data-on:click="$tab = 'wishlist'; @get('/wishlist')">Wishlist</button>
-  <button type="button" data-class:active="$tab == 'library'" data-indicator="_t_lib" data-class:busy="$_t_lib" data-on:click="$tab = 'library'; @get('/library')">Library</button>
-  <button type="button" data-class:active="$tab == 'browse'" data-on:click="$tab = 'browse'">Browse</button>
-  <button type="button" data-class:active="$tab == 'chat'" data-indicator="_t_chat" data-class:busy="$_t_chat" data-on:click="$tab = 'chat'; @get('/chat', {contentType: 'form', selector: '#thread-form'})">Chat {{ chat_count|safe }}</button>
-  <button type="button" data-class:active="$tab == 'bans'" data-indicator="_t_bans" data-class:busy="$_t_bans" data-on:click="$tab = 'bans'; @get('/bans')">Bans</button>
-  <button type="button" data-class:active="$tab == 'settings'" data-indicator="_t_set" data-class:busy="$_t_set" data-on:click="$tab = 'settings'; @get('/settings')">Settings</button>
-  <button type="button" data-class:active="$tab == 'triage'" data-indicator="_t_tri" data-class:busy="$_t_tri" data-on:click="$tab = 'triage'; @get('/triage')">Triage</button>
+  <button type="button" data-tab="albums" data-class:active="$tab == 'albums'" data-on:click="location.pathname != '/' && history.pushState(null, '', '/'); $tab = 'albums'">Albums</button>
+  <button type="button" data-tab="uploads" data-class:active="$tab == 'uploads'" data-on:click="location.pathname != '/uploads' && history.pushState(null, '', '/uploads'); $tab = 'uploads'">Uploads {{ up_count|safe }}</button>
+  <button type="button" data-tab="wishlist" data-class:active="$tab == 'wishlist'" data-indicator="_t_wish" data-class:busy="$_t_wish" data-on:click="location.pathname != '/wishlist' && history.pushState(null, '', '/wishlist'); $tab = 'wishlist'; @get('/wishlist')">Wishlist</button>
+  <button type="button" data-tab="library" data-class:active="$tab == 'library'" data-indicator="_t_lib" data-class:busy="$_t_lib" data-on:click="location.pathname != '/library' && history.pushState(null, '', '/library'); $tab = 'library'; @get('/library')">Library</button>
+  <button type="button" data-tab="browse" data-class:active="$tab == 'browse'" data-on:click="location.pathname != '/browse' && history.pushState(null, '', '/browse'); $tab = 'browse'">Browse</button>
+  <button type="button" data-tab="chat" data-class:active="$tab == 'chat'" data-indicator="_t_chat" data-class:busy="$_t_chat" data-on:click="location.pathname != '/chat' && history.pushState(null, '', '/chat'); $tab = 'chat'; @get('/chat', {contentType: 'form', selector: '#thread-form'})">Chat {{ chat_count|safe }}</button>
+  <button type="button" data-tab="bans" data-class:active="$tab == 'bans'" data-indicator="_t_bans" data-class:busy="$_t_bans" data-on:click="location.pathname != '/bans' && history.pushState(null, '', '/bans'); $tab = 'bans'; @get('/bans')">Bans</button>
+  <button type="button" data-tab="settings" data-class:active="$tab == 'settings'" data-indicator="_t_set" data-class:busy="$_t_set" data-on:click="location.pathname != '/settings' && history.pushState(null, '', '/settings'); $tab = 'settings'; @get('/settings')">Settings</button>
+  <button type="button" data-tab="triage" data-class:active="$tab == 'triage'" data-indicator="_t_tri" data-class:busy="$_t_tri" data-on:click="location.pathname != '/triage' && history.pushState(null, '', '/triage'); $tab = 'triage'; @get('/triage')">Triage</button>
 </nav>
 <main>
   <form id="act" hidden></form>

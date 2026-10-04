@@ -8,20 +8,21 @@
 use askama::Template;
 use axum::Router;
 use axum::body::Bytes;
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 
 use super::{UiState, failed, fields, flash_ok, one, patch, sse};
 use crate::App;
-use crate::library::{AlbumMove, DuplicateSet, EnrichedAlbum, LibraryAlbum};
+use crate::library::{AlbumMove, DuplicateSet, EnrichedAlbum, LibraryAlbum, Preview};
 
 pub(super) fn routes() -> Router<UiState> {
     Router::new()
         .route("/library", get(view))
         .route("/library/find", post(find))
         .route("/library/enrich", post(enrich))
-        .route("/library/refile", post(refile_one))
+        .route("/library/preview", get(preview))
+        .route("/library/refile", post(refile_selected))
         .route("/library/refile-safe", post(refile_safe))
         .route("/library/bin", post(bin))
         .route("/library/bin-all", post(bin_all))
@@ -145,6 +146,9 @@ impl LibraryView {
     fn rel<'a>(&self, p: &'a str) -> &'a str {
         rel(&self.root, p)
     }
+    fn key(&self, p: &str) -> String {
+        key(p)
+    }
     fn shown<'a>(&self, g: &'a Group) -> &'a [AlbumMove] {
         &g.moves[..g.moves.len().min(SHOWN)]
     }
@@ -158,6 +162,15 @@ impl LibraryView {
     fn reason(&self, why: &str) -> String {
         why.replace(&format!("{}/", self.root), "")
     }
+}
+
+/// An album's id in the page: the same for the same path in every render,
+/// so a result lands on its own row whatever has moved around it.
+pub(super) fn key(path: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    path.hash(&mut h);
+    format!("{:016x}", h.finish())
 }
 
 fn rel<'a>(root: &str, p: &'a str) -> &'a str {
@@ -396,40 +409,137 @@ async fn enrich(State(s): State<UiState>, body: Bytes) -> Response {
     one(format!("{}\n<div id=\"flash\"></div>", enrich_html(&s)))
 }
 
-async fn refile_one(State(s): State<UiState>, body: Bytes) -> Response {
-    let form = fields(&body);
-    let Some(path) = super::field(&form, "path") else {
+#[derive(Template)]
+#[template(path = "library_preview.html")]
+struct PreviewView {
+    key: String,
+    root: String,
+    /// Into one folder, the files' names only; otherwise whole paths.
+    into: Option<String>,
+    moves: Vec<(String, String)>,
+    note: Option<String>,
+}
+
+/// Every file re-filing one album would move, worked out now.
+async fn preview(State(s): State<UiState>, Query(q): Query<Vec<(String, String)>>) -> Response {
+    let Some(path) = super::field(&q, "path") else {
         return failed(&anyhow::anyhow!("no album given"));
     };
-    let query = by_path([path]);
-    let result = async {
-        let plan = s.app.library.refile(&query, false).await?;
-        match plan.first() {
-            None => anyhow::bail!("That album is already where the rules put it."),
-            Some(AlbumMove {
-                refused: Some(why), ..
-            }) => anyhow::bail!("Left where it is: {why}"),
-            Some(_) => {}
+    let root = s.app.library.root().to_string_lossy().into_owned();
+    let mut view = PreviewView {
+        key: key(path),
+        root,
+        into: None,
+        moves: Vec::new(),
+        note: None,
+    };
+    match s.app.library.preview(&by_path([path])).await {
+        Ok(Some(Preview::Moves(moves))) => {
+            let dirs: std::collections::HashSet<_> =
+                moves.iter().map(|(_, to)| to.parent()).collect();
+            let one_dir = dirs.len() == 1;
+            if one_dir {
+                view.into = moves
+                    .first()
+                    .and_then(|(_, to)| to.parent())
+                    .map(|d| rel(&view.root, &d.to_string_lossy()).to_string());
+            }
+            let name = |p: &std::path::Path| {
+                if one_dir {
+                    p.file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned()
+                } else {
+                    rel(&view.root, &p.to_string_lossy()).to_string()
+                }
+            };
+            view.moves = moves
+                .iter()
+                .map(|(from, to)| (name(from), name(to)))
+                .collect();
         }
-        s.app.library.refile(&query, true).await
-    }
-    .await;
-    match result {
-        Ok(moved) => {
-            let root = s.app.library.root().to_string_lossy().into_owned();
-            let to = moved
-                .first()
-                .and_then(|m| m.to.as_deref())
-                .map(|t| rel(&root, t).to_string())
-                .unwrap_or_default();
-            one(format!(
-                "{}\n{}",
-                html(&s.app).await,
-                flash_ok(&format!("Moved to {to}"))
+        Ok(Some(Preview::Refused(why))) => {
+            view.note = Some(format!(
+                "Left where it is: {}",
+                why.replace(&format!("{}/", view.root), "")
             ))
         }
-        Err(e) => failed(&e),
+        Ok(Some(Preview::InPlace)) => view.note = Some("Already where the rules file it.".into()),
+        Ok(None) => view.note = Some("No longer in the library.".into()),
+        Err(e) => view.note = Some(format!("{e:#}")),
     }
+    one(view.render().unwrap_or_default())
+}
+
+#[derive(Template)]
+#[template(path = "library_row.html")]
+struct RowView {
+    key: String,
+    from: String,
+    /// What happened: `moved`, `left` or `failed`.
+    outcome: &'static str,
+    detail: String,
+}
+
+/// Re-file the albums ticked on the page, one at a time, each row showing
+/// its outcome as it lands. Batches started while one runs queue behind it
+/// for the library; the page is drawn again when the last one finishes.
+async fn refile_selected(State(s): State<UiState>, body: Bytes) -> Response {
+    use std::sync::atomic::Ordering;
+    let paths: Vec<String> = fields(&body)
+        .into_iter()
+        .filter(|(k, v)| k == "path" && !v.is_empty())
+        .map(|(_, v)| v)
+        .collect();
+    if paths.is_empty() {
+        return failed(&anyhow::anyhow!("nothing selected"));
+    }
+    let root = s.app.library.root().to_string_lossy().into_owned();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<AlbumMove>();
+    s.refiling.fetch_add(1, Ordering::SeqCst);
+    let (app, query) = (s.app.clone(), by_path(paths.iter().map(String::as_str)));
+    let work = tokio::spawn(async move {
+        app.library
+            .refile_each(&query, |m| {
+                let _ = tx.send(m);
+            })
+            .await
+    });
+    let (app, refiling) = (s.app.clone(), s.refiling.clone());
+    sse(async_stream::stream! {
+        for p in &paths {
+            yield Ok(patch(&format!(r#"<span id="st-{}" class="pill">queued</span>"#, key(p))));
+        }
+        let mut moved = 0;
+        while let Some(m) = rx.recv().await {
+            let row = RowView {
+                key: key(&m.from),
+                from: rel(&root, &m.from).to_string(),
+                outcome: match (&m.to, &m.refused) {
+                    (Some(_), _) => { moved += 1; "moved" }
+                    (None, _) => "left",
+                },
+                detail: match (&m.to, &m.refused) {
+                    (Some(to), _) => format!("→ {}", rel(&root, to)),
+                    (None, Some(why)) => why.replace(&format!("{root}/"), ""),
+                    (None, None) => "Already where the rules file it.".into(),
+                },
+            };
+            yield Ok(patch(&row.render().unwrap_or_default()));
+        }
+        let result = work.await.map_err(anyhow::Error::from).and_then(|r| r);
+        let last = refiling.fetch_sub(1, Ordering::SeqCst) == 1;
+        let flash = match &result {
+            Ok(()) => flash_ok(&format!("Re-filed {moved} of {}", paths.len())),
+            Err(e) => super::flash_err(&format!("Stopped after {moved}: {e:#}")),
+        };
+        if last {
+            yield Ok(patch(&html(&app).await));
+        }
+        yield Ok(patch(&flash));
+    })
+    .into_response()
 }
 
 /// Re-file every album whose change only corrects how its folder is
