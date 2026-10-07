@@ -14,6 +14,13 @@ run = [
   "cd deploy/pulumi && npm run -s check",
 ]
 
+[tasks.fast]
+description = "The checks that take seconds, run before every push; CI runs the rest"
+run = [
+  "git diff --quiet Cargo.lock || { echo 'Cargo.lock has uncommitted changes'; exit 1; }",
+  "cargo fmt --all -- --check",
+]
+
 [tasks.hooks]
 description = "Install the git hooks"
 run = "lefthook install"
