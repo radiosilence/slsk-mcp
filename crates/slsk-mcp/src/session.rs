@@ -80,6 +80,7 @@ impl Session {
         ec.upload_slots = self.cfg.upload_slots;
         ec.upload_limit = self.cfg.upload_limit;
         ec.download_limit = self.cfg.download_limit;
+        ec.searches_per_hour = self.cfg.searches_per_hour;
         ec.description = self.cfg.description.clone();
         let engine = Engine::start(ec)
             .await

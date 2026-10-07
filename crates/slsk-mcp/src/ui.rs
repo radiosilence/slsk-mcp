@@ -942,13 +942,21 @@ async fn search(State(s): State<UiState>, axum::Form(form): axum::Form<SearchFor
             ],
         ),
     );
-    engine.pace().await;
-    let rx = engine.search(&query);
+    let rx = match engine.pace().await {
+        Ok(()) => engine.search(&query),
+        Err(e) => Err(e),
+    };
     let events = async_stream::stream! {
         yield Ok(here);
-        let Ok(mut rx) = rx else {
-            yield Ok(patch(r#"<div id="results" class="note">Not connected.</div>"#));
-            return;
+        let mut rx = match rx {
+            Ok(rx) => rx,
+            Err(e) => {
+                yield Ok(patch(&format!(
+                    r#"<div id="results" class="note">{}</div>"#,
+                    askama_escape(&e.to_string())
+                )));
+                return;
+            }
         };
         let deadline = tokio::time::Instant::now() + Duration::from_secs(12);
         let mut responses = Vec::new();

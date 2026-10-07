@@ -361,10 +361,23 @@ pub(crate) fn on_upload_failed(inner: &Inner, username: &str, filename: &RawStr)
     if let Some(d) = inner.downloads.get(username, filename) {
         // Not while transferring: the receiver still holds the `.part` file,
         // and its own error, when the connection ends, re-queues it.
-        for from in [DownloadState::Starting, DownloadState::Remote] {
-            if d.transition(from, DownloadState::Queued) {
-                break;
+        // Counted like any other attempt: a peer that fails the same file
+        // every time it reaches it would otherwise be asked forever.
+        let from = d.state();
+        if !matches!(from, DownloadState::Starting | DownloadState::Remote) {
+            return;
+        }
+        if d.attempts.fetch_add(1, Ordering::Relaxed) + 1 >= MAX_ATTEMPTS {
+            // Only from where it was: an offer landing meanwhile wins.
+            if d.transition(from, DownloadState::Failed) {
+                *d.error.lock() = Some("the peer failed to send it".into());
+                inner
+                    .metrics
+                    .downloads_failed
+                    .fetch_add(1, Ordering::Relaxed);
             }
+        } else {
+            d.transition(from, DownloadState::Queued);
         }
     }
 }

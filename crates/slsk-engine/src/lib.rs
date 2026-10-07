@@ -17,7 +17,7 @@ mod server;
 pub mod shares;
 mod uploads;
 
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -61,6 +61,11 @@ pub struct EngineConfig {
     pub max_search_responders: usize,
     pub max_queued_files_per_user: usize,
     pub max_queued_bytes_per_user: u64,
+    /// Searches allowed in any rolling hour, 0 for unlimited. Each one is
+    /// relayed to thousands of peers, so this caps what an automated caller
+    /// costs the network, and keeps the account clear of the server's
+    /// flood bans.
+    pub searches_per_hour: usize,
     pub description: String,
 }
 
@@ -82,6 +87,7 @@ impl EngineConfig {
             max_search_responders: 64,
             max_queued_files_per_user: 2000,
             max_queued_bytes_per_user: 50 << 30,
+            searches_per_hour: 60,
             description: String::new(),
         }
     }
@@ -147,6 +153,10 @@ pub enum Error {
     Unreachable(String),
     #[error("timed out")]
     TimedOut,
+    #[error(
+        "search budget spent: {budget} searches in the last hour; the next is free in {minutes} minutes"
+    )]
+    SearchBudget { budget: usize, minutes: u64 },
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }
@@ -179,8 +189,9 @@ pub(crate) struct Inner {
     pub(crate) metrics: Arc<Metrics>,
     up_limit: limit::Bucket,
     down_limit: limit::Bucket,
-    /// When the next search may go out; see [`SEARCH_GAP`].
-    next_search: Mutex<tokio::time::Instant>,
+    /// When the next search may go out (see [`SEARCH_GAP`]), and when each
+    /// search in the last hour went out.
+    next_search: Mutex<(tokio::time::Instant, VecDeque<tokio::time::Instant>)>,
     /// Set when the server says it has banned us: logging in again before
     /// then is refused, and may lengthen the ban.
     ban_until: Mutex<Option<tokio::time::Instant>>,
@@ -260,7 +271,7 @@ impl Engine {
             up_limit: limit::Bucket::new(cfg.upload_limit),
             down_limit: limit::Bucket::new(cfg.download_limit),
             metrics,
-            next_search: Mutex::new(tokio::time::Instant::now()),
+            next_search: Mutex::new((tokio::time::Instant::now(), VecDeque::new())),
             ban_until: Mutex::new(None),
             cfg,
         });
@@ -395,15 +406,39 @@ impl Engine {
     /// Wait for this caller's turn to search: each call reserves the next
     /// slot [`SEARCH_GAP`] after the last one. Call before any search a
     /// person or a job starts, so a burst of them reaches the server spaced
-    /// out rather than at once.
-    pub async fn pace(&self) {
+    /// out rather than at once. Refused, without waiting, once the hour's
+    /// budget is spent.
+    pub async fn pace(&self) -> Result<()> {
+        // A search that cannot be sent must not spend the budget, or a
+        // dropped connection would use up the hour.
+        if !self.0.logged_in() {
+            return Err(Error::NotConnected);
+        }
         let at = {
-            let mut next = self.0.next_search.lock();
-            let at = (*next).max(tokio::time::Instant::now());
+            let mut guard = self.0.next_search.lock();
+            let (next, recent) = &mut *guard;
+            let now = tokio::time::Instant::now();
+            while recent
+                .front()
+                .is_some_and(|t| now.duration_since(*t) >= Duration::from_secs(3600))
+            {
+                recent.pop_front();
+            }
+            let budget = self.0.cfg.searches_per_hour;
+            if budget > 0 && recent.len() >= budget {
+                let wait = Duration::from_secs(3600) - now.duration_since(recent[0]);
+                return Err(Error::SearchBudget {
+                    budget,
+                    minutes: wait.as_secs().div_ceil(60),
+                });
+            }
+            let at = (*next).max(now);
             *next = at + SEARCH_GAP;
+            recent.push_back(at);
             at
         };
         tokio::time::sleep_until(at).await;
+        Ok(())
     }
 
     /// Search the network. Responses arrive on the receiver until it is
