@@ -907,10 +907,9 @@ pub(crate) async fn responses(
     query: &str,
     wait: u64,
 ) -> anyhow::Result<Arc<Vec<SearchResponse>>> {
+    type Answers = (tokio::time::Instant, Arc<Vec<SearchResponse>>);
     static RECENT: std::sync::LazyLock<
-        parking_lot::Mutex<
-            std::collections::HashMap<String, (tokio::time::Instant, Arc<Vec<SearchResponse>>)>,
-        >,
+        parking_lot::Mutex<std::collections::HashMap<String, Answers>>,
     > = std::sync::LazyLock::new(Default::default);
     let key = query.trim().to_lowercase();
     if let Some((at, responses)) = RECENT.lock().get(&key)
