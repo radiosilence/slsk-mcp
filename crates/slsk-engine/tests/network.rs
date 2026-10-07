@@ -252,3 +252,24 @@ async fn interoperates_with_soulseek_rs() {
     assert_eq!(std::fs::read(&dest).unwrap(), &data[..500_000]);
     drop(client);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn searches_past_the_hours_budget_are_refused() {
+    let server = server().await.unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let mut cfg = EngineConfig::new("rationed", "hunter2");
+    cfg.server = server.address();
+    cfg.listen_port = 0;
+    cfg.state_dir = state.path().to_path_buf();
+    cfg.searches_per_hour = 2;
+    let engine = Engine::start(cfg).await.unwrap();
+    engine.pace().await.unwrap();
+    engine.pace().await.unwrap();
+    let refused = tokio::time::timeout(Duration::from_secs(1), engine.pace())
+        .await
+        .expect("a spent budget refuses at once rather than waiting");
+    assert!(matches!(
+        refused,
+        Err(slsk_engine::Error::SearchBudget { budget: 2, .. })
+    ));
+}

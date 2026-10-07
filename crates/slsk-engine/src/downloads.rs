@@ -71,6 +71,9 @@ impl DownloadState {
 const MAX_ATTEMPTS: u32 = 8;
 /// How long a peer that offered a file has to open the connection for it.
 const START_TIMEOUT: Duration = Duration::from_secs(120);
+/// How often a peer holding our queued files is asked for our place: once
+/// for all of them, since an album queued with one peer is one question.
+const PLACE_EVERY: Duration = Duration::from_secs(300);
 
 pub(crate) struct Download {
     id: u64,
@@ -150,6 +153,8 @@ pub(crate) struct Downloads {
     map: DashMap<Key, Arc<Download>>,
     by_token: DashMap<u32, Arc<Download>>,
     next_id: AtomicU64,
+    /// When each peer was last asked where we stand in its queue.
+    place_asked: DashMap<String, Instant>,
 }
 
 fn key(username: &str, filename: &RawStr) -> Key {
@@ -297,12 +302,25 @@ async fn drive(inner: Arc<Inner>, d: Arc<Download>) {
                 // failure here.
                 tokio::select! {
                     _ = d.wake.notified() => {}
-                    _ = tokio::time::sleep(Duration::from_secs(300)) => {
+                    _ = tokio::time::sleep(PLACE_EVERY) => {
+                        let now = Instant::now();
+                        let asked = &inner.downloads.place_asked;
+                        let due = asked
+                            .get(&d.username)
+                            .is_none_or(|t| now.duration_since(*t) >= PLACE_EVERY);
+                        if due {
+                            asked.insert(d.username.clone(), now);
+                        }
+                        if !due {
+                            continue;
+                        }
                         let frame = PeerMessage::PlaceInQueueRequest { filename: d.filename.clone() }.encode();
                         // Gone, or restarted and holding nothing for us: ask
-                        // again from the top.
+                        // again from the top, for every file queued with it.
                         if peers::send(&inner, &d.username, frame).await.is_err() {
-                            d.transition(DownloadState::Remote, DownloadState::Queued);
+                            for other in inner.downloads.map.iter().filter(|o| o.key().0 == d.username) {
+                                other.transition(DownloadState::Remote, DownloadState::Queued);
+                            }
                         }
                     }
                 }
@@ -361,10 +379,20 @@ pub(crate) fn on_upload_failed(inner: &Inner, username: &str, filename: &RawStr)
     if let Some(d) = inner.downloads.get(username, filename) {
         // Not while transferring: the receiver still holds the `.part` file,
         // and its own error, when the connection ends, re-queues it.
-        for from in [DownloadState::Starting, DownloadState::Remote] {
-            if d.transition(from, DownloadState::Queued) {
-                break;
-            }
+        // Counted like any other attempt: a peer that fails the same file
+        // every time it reaches it would otherwise be asked forever.
+        let from = d.state();
+        if !matches!(from, DownloadState::Starting | DownloadState::Remote) {
+            return;
+        }
+        if d.attempts.fetch_add(1, Ordering::Relaxed) + 1 >= MAX_ATTEMPTS {
+            inner
+                .metrics
+                .downloads_failed
+                .fetch_add(1, Ordering::Relaxed);
+            d.fail("the peer failed to send it");
+        } else {
+            d.transition(from, DownloadState::Queued);
         }
     }
 }

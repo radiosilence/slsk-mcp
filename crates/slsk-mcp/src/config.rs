@@ -39,6 +39,8 @@ pub struct Config {
     pub upload_slots: usize,
     pub upload_limit: u64,
     pub download_limit: u64,
+    /// 0 for unlimited; see `EngineConfig::searches_per_hour`.
+    pub searches_per_hour: usize,
     /// MCP, GraphQL and metrics. Trusts credential headers, so it must only
     /// be reachable from the gateway and the metrics scraper.
     pub internal_addr: String,
@@ -134,6 +136,7 @@ impl Config {
             upload_slots: num("UPLOAD_SLOTS", 500)?,
             upload_limit: num("UPLOAD_LIMIT", 0)?,
             download_limit: num("DOWNLOAD_LIMIT", 0)?,
+            searches_per_hour: num("SEARCHES_PER_HOUR", 60)?,
             internal_addr: or("INTERNAL_ADDR", "0.0.0.0:8081"),
             metrics_addr: or("METRICS_ADDR", "0.0.0.0:9464"),
             ui_addr,
@@ -144,7 +147,14 @@ impl Config {
             beet_bin: or("BEET_BIN", "beet"),
             beets_config: opt("BEETS_CONFIG").map(PathBuf::from),
             discogs_token: opt("DISCOGS_TOKEN"),
-            description: or("DESCRIPTION", ""),
+            description: or(
+                "DESCRIPTION",
+                concat!(
+                    "slsk-mcp ",
+                    env!("CARGO_PKG_VERSION"),
+                    " (https://github.com/radiosilence/slsk-mcp). An automated client: an assistant searches and downloads on its owner's behalf, and the whole library is shared back."
+                ),
+            ),
         })
     }
 

@@ -650,6 +650,9 @@ impl Social {
         else {
             return Ok(());
         };
+        // Before marking it searched: a spent budget leaves the wish first in
+        // line for the next tick.
+        engine.pace().await?;
         sqlx::query(concat!(
             "UPDATE wishes SET searched_at = ",
             crate::db::now!(),
@@ -658,7 +661,6 @@ impl Social {
         .bind(wish.id)
         .execute(&self.db.write)
         .await?;
-        engine.pace().await;
         let mut rx = engine.wishlist_search(&wish.query)?;
         let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
         let mut responses = Vec::new();

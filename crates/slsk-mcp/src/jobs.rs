@@ -1249,13 +1249,8 @@ impl Jobs {
         let current = rows.first().map(|r| r.peer.clone()).unwrap_or_default();
         let stalled = self.recently_stalled();
         let search = async |filter: &crate::folders::Filter| -> Result<Vec<Folder>> {
-            engine.pace().await;
-            let mut rx = engine.search(&job.title)?;
-            let deadline = tokio::time::Instant::now() + SEARCH_WAIT;
-            let mut responses = Vec::new();
-            while let Ok(Some(r)) = tokio::time::timeout_at(deadline, rx.recv()).await {
-                responses.push(r);
-            }
+            let responses =
+                crate::graphql::responses(engine, &job.title, SEARCH_WAIT.as_secs()).await?;
             Ok(
                 crate::folders::relevant(crate::folders::group(&responses, filter), &job.title)
                     .into_iter()

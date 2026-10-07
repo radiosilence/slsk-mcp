@@ -8,6 +8,7 @@ use async_graphql::{
     Context, EmptySubscription, Enum, Error, ID, Object, Result, Schema, SimpleObject,
 };
 use slsk_engine::slsk_proto::RawStr;
+use slsk_engine::slsk_proto::peer::SearchResponse;
 use slsk_engine::{Status, TransferView};
 use uuid::Uuid;
 
@@ -889,37 +890,46 @@ pub(crate) async fn search(
     wait: u64,
     filter: &Filter,
 ) -> Result<Vec<Folder>> {
-    let engine = app.session.require()?;
-    engine.pace().await;
+    let responses = responses(app.session.require()?, query, wait).await?;
+    Ok(folders::group(&responses, filter))
+}
+
+/// How long one search's answers stand in for another of the same words.
+/// Every search is relayed to thousands of peers; an agent rephrasing,
+/// retrying, or re-filtering within minutes gets what the network already
+/// said.
+const SEARCH_REUSE: Duration = Duration::from_secs(600);
+
+/// The network's answers to `query`, from the last ten minutes if anything
+/// asked it, else from a new search listening `wait` seconds (1 to 30).
+pub(crate) async fn responses(
+    engine: &slsk_engine::Engine,
+    query: &str,
+    wait: u64,
+) -> Result<Arc<Vec<SearchResponse>>> {
+    static RECENT: std::sync::LazyLock<
+        parking_lot::Mutex<
+            std::collections::HashMap<String, (tokio::time::Instant, Arc<Vec<SearchResponse>>)>,
+        >,
+    > = std::sync::LazyLock::new(Default::default);
+    let key = query.trim().to_lowercase();
+    if let Some((at, responses)) = RECENT.lock().get(&key)
+        && at.elapsed() < SEARCH_REUSE
+    {
+        return Ok(responses.clone());
+    }
+    engine.pace().await?;
     let mut rx = engine.search(query)?;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(wait.clamp(1, 30));
     let mut responses = Vec::new();
     while let Ok(Some(r)) = tokio::time::timeout_at(deadline, rx.recv()).await {
         responses.push(r);
     }
-    Ok(folders::group(&responses, filter))
-}
-
-/// Search, pick the best relevant folder, keep four fallbacks, start a job.
-/// Without a filter it prefers lossless and settles for lossy only when
-/// there is no lossless copy at all.
-/// Peers holding downloads of ours in their queue while sending none.
-fn stuck_peers(downloads: &[slsk_engine::TransferView]) -> std::collections::HashSet<String> {
-    let mut queued = std::collections::HashSet::new();
-    let mut sending = std::collections::HashSet::new();
-    for t in downloads {
-        match t.state {
-            "remote_queued" => {
-                queued.insert(t.username.clone());
-            }
-            "starting" | "transferring" => {
-                sending.insert(t.username.clone());
-            }
-            _ => {}
-        }
-    }
-    queued.retain(|u| !sending.contains(u));
-    queued
+    let responses = Arc::new(responses);
+    let mut recent = RECENT.lock();
+    recent.retain(|_, (at, _)| at.elapsed() < SEARCH_REUSE);
+    recent.insert(key, (tokio::time::Instant::now(), responses.clone()));
+    Ok(responses)
 }
 
 pub(crate) async fn grab(
@@ -963,13 +973,13 @@ pub(crate) async fn grab(
         lossless: true,
         ..Default::default()
     });
-    let mut found =
-        folders::relevant_complete_first(search(app, query, wait, &filter).await?, query);
+    // One search: when no copy passes the lossless filter, the same answers
+    // are grouped again without it.
+    let responses = responses(app.session.require()?, query, wait).await?;
+    let mut found = folders::relevant_complete_first(folders::group(&responses, &filter), query);
     if found.is_empty() && !strict {
-        found = folders::relevant_complete_first(
-            search(app, query, wait, &Filter::default()).await?,
-            query,
-        );
+        found =
+            folders::relevant_complete_first(folders::group(&responses, &Filter::default()), query);
     }
     // A peer we are queued with and receiving nothing from, or one that
     // stalled us recently, answers searches readily and sends nothing; its

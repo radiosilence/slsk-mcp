@@ -170,6 +170,11 @@ impl ServerHandler for SlskMcp {
                  which imports it anyway.\n\n\
                  `search` returns folders grouped by user, best first, for when the user wants to choose. Searching \
                  waits several seconds for peers to answer.\n\n\
+                 Every search is relayed to thousands of peers, so they are rationed: a few seconds apart and a \
+                 fixed number an hour (60 by default). Search with plain \"artist album\" words and settle for \
+                 what comes back rather than trying rephrasings; the same words within ten minutes reuse the \
+                 earlier answers instead of searching again. When the hour's budget is spent, the error says when \
+                 the next search is free: tell the user, and do not retry in a loop.\n\n\
                  For something nobody has yet, `addWish(query, grab: true)` keeps searching on the server's \
                  wishlist interval and starts a job when it turns up.\n\n\
                  The library itself: `libraryAlbums(query)` lists albums with beets' query syntax, one term per \
