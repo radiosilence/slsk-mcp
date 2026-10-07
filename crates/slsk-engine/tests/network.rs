@@ -263,6 +263,15 @@ async fn searches_past_the_hours_budget_are_refused() {
     cfg.state_dir = state.path().to_path_buf();
     cfg.searches_per_hour = 2;
     let engine = Engine::start(cfg).await.unwrap();
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        engine
+            .status()
+            .wait_for(|s| matches!(s, Status::LoggedIn { .. })),
+    )
+    .await
+    .unwrap()
+    .unwrap();
     engine.pace().await.unwrap();
     engine.pace().await.unwrap();
     let refused = tokio::time::timeout(Duration::from_secs(1), engine.pace())

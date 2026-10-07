@@ -907,19 +907,24 @@ pub(crate) async fn responses(
     query: &str,
     wait: u64,
 ) -> anyhow::Result<Arc<Vec<SearchResponse>>> {
-    type Answers = (tokio::time::Instant, Arc<Vec<SearchResponse>>);
+    // When, and how long it listened.
+    type Answers = (tokio::time::Instant, u64, Arc<Vec<SearchResponse>>);
     static RECENT: std::sync::LazyLock<
         parking_lot::Mutex<std::collections::HashMap<String, Answers>>,
     > = std::sync::LazyLock::new(Default::default);
     let key = query.trim().to_lowercase();
-    if let Some((at, responses)) = RECENT.lock().get(&key)
+    let wait = wait.clamp(1, 30);
+    // A shorter listen heard fewer peers, so it stands in only for one as
+    // short or shorter.
+    if let Some((at, listened, responses)) = RECENT.lock().get(&key)
         && at.elapsed() < SEARCH_REUSE
+        && *listened >= wait
     {
         return Ok(responses.clone());
     }
     engine.pace().await?;
     let mut rx = engine.search(query)?;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(wait.clamp(1, 30));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(wait);
     let mut responses = Vec::new();
     while let Ok(Some(r)) = tokio::time::timeout_at(deadline, rx.recv()).await {
         responses.push(r);
@@ -929,8 +934,8 @@ pub(crate) async fn responses(
     // settled as a network without the album.
     if !responses.is_empty() {
         let mut recent = RECENT.lock();
-        recent.retain(|_, (at, _)| at.elapsed() < SEARCH_REUSE);
-        recent.insert(key, (tokio::time::Instant::now(), responses.clone()));
+        recent.retain(|_, (at, _, _)| at.elapsed() < SEARCH_REUSE);
+        recent.insert(key, (tokio::time::Instant::now(), wait, responses.clone()));
     }
     Ok(responses)
 }

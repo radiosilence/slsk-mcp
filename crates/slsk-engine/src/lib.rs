@@ -409,6 +409,11 @@ impl Engine {
     /// out rather than at once. Refused, without waiting, once the hour's
     /// budget is spent.
     pub async fn pace(&self) -> Result<()> {
+        // A search that cannot be sent must not spend the budget, or a
+        // dropped connection would use up the hour.
+        if !self.0.logged_in() {
+            return Err(Error::NotConnected);
+        }
         let at = {
             let mut guard = self.0.next_search.lock();
             let (next, recent) = &mut *guard;
