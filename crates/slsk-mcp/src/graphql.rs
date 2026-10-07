@@ -906,7 +906,7 @@ pub(crate) async fn responses(
     engine: &slsk_engine::Engine,
     query: &str,
     wait: u64,
-) -> Result<Arc<Vec<SearchResponse>>> {
+) -> anyhow::Result<Arc<Vec<SearchResponse>>> {
     static RECENT: std::sync::LazyLock<
         parking_lot::Mutex<
             std::collections::HashMap<String, (tokio::time::Instant, Arc<Vec<SearchResponse>>)>,
@@ -926,10 +926,36 @@ pub(crate) async fn responses(
         responses.push(r);
     }
     let responses = Arc::new(responses);
-    let mut recent = RECENT.lock();
-    recent.retain(|_, (at, _)| at.elapsed() < SEARCH_REUSE);
-    recent.insert(key, (tokio::time::Instant::now(), responses.clone()));
+    // Silence is not kept: it is as likely a connection that had not
+    // settled as a network without the album.
+    if !responses.is_empty() {
+        let mut recent = RECENT.lock();
+        recent.retain(|_, (at, _)| at.elapsed() < SEARCH_REUSE);
+        recent.insert(key, (tokio::time::Instant::now(), responses.clone()));
+    }
     Ok(responses)
+}
+
+/// Search, pick the best relevant folder, keep four fallbacks, start a job.
+/// Without a filter it prefers lossless and settles for lossy only when
+/// there is no lossless copy at all.
+/// Peers holding downloads of ours in their queue while sending none.
+fn stuck_peers(downloads: &[slsk_engine::TransferView]) -> std::collections::HashSet<String> {
+    let mut queued = std::collections::HashSet::new();
+    let mut sending = std::collections::HashSet::new();
+    for t in downloads {
+        match t.state {
+            "remote_queued" => {
+                queued.insert(t.username.clone());
+            }
+            "starting" | "transferring" => {
+                sending.insert(t.username.clone());
+            }
+            _ => {}
+        }
+    }
+    queued.retain(|u| !sending.contains(u));
+    queued
 }
 
 pub(crate) async fn grab(
