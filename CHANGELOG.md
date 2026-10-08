@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Browse lists every folder at a level.** It stopped at 500 with no way to reach the rest. A list of names is cheap to render even in the thousands, so the ceiling is now a million, only to bound a peer sending an absurd share list.
+
 ## 0.1.64
 
 - **Searches come back quicker.** After a quiet spell, six searches go out a second apart before settling to one every four seconds, so a single search or a short run of them no longer waits on the four-second gap. A full burst followed by the steady rate stays under twenty in the first minute, below the flood that got the account banned. The burst refills after a quiet spell.
