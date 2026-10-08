@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **The album search has a Clear button**, which empties the box and the results and drops the query from the address. It waits for a running search to finish, since the search would otherwise refill the results it cleared.
+
 ## 0.1.65
 
 - **Browse lists every folder at a level.** It stopped at 500 with no way to reach the rest. A list of names is cheap to render even in the thousands, so the ceiling is now a million, only to bound a peer sending an absurd share list.
