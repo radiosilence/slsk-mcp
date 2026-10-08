@@ -15,6 +15,36 @@ matches it against MusicBrainz, tags it and files it into the library.
 `deploy/pulumi` is the Pulumi component that deploys it, published as
 `@radiosilence/slsk-mcp-pulumi` at the same version as the image.
 
+## Sharing back
+
+Soulseek works because people share what they download. This client is built
+to give back at least as much as it takes, and its defaults reflect that.
+
+- **Everything is shared, all the time.** The library it files albums into is
+  shared by default (`SHARE_DIRS` defaults to `LIBRARY_DIR`), so every album it
+  fetches becomes available to others. It runs as a long-running daemon holding
+  one login, so peers can reach the shares at any hour, not only while someone
+  is at a keyboard.
+- **Upload limits are generous.** 500 upload slots and no upload speed limit
+  (`UPLOAD_SLOTS=500`, `UPLOAD_LIMIT=0`, where 0 means unlimited). Uploads are
+  served round-robin, one file per user at a time, so many people are served
+  at once. Each user may queue up to 2,000 files or 50 GiB.
+- **It carries other people's searches.** It accepts children on the
+  distributed search network and relays searches to them, and it answers
+  searches from its own shares.
+- **It searches sparingly.** An assistant left to itself searches far more
+  than a person would, and every search is relayed to thousands of peers.
+  Searches are spaced at least four seconds apart and capped per hour
+  (`SEARCHES_PER_HOUR`, default 60). The same words searched again within ten
+  minutes reuse the earlier answers.
+- **It says what it is.** The default user info (`DESCRIPTION`) identifies it
+  as an automated client that shares its library, so sharers can decide for
+  themselves how to treat it.
+
+Lowering these defaults (fewer slots, a speed limit, a smaller share) reduces
+what the client gives while leaving what it takes unchanged. Change them only
+when the host cannot sustain them.
+
 ## Why an engine of its own
 
 Existing clients hold a thread per peer and per transfer, and answer each
