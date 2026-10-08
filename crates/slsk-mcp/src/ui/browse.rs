@@ -142,9 +142,9 @@ struct Info {
     free: bool,
 }
 
-/// Folders shown at one level; a collection's top level can run to
-/// thousands.
-const SHOWN: usize = 500;
+/// Folders shown at one level. Every real collection fits; this only bounds
+/// a peer sending an absurd share list.
+const SHOWN: usize = 1_000_000;
 
 #[derive(Template)]
 #[template(path = "browse.html")]
