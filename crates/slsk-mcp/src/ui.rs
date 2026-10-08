@@ -72,6 +72,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/download", post(download))
         .route("/jobs/{id}/{action}", post(job_action))
         .route("/jobs/{id}/resolve/{release}", post(resolve))
+        .route("/jobs/{id}/release", post(resolve_pasted))
         .route("/jobs/{id}/spectrogram/{n}", get(spectrogram))
         .route("/uploads/cancel", post(cancel_upload))
         .route("/ban", post(ban))
@@ -1090,6 +1091,36 @@ async fn resolve(State(s): State<UiState>, Path((id, release)): Path<(Uuid, Stri
         return StatusCode::BAD_REQUEST.into_response();
     }
     match s.app.jobs.import_soon(id, false, Some(release)).await {
+        Ok(()) => done(&s.app).await,
+        Err(e) => failed(&e),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct ReleaseForm {
+    release: String,
+}
+
+/// A release named by hand, for when MusicBrainz has it but the matcher
+/// did not offer it. Takes the bare ID or a pasted release URL.
+async fn resolve_pasted(
+    State(s): State<UiState>,
+    Path(id): Path<Uuid>,
+    axum::Form(form): axum::Form<ReleaseForm>,
+) -> Response {
+    let Some(release) = form
+        .release
+        .split(['/', '?', '#'])
+        .find_map(|p| Uuid::parse_str(p.trim()).ok())
+    else {
+        return one(flash_err("That is not a MusicBrainz release ID or URL."));
+    };
+    match s
+        .app
+        .jobs
+        .import_soon(id, false, Some(release.to_string()))
+        .await
+    {
         Ok(()) => done(&s.app).await,
         Err(e) => failed(&e),
     }

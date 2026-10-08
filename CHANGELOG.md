@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **An album in review takes a pasted MusicBrainz release ID or URL.** The matcher's search sometimes misses a release MusicBrainz does have, which left only another copy or an as-is import, and as-is is refused when the files lack album tags.
+
 ## 0.1.65
 
 - **Browse lists every folder at a level.** It stopped at 500 with no way to reach the rest. A list of names is cheap to render even in the thousands, so the ceiling is now a million, only to bound a peer sending an absurd share list.
