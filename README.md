@@ -34,7 +34,7 @@ to give back at least as much as it takes, and its defaults reflect that.
   searches from its own shares.
 - **It searches sparingly.** An assistant left to itself searches far more
   than a person would, and every search is relayed to thousands of peers.
-  A short burst of up to five searches goes out a second apart, after which
+  After a quiet spell, a burst of six searches goes out a second apart, after which
   they are spaced four seconds apart, and they are capped per hour
   (`SEARCHES_PER_HOUR`, default 200). The same words searched again within ten
   minutes reuse the earlier answers.

@@ -212,7 +212,9 @@ struct SearchPace {
 
 /// The steady rate, once the burst is spent.
 const SEARCH_GAP: Duration = Duration::from_secs(4);
-/// Searches that may go out at [`SEARCH_BURST_GAP`] before the steady rate.
+/// The burst allowance, in steady-rate gaps. From idle, six searches go out
+/// at [`SEARCH_BURST_GAP`]: five from the allowance and one the steady rate
+/// has refilled by then.
 const SEARCH_BURST: u32 = 5;
 const SEARCH_BURST_GAP: Duration = Duration::from_secs(1);
 
@@ -658,7 +660,7 @@ mod tests {
             .take_while(|d| *d < Duration::from_secs(60))
             .count()
             + 8;
-        assert!(first_minute < 24, "{first_minute}");
+        assert_eq!(first_minute, 19);
     }
 
     #[tokio::test(start_paused = true)]
