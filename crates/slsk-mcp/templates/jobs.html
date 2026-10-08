@@ -42,6 +42,10 @@
       </li>
       {% endfor %}
     </ul>
+    <form id="release-{{ j.id.as_str() }}" class="inline-form" data-on:submit__prevent="@post('/jobs/{{ j.id.as_str() }}/release', {contentType: 'form', selector: '#release-{{ j.id.as_str() }}'})">
+      <input name="release" placeholder="MusicBrainz release ID or URL" autocomplete="off" required>
+      <button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}">Use release</button>
+    </form>
     {% endif %}
     {% match self.advice(j) %}{% when Some with (a) %}<p class="advice"><strong>Suggested:</strong> {{ a.why }}</p>{% when None %}{% endmatch %}
     {% match self.as_is_blocked(j) %}{% when Some with (b) %}{% if j.status == "review" %}<p class="why">Import as-is won't work: {{ b }}</p>{% endif %}{% when None %}{% endmatch %}
@@ -102,6 +106,10 @@
       </li>
       {% endfor %}
     </ul>
+    <form id="release-{{ j.id.as_str() }}" class="inline-form" data-on:submit__prevent="@post('/jobs/{{ j.id.as_str() }}/release', {contentType: 'form', selector: '#release-{{ j.id.as_str() }}'})">
+      <input name="release" placeholder="MusicBrainz release ID or URL" autocomplete="off" required>
+      <button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}">Use release</button>
+    </form>
     {% endif %}
     {% match self.advice(j) %}{% when Some with (a) %}<p class="advice"><strong>Suggested:</strong> {{ a.why }}</p>{% when None %}{% endmatch %}
     {% match self.as_is_blocked(j) %}{% when Some with (b) %}{% if j.status == "review" %}<p class="why">Import as-is won't work: {{ b }}</p>{% endif %}{% when None %}{% endmatch %}
