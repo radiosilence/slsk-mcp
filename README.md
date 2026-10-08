@@ -34,8 +34,9 @@ to give back at least as much as it takes, and its defaults reflect that.
   searches from its own shares.
 - **It searches sparingly.** An assistant left to itself searches far more
   than a person would, and every search is relayed to thousands of peers.
-  Searches are spaced at least four seconds apart and capped per hour
-  (`SEARCHES_PER_HOUR`, default 60). The same words searched again within ten
+  A short burst of up to five searches goes out a second apart, after which
+  they are spaced four seconds apart, and they are capped per hour
+  (`SEARCHES_PER_HOUR`, default 200). The same words searched again within ten
   minutes reuse the earlier answers.
 - **It says what it is.** The default user info (`DESCRIPTION`) identifies it
   as an automated client that shares its library, so sharers can decide for
@@ -211,7 +212,7 @@ startup.
 | `STATE_DIR` | `/data` | `slsk.db` (jobs, sealed credentials, bans, messages), the library index and the share-probe cache. On a local disk: SQLite over a network filesystem loses its locking. |
 | `LISTEN_PORT` | `2234` | The peer port. Must be reachable for peers behind NAT to connect. |
 | `UPLOAD_SLOTS`, `UPLOAD_LIMIT`, `DOWNLOAD_LIMIT` | `500`, `0`, `0` | Uploads at once, then limits in bytes per second (0 is unlimited). Each running upload holds a socket and a 256 KiB buffer; past what saturates the uplink, more slots split it more ways rather than send more. |
-| `SEARCHES_PER_HOUR` | `60` | Searches allowed in any rolling hour, 0 for unlimited. Every search is relayed to thousands of peers, and the server temporarily bans accounts that search in floods; past the budget a search is refused with when the next is free. |
+| `SEARCHES_PER_HOUR` | `200` | Searches allowed in any rolling hour, 0 for unlimited. Every search is relayed to thousands of peers, and the server temporarily bans accounts that search in floods; past the budget a search is refused with when the next is free. |
 | `DESCRIPTION` | names the client as automated | The user info other peers see. The default says this is an automated client that shares back, so sharers can decide for themselves. |
 | `BEETS_CONFIG` | — | A beets `config.yaml` for the importer's template and replacements. |
 | `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | — | Required for the UI. `UI_INSECURE_NO_AUTH=1` disables sign-in and is only accepted with a loopback `UI_ADDR`. |
