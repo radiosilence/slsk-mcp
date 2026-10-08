@@ -1,8 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.1.66
 
 - **An album in review takes a pasted MusicBrainz release ID or URL.** The matcher's search sometimes misses a release MusicBrainz does have, which left only another copy or an as-is import, and as-is is refused when the files lack album tags.
+- **The album search has a Clear button**, which empties the box and the results and drops the query from the address. It waits for a running search to finish, since the search would otherwise refill the results it cleared.
 
 ## 0.1.65
 
