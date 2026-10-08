@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.64
+
+- **Searches come back quicker.** After a quiet spell, six searches go out a second apart before settling to one every four seconds, so a single search or a short run of them no longer waits on the four-second gap. A full burst followed by the steady rate stays under twenty in the first minute, below the flood that got the account banned. The burst refills after a quiet spell.
+- **The hourly search budget defaults to 200** (`SEARCHES_PER_HOUR`), up from 60. The server publishes no hourly limit; its bans are for bursts and for repeating a search quickly, which the pacing and the ten-minute reuse already prevent.
+
 ## 0.1.63
 
 Behaving well on the network, which also keeps the account clear of the server's flood bans.

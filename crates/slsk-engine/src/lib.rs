@@ -87,7 +87,7 @@ impl EngineConfig {
             max_search_responders: 64,
             max_queued_files_per_user: 2000,
             max_queued_bytes_per_user: 50 << 30,
-            searches_per_hour: 60,
+            searches_per_hour: 200,
             description: String::new(),
         }
     }
@@ -189,18 +189,57 @@ pub(crate) struct Inner {
     pub(crate) metrics: Arc<Metrics>,
     up_limit: limit::Bucket,
     down_limit: limit::Bucket,
-    /// When the next search may go out (see [`SEARCH_GAP`]), and when each
-    /// search in the last hour went out.
-    next_search: Mutex<(tokio::time::Instant, VecDeque<tokio::time::Instant>)>,
+    /// When searches may go out (see [`SearchPace`]), and when each search
+    /// in the last hour went out.
+    next_search: Mutex<(SearchPace, VecDeque<tokio::time::Instant>)>,
     /// Set when the server says it has banned us: logging in again before
     /// then is refused, and may lengthen the ban.
     ban_until: Mutex<Option<tokio::time::Instant>>,
 }
 
-/// Searches go out at least this far apart. The server bans an account that
-/// searches in bursts (two dozen grabs inside a minute did it), however many
-/// callers want one at the same moment.
+/// Spacing for searches: a short burst goes out quickly, then one every
+/// [`SEARCH_GAP`]. The server bans an account that searches in floods (two
+/// dozen grabs inside a minute did it), however many callers want one at
+/// the same moment; a full burst followed by the steady rate stays near
+/// twenty in the first minute.
+#[derive(Debug)]
+struct SearchPace {
+    /// When the steady rate would next allow a search with no burst left.
+    due: tokio::time::Instant,
+    /// The last slot handed out.
+    last: Option<tokio::time::Instant>,
+}
+
+/// The steady rate, once the burst is spent.
 const SEARCH_GAP: Duration = Duration::from_secs(4);
+/// The burst allowance, in steady-rate gaps. From idle, six searches go out
+/// at [`SEARCH_BURST_GAP`]: five from the allowance and one the steady rate
+/// has refilled by then.
+const SEARCH_BURST: u32 = 5;
+const SEARCH_BURST_GAP: Duration = Duration::from_secs(1);
+
+impl SearchPace {
+    fn new(now: tokio::time::Instant) -> Self {
+        Self {
+            due: now,
+            last: None,
+        }
+    }
+
+    /// Reserve the next slot at or after `now`. A generic cell rate: each
+    /// search pushes `due` one gap later, and a search may go out up to a
+    /// burst's worth of gaps ahead of it.
+    fn reserve(&mut self, now: tokio::time::Instant) -> tokio::time::Instant {
+        let ahead = SEARCH_GAP * (SEARCH_BURST - 1);
+        let mut at = self.due.checked_sub(ahead).unwrap_or(now).max(now);
+        if let Some(last) = self.last {
+            at = at.max(last + SEARCH_BURST_GAP);
+        }
+        self.due = self.due.max(at) + SEARCH_GAP;
+        self.last = Some(at);
+        at
+    }
+}
 
 impl Inner {
     fn username(&self) -> String {
@@ -271,7 +310,10 @@ impl Engine {
             up_limit: limit::Bucket::new(cfg.upload_limit),
             down_limit: limit::Bucket::new(cfg.download_limit),
             metrics,
-            next_search: Mutex::new((tokio::time::Instant::now(), VecDeque::new())),
+            next_search: Mutex::new((
+                SearchPace::new(tokio::time::Instant::now()),
+                VecDeque::new(),
+            )),
             ban_until: Mutex::new(None),
             cfg,
         });
@@ -404,7 +446,7 @@ impl Engine {
     }
 
     /// Wait for this caller's turn to search: each call reserves the next
-    /// slot [`SEARCH_GAP`] after the last one. Call before any search a
+    /// slot [`SearchPace`] allows. Call before any search a
     /// person or a job starts, so a burst of them reaches the server spaced
     /// out rather than at once. Refused, without waiting, once the hour's
     /// budget is spent.
@@ -432,8 +474,7 @@ impl Engine {
                     minutes: wait.as_secs().div_ceil(60),
                 });
             }
-            let at = (*next).max(now);
-            *next = at + SEARCH_GAP;
+            let at = next.reserve(now);
             recent.push_back(at);
             at
         };
@@ -600,4 +641,39 @@ pub(crate) fn forget_closed<T>(waiters: &DashMap<String, Vec<oneshot::Sender<T>>
         w.retain(|tx| !tx.is_closed());
     }
     waiters.remove_if(username, |_, w| w.is_empty());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn searches_burst_then_settle_to_the_steady_rate() {
+        let start = tokio::time::Instant::now();
+        let mut pace = SearchPace::new(start);
+        let slots: Vec<u64> = (0..8)
+            .map(|_| (pace.reserve(start) - start).as_secs())
+            .collect();
+        assert_eq!(slots, [0, 1, 2, 3, 4, 5, 8, 12]);
+        let first_minute = (0..)
+            .map(|_| pace.reserve(start) - start)
+            .take_while(|d| *d < Duration::from_secs(60))
+            .count()
+            + 8;
+        assert_eq!(first_minute, 19);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_idle_spell_restores_the_burst() {
+        let start = tokio::time::Instant::now();
+        let mut pace = SearchPace::new(start);
+        for _ in 0..10 {
+            pace.reserve(start);
+        }
+        let later = start + Duration::from_secs(600);
+        let slots: Vec<u64> = (0..5)
+            .map(|_| (pace.reserve(later) - later).as_secs())
+            .collect();
+        assert_eq!(slots, [0, 1, 2, 3, 4]);
+    }
 }
