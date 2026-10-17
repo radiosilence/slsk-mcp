@@ -14,10 +14,12 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use dashmap::DashMap;
 use parking_lot::{Mutex, RwLock};
+use rusqlite::{OptionalExtension, params};
 use slsk_engine::slsk_proto::server::{FromServer, ToServer, UserStatus};
 use slsk_engine::{Engine, Event, Status};
 use uuid::Uuid;
 
+use crate::db;
 use crate::folders::Filter;
 use crate::jobs::Jobs;
 use crate::session::Session;
@@ -163,12 +165,18 @@ impl Social {
         let account = engine.username();
         self.rooms.write().clear();
         let _ = engine.send(ToServer::RoomList);
-        for room in sqlx::query_scalar::<_, String>("SELECT name FROM rooms WHERE account = ?1")
-            .bind(&account)
-            .fetch_all(&self.db.read)
-            .await
-            .unwrap_or_default()
-        {
+        let rooms = {
+            let account = account.clone();
+            self.db
+                .run(move |c| {
+                    c.prepare_cached("SELECT name FROM rooms WHERE account = ?1")?
+                        .query_map(params![account], |r| r.get(0))?
+                        .collect::<db::Result<Vec<String>>>()
+                })
+                .await
+                .unwrap_or_default()
+        };
+        for room in rooms {
             let _ = engine.send(ToServer::JoinRoom {
                 room,
                 private: false,
@@ -177,14 +185,16 @@ impl Social {
         for username in self.buddy_names(&account).await {
             let _ = engine.send(ToServer::WatchUser { username });
         }
-        for (item, liked) in sqlx::query_as::<_, (String, bool)>(
-            "SELECT item, liked FROM interests WHERE account = ?1",
-        )
-        .bind(&account)
-        .fetch_all(&self.db.read)
-        .await
-        .unwrap_or_default()
-        {
+        let interests = self
+            .db
+            .run(move |c| {
+                c.prepare_cached("SELECT item, liked FROM interests WHERE account = ?1")?
+                    .query_map(params![account], |r| Ok((r.get(0)?, r.get(1)?)))?
+                    .collect::<db::Result<Vec<(String, bool)>>>()
+            })
+            .await
+            .unwrap_or_default();
+        for (item, liked) in interests {
             let _ = engine.send(if liked {
                 ToServer::AddThingILike { item }
             } else {
@@ -198,11 +208,15 @@ impl Social {
             FromServer::MessageUser {
                 username, message, ..
             } => {
-                let _ = sqlx::query("INSERT INTO messages (account, peer, outgoing, body) VALUES (?1, ?2, FALSE, ?3)")
-                    .bind(engine.username())
-                    .bind(username)
-                    .bind(message)
-                    .execute(&self.db.write)
+                let (account, peer, body) = (engine.username(), username.clone(), message.clone());
+                let _ = self
+                    .db
+                    .run(move |c| {
+                        c.execute(
+                            "INSERT INTO messages (account, peer, outgoing, body) VALUES (?1, ?2, FALSE, ?3)",
+                            params![account, peer, body],
+                        )
+                    })
                     .await;
                 self.answer_challenge(engine, username, message).await;
             }
@@ -332,12 +346,21 @@ impl Social {
             return;
         }
         tracing::info!(peer, token, "answered a peer's download check");
-        let _ = sqlx::query("INSERT INTO messages (account, peer, outgoing, body, read) VALUES (?1, ?2, TRUE, ?3, TRUE)")
-            .bind(engine.username())
-            .bind(peer)
-            .bind(&token)
-            .execute(&self.db.write)
+        let _ = self
+            .record_sent(engine.username(), peer.into(), token)
             .await;
+    }
+
+    async fn record_sent(&self, account: String, peer: String, body: String) -> db::Result<()> {
+        self.db
+            .run(move |c| {
+                c.execute(
+                    "INSERT INTO messages (account, peer, outgoing, body, read) VALUES (?1, ?2, TRUE, ?3, TRUE)",
+                    params![account, peer, body],
+                )?;
+                Ok(())
+            })
+            .await
     }
 
     pub async fn send_message(&self, token: &str, username: &str, message: &str) -> Result<()> {
@@ -347,11 +370,7 @@ impl Social {
             username: username.into(),
             message: message.into(),
         })?;
-        sqlx::query("INSERT INTO messages (account, peer, outgoing, body, read) VALUES (?1, ?2, TRUE, ?3, TRUE)")
-            .bind(engine.username())
-            .bind(username)
-            .bind(message)
-            .execute(&self.db.write)
+        self.record_sent(engine.username(), username.into(), message.into())
             .await?;
         Ok(())
     }
@@ -369,10 +388,14 @@ impl Social {
 
     pub async fn join_room(&self, room: &str) -> Result<()> {
         let engine = self.engine()?;
-        sqlx::query("INSERT INTO rooms (account, name) VALUES (?1, ?2) ON CONFLICT DO NOTHING")
-            .bind(engine.username())
-            .bind(room)
-            .execute(&self.db.write)
+        let (account, name) = (engine.username(), room.to_string());
+        self.db
+            .run(move |c| {
+                c.execute(
+                    "INSERT INTO rooms (account, name) VALUES (?1, ?2) ON CONFLICT DO NOTHING",
+                    params![account, name],
+                )
+            })
             .await?;
         engine.send(ToServer::JoinRoom {
             room: room.into(),
@@ -383,10 +406,14 @@ impl Social {
 
     pub async fn leave_room(&self, room: &str) -> Result<()> {
         let engine = self.engine()?;
-        sqlx::query("DELETE FROM rooms WHERE account = ?1 AND name = ?2")
-            .bind(engine.username())
-            .bind(room)
-            .execute(&self.db.write)
+        let (account, name) = (engine.username(), room.to_string());
+        self.db
+            .run(move |c| {
+                c.execute(
+                    "DELETE FROM rooms WHERE account = ?1 AND name = ?2",
+                    params![account, name],
+                )
+            })
             .await?;
         engine.send(ToServer::LeaveRoom { room: room.into() })?;
         Ok(())
@@ -419,21 +446,32 @@ impl Social {
     // --- Buddies -------------------------------------------------------------
 
     async fn buddy_names(&self, account: &str) -> Vec<String> {
-        sqlx::query_scalar("SELECT username FROM buddies WHERE account = ?1 ORDER BY username")
-            .bind(account)
-            .fetch_all(&self.db.read)
+        let account = account.to_string();
+        self.db
+            .run(move |c| {
+                c.prepare_cached(
+                    "SELECT username FROM buddies WHERE account = ?1 ORDER BY username",
+                )?
+                .query_map(params![account], |r| r.get(0))?
+                .collect()
+            })
             .await
             .unwrap_or_default()
     }
 
     pub async fn buddies(&self) -> Result<Vec<(String, String, Option<UserStatus>, bool)>> {
         let engine = self.engine()?;
-        let rows: Vec<(String, String)> = sqlx::query_as(
-            "SELECT username, note FROM buddies WHERE account = ?1 ORDER BY username",
-        )
-        .bind(engine.username())
-        .fetch_all(&self.db.read)
-        .await?;
+        let account = engine.username();
+        let rows: Vec<(String, String)> = self
+            .db
+            .run(move |c| {
+                c.prepare_cached(
+                    "SELECT username, note FROM buddies WHERE account = ?1 ORDER BY username",
+                )?
+                .query_map(params![account], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect()
+            })
+            .await?;
         Ok(rows
             .into_iter()
             .map(|(u, note)| {
@@ -445,11 +483,14 @@ impl Social {
 
     pub async fn add_buddy(&self, username: &str, note: &str) -> Result<()> {
         let engine = self.engine()?;
-        sqlx::query("INSERT INTO buddies (account, username, note) VALUES (?1, ?2, ?3) ON CONFLICT (account, username) DO UPDATE SET note = EXCLUDED.note")
-            .bind(engine.username())
-            .bind(username)
-            .bind(note)
-            .execute(&self.db.write)
+        let (account, buddy, note) = (engine.username(), username.to_string(), note.to_string());
+        self.db
+            .run(move |c| {
+                c.execute(
+                    "INSERT INTO buddies (account, username, note) VALUES (?1, ?2, ?3) ON CONFLICT (account, username) DO UPDATE SET note = EXCLUDED.note",
+                    params![account, buddy, note],
+                )
+            })
             .await?;
         engine.send(ToServer::WatchUser {
             username: username.into(),
@@ -459,10 +500,14 @@ impl Social {
 
     pub async fn remove_buddy(&self, username: &str) -> Result<()> {
         let engine = self.engine()?;
-        sqlx::query("DELETE FROM buddies WHERE account = ?1 AND username = ?2")
-            .bind(engine.username())
-            .bind(username)
-            .execute(&self.db.write)
+        let (account, buddy) = (engine.username(), username.to_string());
+        self.db
+            .run(move |c| {
+                c.execute(
+                    "DELETE FROM buddies WHERE account = ?1 AND username = ?2",
+                    params![account, buddy],
+                )
+            })
             .await?;
         engine.send(ToServer::UnwatchUser {
             username: username.into(),
@@ -477,10 +522,22 @@ impl Social {
     pub async fn conversations(
         &self,
     ) -> Result<Vec<(String, String, bool, chrono::DateTime<chrono::Utc>, i64)>> {
-        let engine = self.engine()?;
-        Ok(sqlx::query_as(CONVERSATIONS)
-            .bind(engine.username())
-            .fetch_all(&self.db.read)
+        let account = self.engine()?.username();
+        Ok(self
+            .db
+            .run(move |c| {
+                c.prepare_cached(CONVERSATIONS)?
+                    .query_map(params![account], |r| {
+                        Ok((
+                            r.get(0)?,
+                            r.get(1)?,
+                            r.get(2)?,
+                            db::ts_from(&r.get::<_, String>(3)?)?,
+                            r.get(4)?,
+                        ))
+                    })?
+                    .collect()
+            })
             .await?)
     }
 
@@ -497,11 +554,22 @@ impl Social {
                 *waiting.entry(d.username.clone()).or_default() += 1;
             }
         }
-        let latest: Vec<(String, String, bool, chrono::DateTime<chrono::Utc>)> =
-            sqlx::query_as(LATEST_PER_PEER)
-                .bind(engine.username())
-                .fetch_all(&self.db.read)
-                .await?;
+        let account = engine.username();
+        let latest: Vec<(String, String, bool, chrono::DateTime<chrono::Utc>)> = self
+            .db
+            .run(move |c| {
+                c.prepare_cached(LATEST_PER_PEER)?
+                    .query_map(params![account], |r| {
+                        Ok((
+                            r.get(0)?,
+                            r.get(1)?,
+                            r.get(2)?,
+                            db::ts_from(&r.get::<_, String>(3)?)?,
+                        ))
+                    })?
+                    .collect()
+            })
+            .await?;
         Ok(latest
             .into_iter()
             .filter(|(peer, _, outgoing, _)| !outgoing && waiting.contains_key(peer))
@@ -517,12 +585,16 @@ impl Social {
         peer: &str,
         limit: i64,
     ) -> Result<Vec<(String, bool, chrono::DateTime<chrono::Utc>)>> {
-        let engine = self.engine()?;
-        let mut rows: Vec<(String, bool, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(THREAD)
-            .bind(engine.username())
-            .bind(peer)
-            .bind(limit)
-            .fetch_all(&self.db.read)
+        let (account, peer) = (self.engine()?.username(), peer.to_string());
+        let mut rows: Vec<(String, bool, chrono::DateTime<chrono::Utc>)> = self
+            .db
+            .run(move |c| {
+                c.prepare_cached(THREAD)?
+                    .query_map(params![account, peer, limit], |r| {
+                        Ok((r.get(0)?, r.get(1)?, db::ts_from(&r.get::<_, String>(2)?)?))
+                    })?
+                    .collect()
+            })
             .await?;
         rows.reverse();
         Ok(rows)
@@ -530,22 +602,23 @@ impl Social {
 
     /// Private messages received and not yet read, across everyone.
     pub async fn unread(&self) -> Result<i64> {
-        let engine = self.engine()?;
-        Ok(sqlx::query_scalar(UNREAD)
-            .bind(engine.username())
-            .fetch_one(&self.db.read)
+        let account = self.engine()?.username();
+        Ok(self
+            .db
+            .run(move |c| c.query_row(UNREAD, params![account], |r| r.get(0)))
             .await?)
     }
 
     pub async fn mark_read(&self, peer: &str) -> Result<()> {
-        let engine = self.engine()?;
-        sqlx::query(
-            "UPDATE messages SET read = TRUE WHERE account = ?1 AND peer = ?2 AND NOT read",
-        )
-        .bind(engine.username())
-        .bind(peer)
-        .execute(&self.db.write)
-        .await?;
+        let (account, peer) = (self.engine()?.username(), peer.to_string());
+        self.db
+            .run(move |c| {
+                c.execute(
+                    "UPDATE messages SET read = TRUE WHERE account = ?1 AND peer = ?2 AND NOT read",
+                    params![account, peer],
+                )
+            })
+            .await?;
         Ok(())
     }
 
@@ -554,24 +627,33 @@ impl Social {
     pub async fn set_interest(&self, item: &str, liked: Option<bool>) -> Result<()> {
         let engine = self.engine()?;
         let account = engine.username();
-        let previous: Option<bool> = sqlx::query_scalar(
-            "DELETE FROM interests WHERE account = ?1 AND item = ?2 RETURNING liked",
-        )
-        .bind(&account)
-        .bind(item)
-        .fetch_optional(&self.db.write)
-        .await?;
+        let previous: Option<bool> = {
+            let (account, item) = (account.clone(), item.to_string());
+            self.db
+                .run(move |c| {
+                    c.query_row(
+                        "DELETE FROM interests WHERE account = ?1 AND item = ?2 RETURNING liked",
+                        params![account, item],
+                        |r| r.get(0),
+                    )
+                    .optional()
+                })
+                .await?
+        };
         match previous {
             Some(true) => engine.send(ToServer::RemoveThingILike { item: item.into() })?,
             Some(false) => engine.send(ToServer::RemoveThingIHate { item: item.into() })?,
             None => {}
         }
         if let Some(liked) = liked {
-            sqlx::query("INSERT INTO interests (account, item, liked) VALUES (?1, ?2, ?3)")
-                .bind(&account)
-                .bind(item)
-                .bind(liked)
-                .execute(&self.db.write)
+            let thing = item.to_string();
+            self.db
+                .run(move |c| {
+                    c.execute(
+                        "INSERT INTO interests (account, item, liked) VALUES (?1, ?2, ?3)",
+                        params![account, thing, liked],
+                    )
+                })
                 .await?;
             engine.send(if liked {
                 ToServer::AddThingILike { item: item.into() }
@@ -583,46 +665,51 @@ impl Social {
     }
 
     pub async fn interests(&self) -> Result<Vec<(String, bool)>> {
-        let engine = self.engine()?;
-        Ok(
-            sqlx::query_as("SELECT item, liked FROM interests WHERE account = ?1 ORDER BY item")
-                .bind(engine.username())
-                .fetch_all(&self.db.read)
-                .await?,
-        )
+        let account = self.engine()?.username();
+        Ok(self
+            .db
+            .run(move |c| {
+                c.prepare_cached(
+                    "SELECT item, liked FROM interests WHERE account = ?1 ORDER BY item",
+                )?
+                .query_map(params![account], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect()
+            })
+            .await?)
     }
 
     // --- Wishlist ------------------------------------------------------------
 
     pub async fn add_wish(&self, query: &str, lossless: bool, grab: bool) -> Result<Uuid> {
-        let engine = self.engine()?;
+        let (account, query) = (self.engine()?.username(), query.to_string());
         let id = Uuid::new_v4();
-        sqlx::query(
-            "INSERT INTO wishes (id, account, query, lossless, grab) VALUES (?1, ?2, ?3, ?4, ?5)",
-        )
-        .bind(id)
-        .bind(engine.username())
-        .bind(query)
-        .bind(lossless)
-        .bind(grab)
-        .execute(&self.db.write)
-        .await?;
+        self.db
+            .run(move |c| {
+                c.execute(
+                    "INSERT INTO wishes (id, account, query, lossless, grab) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![id, account, query, lossless, grab],
+                )
+            })
+            .await?;
         Ok(id)
     }
 
     pub async fn remove_wish(&self, id: Uuid) -> Result<()> {
-        sqlx::query("DELETE FROM wishes WHERE id = ?1")
-            .bind(id)
-            .execute(&self.db.write)
+        self.db
+            .run(move |c| c.execute("DELETE FROM wishes WHERE id = ?1", params![id]))
             .await?;
         Ok(())
     }
 
     pub async fn wishes(&self) -> Result<Vec<Wish>> {
-        let engine = self.engine()?;
-        Ok(sqlx::query_as("SELECT id, query, lossless, grab, searched_at, job_id FROM wishes WHERE account = ?1 ORDER BY created_at")
-            .bind(engine.username())
-            .fetch_all(&self.db.read)
+        let account = self.engine()?.username();
+        Ok(self
+            .db
+            .run(move |c| {
+                c.prepare_cached("SELECT id, query, lossless, grab, searched_at, job_id FROM wishes WHERE account = ?1 ORDER BY created_at")?
+                    .query_map(params![account], Wish::from_row)?
+                    .collect()
+            })
             .await?)
     }
 
@@ -643,9 +730,13 @@ impl Social {
 
     async fn wishlist_tick(&self) -> Result<()> {
         let engine = self.engine()?;
-        let Some(wish): Option<Wish> = sqlx::query_as(NEXT_WISH)
-            .bind(engine.username())
-            .fetch_optional(&self.db.read)
+        let account = engine.username();
+        let Some(wish) = self
+            .db
+            .run(move |c| {
+                c.query_row(NEXT_WISH, params![account], Wish::from_row)
+                    .optional()
+            })
             .await?
         else {
             return Ok(());
@@ -653,14 +744,19 @@ impl Social {
         // Before marking it searched: a spent budget leaves the wish first in
         // line for the next tick.
         engine.pace().await?;
-        sqlx::query(concat!(
-            "UPDATE wishes SET searched_at = ",
-            crate::db::now!(),
-            " WHERE id = ?1"
-        ))
-        .bind(wish.id)
-        .execute(&self.db.write)
-        .await?;
+        let id = wish.id;
+        self.db
+            .run(move |c| {
+                c.execute(
+                    concat!(
+                        "UPDATE wishes SET searched_at = ",
+                        crate::db::now!(),
+                        " WHERE id = ?1"
+                    ),
+                    params![id],
+                )
+            })
+            .await?;
         let mut rx = engine.wishlist_search(&wish.query)?;
         let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
         let mut responses = Vec::new();
@@ -684,10 +780,14 @@ impl Social {
                     .jobs
                     .from_folder(&best, Some(wish.query.clone()), alternates)
                     .await?;
-                sqlx::query("UPDATE wishes SET job_id = ?2 WHERE id = ?1")
-                    .bind(wish.id)
-                    .bind(job.id)
-                    .execute(&self.db.write)
+                let job_id = job.id;
+                self.db
+                    .run(move |c| {
+                        c.execute(
+                            "UPDATE wishes SET job_id = ?2 WHERE id = ?1",
+                            params![id, job_id],
+                        )
+                    })
                     .await?;
             }
         }
@@ -695,7 +795,7 @@ impl Social {
     }
 }
 
-#[derive(Clone, sqlx::FromRow, async_graphql::SimpleObject)]
+#[derive(Clone, async_graphql::SimpleObject)]
 pub struct Wish {
     pub id: Uuid,
     pub query: String,
@@ -705,6 +805,22 @@ pub struct Wish {
     pub searched_at: Option<chrono::DateTime<chrono::Utc>>,
     /// The job it became, once found.
     pub job_id: Option<Uuid>,
+}
+
+impl Wish {
+    fn from_row(r: &rusqlite::Row<'_>) -> db::Result<Self> {
+        Ok(Self {
+            id: r.get("id")?,
+            query: r.get("query")?,
+            lossless: r.get("lossless")?,
+            grab: r.get("grab")?,
+            searched_at: r
+                .get::<_, Option<String>>("searched_at")?
+                .map(|s| db::ts_from(&s))
+                .transpose()?,
+            job_id: r.get("job_id")?,
+        })
+    }
 }
 
 fn fingerprint(kind: &str, target: &str, body: &str) -> u64 {

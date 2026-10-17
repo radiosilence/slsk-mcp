@@ -310,30 +310,47 @@ async fn state_metrics(app: &App, out: &mut String) {
             "",
         );
     }
-    let jobs: Vec<(String, i64)> =
-        sqlx::query_as("SELECT status, count(*) FROM jobs GROUP BY status ORDER BY status")
-            .fetch_all(&app.db.read)
-            .await
-            .unwrap_or_default();
+    let jobs: Vec<(String, i64)> = app
+        .db
+        .run(|c| {
+            c.prepare_cached("SELECT status, count(*) FROM jobs GROUP BY status ORDER BY status")?
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect()
+        })
+        .await
+        .unwrap_or_default();
     gauge(
         "slsk_jobs",
         "Albums on their way into the library, by status.",
         &jobs,
         "status",
     );
-    let unread: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM messages WHERE NOT read AND NOT outgoing")
-            .fetch_one(&app.db.read)
-            .await
-            .unwrap_or(0);
+    let unread: i64 = app
+        .db
+        .run(|c| {
+            c.query_row(
+                "SELECT count(*) FROM messages WHERE NOT read AND NOT outgoing",
+                [],
+                |r| r.get(0),
+            )
+        })
+        .await
+        .unwrap_or(0);
     gauge(
         "slsk_messages_unread",
         "Private messages not yet read.",
         &[(String::new(), unread)],
         "",
     );
-    let wishes: i64 = sqlx::query_scalar("SELECT count(*) FROM wishes WHERE job_id IS NULL")
-        .fetch_one(&app.db.read)
+    let wishes: i64 = app
+        .db
+        .run(|c| {
+            c.query_row(
+                "SELECT count(*) FROM wishes WHERE job_id IS NULL",
+                [],
+                |r| r.get(0),
+            )
+        })
         .await
         .unwrap_or(0);
     gauge(
