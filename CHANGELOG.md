@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.67
+
+- **A search result's path is a set of links into that peer's shares.** Each folder in it opens Browse there, so a sibling release or the artist's other albums are one click away. Peers send Windows-style paths; they are shown with `/`.
+- **A search result lists its files under a toggle**, from what the peer sent with the result, so it opens instantly without fetching the peer's whole share list. A search only returns files whose paths matched, so a folder can hold more than it shows.
+
 ## 0.1.66
 
 - **An album in review takes a pasted MusicBrainz release ID or URL.** The matcher's search sometimes misses a release MusicBrainz does have, which left only another copy or an as-is import, and as-is is refused when the files lack album tags.

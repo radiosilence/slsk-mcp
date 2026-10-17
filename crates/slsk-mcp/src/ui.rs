@@ -910,6 +910,16 @@ impl ResultsView {
     fn key(&self, f: &Folder) -> String {
         URL_SAFE_NO_PAD.encode(f.remote_path.as_bytes())
     }
+    /// Stable across regroups, so an open preview stays with its folder.
+    fn id(&self, f: &Folder) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::hash::DefaultHasher::new();
+        (&f.username, f.remote_path.as_bytes()).hash(&mut h);
+        h.finish()
+    }
+    fn crumbs(&self, f: &Folder) -> Vec<browse::Child> {
+        browse::crumbs(f.remote_path.as_bytes())
+    }
     fn size(&self, b: &u64) -> String {
         human(*b)
     }
