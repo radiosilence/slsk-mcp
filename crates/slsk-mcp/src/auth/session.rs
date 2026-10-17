@@ -72,10 +72,7 @@ impl Sessions {
         let now = chrono::Utc::now();
         self.db
             .run(move |c| {
-                c.execute(
-                    "DELETE FROM ui_sessions WHERE expires_at < ?1",
-                    [ts(&now)],
-                )?;
+                c.execute("DELETE FROM ui_sessions WHERE expires_at < ?1", [ts(&now)])?;
                 c.execute(
                     "INSERT INTO ui_sessions (id_hash, sub, expires_at) \
                      VALUES (?1, ?2, ?3)",
@@ -93,7 +90,9 @@ impl Sessions {
         self.db
             .run(move |c| {
                 c.prepare_cached(SESSION)?
-                    .query_row(params![id_hash, ts(&chrono::Utc::now())], |r| r.get::<_, String>(0))
+                    .query_row(params![id_hash, ts(&chrono::Utc::now())], |r| {
+                        r.get::<_, String>(0)
+                    })
                     .optional()
             })
             .await

@@ -344,7 +344,13 @@ async fn state_metrics(app: &App, out: &mut String) {
     );
     let wishes: i64 = app
         .db
-        .run(|c| c.query_row("SELECT count(*) FROM wishes WHERE job_id IS NULL", [], |r| r.get(0)))
+        .run(|c| {
+            c.query_row(
+                "SELECT count(*) FROM wishes WHERE job_id IS NULL",
+                [],
+                |r| r.get(0),
+            )
+        })
         .await
         .unwrap_or(0);
     gauge(
