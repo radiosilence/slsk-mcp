@@ -2,21 +2,32 @@
 //! restart. Transfer progress is not here: it lives in the engine's memory and
 //! is read from there.
 //!
-//! One file in the state directory, opened once. Reads go through a pool of
-//! read-only connections, which WAL lets run beside a write; every write goes
-//! through a single connection, so writes queue in the process instead of
-//! contending for SQLite's lock. sqlx runs each connection on its own thread,
-//! so a query never occupies an async worker.
+//! One file in the state directory, reached through a pool of rusqlite
+//! connections as koan and sift reach theirs. rusqlite blocks, so every
+//! statement runs on tokio's blocking pool through [`Db::run`] and never
+//! occupies an async worker. WAL lets reads run beside a write; writers wait
+//! on one another through `busy_timeout`, and a transaction that writes opens
+//! with `BEGIN IMMEDIATE` so it waits for the lock up front instead of failing
+//! when it tries to upgrade a read.
+//!
+//! Encodings are fixed by the rows already stored: UUIDs as 16-byte blobs
+//! (rusqlite's `uuid` feature), timestamps as RFC 3339 text with a `T`, which
+//! is what the schema's `strftime` defaults write and what [`ts`] produces,
+//! and JSON as text through [`Json`]. rusqlite's own chrono encoding uses a
+//! space instead of the `T`, which would sort and compare wrongly against the
+//! stored values, so timestamps are bound with [`ts`] and read with
+//! [`ts_from`].
 
-use std::path::Path;
-use std::str::FromStr;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
+use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
-use sqlx::types::Json;
 use uuid::Uuid;
+
+pub use rusqlite::Result;
 
 /// Completed uploads since a time.
 pub(crate) const UPLOAD_TOTALS: &str = "SELECT COUNT(*), COALESCE(SUM(bytes), 0) FROM uploads \
@@ -66,52 +77,77 @@ macro_rules! now {
 }
 pub(crate) use now;
 
+/// Migrations in order; `PRAGMA user_version` counts those applied.
+const MIGRATIONS: &[&str] = &[include_str!("../migrations/0001_init.sql")];
+
+/// How many idle connections to keep. More than the concurrency the service
+/// reaches, so the steady state never opens one; a burst past it closes the
+/// extras when they come back.
+const KEEP_IDLE: usize = 8;
+
 #[derive(Clone)]
-pub struct Db {
-    pub read: SqlitePool,
-    pub write: SqlitePool,
+pub struct Db(Arc<Pool>);
+
+struct Pool {
+    path: PathBuf,
+    idle: parking_lot::Mutex<Vec<Connection>>,
 }
 
 impl Db {
+    /// Open (or create) the database at `path` and bring its schema up to
+    /// date.
     pub async fn open(path: &Path) -> anyhow::Result<Self> {
-        let base = SqliteConnectOptions::from_str("sqlite:")?
-            .filename(path)
-            .journal_mode(SqliteJournalMode::Wal)
-            .synchronous(SqliteSynchronous::Normal)
-            .busy_timeout(Duration::from_secs(5))
-            .foreign_keys(true)
-            .pragma("temp_store", "memory");
-        let write = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(base.clone().create_if_missing(true))
-            .await?;
-        sqlx::migrate!("./migrations").run(&write).await?;
-        let read = SqlitePoolOptions::new()
-            .max_connections(4)
-            .connect_with(base.read_only(true))
-            .await?;
-        let db = Self { read, write };
-        db.optimize().await;
+        let path = path.to_path_buf();
+        let db = tokio::task::spawn_blocking(move || -> anyhow::Result<Self> {
+            let mut conn = Connection::open(&path)?;
+            configure(&conn)?;
+            conn.pragma_update(None, "journal_mode", "WAL")?;
+            migrate(&mut conn)?;
+            optimize(&conn);
+            Ok(Self(Arc::new(Pool {
+                path,
+                idle: parking_lot::Mutex::new(vec![conn]),
+            })))
+        })
+        .await??;
         Ok(db)
     }
 
-    /// An in-memory database for tests: one shared connection, so the pools
-    /// see the same data.
+    /// A fresh database in a temporary file, for tests: a file rather than
+    /// `:memory:` so every pooled connection sees the same data.
     #[cfg(test)]
     pub async fn memory() -> Self {
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(
-                SqliteConnectOptions::from_str("sqlite::memory:")
-                    .unwrap()
-                    .foreign_keys(true),
-            )
-            .await
-            .unwrap();
-        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
-        Self {
-            read: pool.clone(),
-            write: pool,
+        let path = std::env::temp_dir().join(format!("slsk-test-{}.db", Uuid::new_v4()));
+        Self::open(&path).await.expect("test database")
+    }
+
+    /// Run `f` on a pooled connection, on the blocking pool.
+    pub async fn run<T, F>(&self, f: F) -> Result<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(&mut Connection) -> Result<T> + Send + 'static,
+    {
+        let pool = self.0.clone();
+        match tokio::task::spawn_blocking(move || {
+            let mut conn = match pool.idle.lock().pop() {
+                Some(c) => c,
+                None => {
+                    let c = Connection::open(&pool.path)?;
+                    configure(&c)?;
+                    c
+                }
+            };
+            let out = f(&mut conn);
+            let mut idle = pool.idle.lock();
+            if idle.len() < KEEP_IDLE {
+                idle.push(conn);
+            }
+            out
+        })
+        .await
+        {
+            Ok(r) => r,
+            Err(e) => std::panic::resume_unwind(e.into_panic()),
         }
     }
 
@@ -119,12 +155,107 @@ impl Db {
     /// it costs milliseconds; without statistics SQLite can pick an index that
     /// only supplies the ordering and read the whole table.
     pub async fn optimize(&self) {
-        if let Err(e) = sqlx::query("PRAGMA analysis_limit = 400; PRAGMA optimize = 0x10002;")
-            .execute(&self.write)
-            .await
-        {
-            tracing::warn!(error = %e, "database optimize failed");
-        }
+        let _ = self
+            .run(|c| {
+                optimize(c);
+                Ok(())
+            })
+            .await;
+    }
+}
+
+/// Settings every connection needs; WAL is a property of the file and is set
+/// once, at open.
+fn configure(conn: &Connection) -> Result<()> {
+    conn.busy_timeout(Duration::from_secs(5))?;
+    conn.execute_batch(
+        "PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON; PRAGMA temp_store = MEMORY;",
+    )
+}
+
+fn optimize(conn: &Connection) {
+    if let Err(e) = conn.execute_batch("PRAGMA analysis_limit = 400; PRAGMA optimize = 0x10002;") {
+        tracing::warn!(error = %e, "database optimize failed");
+    }
+}
+
+/// Apply the migrations `user_version` says are missing. A database created
+/// while the service used sqlx records its migrations in `_sqlx_migrations`
+/// instead, and those count as applied.
+fn migrate(conn: &mut Connection) -> Result<()> {
+    let mut applied: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if applied == 0 {
+        let sqlx: Option<i64> = conn
+            .query_row(
+                "SELECT max(version) FROM _sqlx_migrations WHERE success",
+                [],
+                |r| r.get(0),
+            )
+            .optional()
+            .unwrap_or(None)
+            .flatten();
+        applied = sqlx.unwrap_or(0);
+    }
+    let applied = usize::try_from(applied).unwrap_or(0);
+    if applied > MIGRATIONS.len() {
+        return newer_schema(applied);
+    }
+    for (i, sql) in MIGRATIONS.iter().enumerate().skip(applied) {
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        tx.execute_batch(sql)?;
+        tx.pragma_update(None, "user_version", (i + 1) as i64)?;
+        tx.commit()?;
+    }
+    conn.pragma_update(None, "user_version", MIGRATIONS.len() as i64)
+}
+
+/// A database migrated by a newer build: refuse it rather than run against a
+/// schema this one does not know.
+fn newer_schema(found: usize) -> Result<()> {
+    Err(rusqlite::Error::SqliteFailure(
+        rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_MISMATCH),
+        Some(format!(
+            "database schema version {found} is newer than this build's {}",
+            MIGRATIONS.len()
+        )),
+    ))
+}
+
+/// A timestamp as the schema stores it, for binding.
+pub fn ts(t: &chrono::DateTime<chrono::Utc>) -> String {
+    t.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, false)
+}
+
+/// A stored timestamp, read back.
+pub fn ts_from(s: &str) -> Result<chrono::DateTime<chrono::Utc>> {
+    chrono::DateTime::parse_from_rfc3339(s)
+        .map(|t| t.with_timezone(&chrono::Utc))
+        .map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
+        })
+}
+
+/// A JSON column, read and written through serde.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Json<T>(pub T);
+
+impl<T: Serialize> ToSql for Json<T> {
+    fn to_sql(&self) -> Result<ToSqlOutput<'_>> {
+        serde_json::to_string(&self.0)
+            .map(ToSqlOutput::from)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
+    }
+}
+
+impl<T: serde::de::DeserializeOwned> FromSql for Json<T> {
+    fn column_result(v: ValueRef<'_>) -> FromSqlResult<Self> {
+        let bytes = match v {
+            ValueRef::Text(b) | ValueRef::Blob(b) => b,
+            _ => return Err(FromSqlError::InvalidType),
+        };
+        serde_json::from_slice(bytes)
+            .map(Json)
+            .map_err(FromSqlError::other)
     }
 }
 
