@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.67
+
+- **A CD's hidden track before track 1 is imported as track 0.** MusicBrainz lists it as the disc's pregap, apart from its tracks, and the tagger (sift 0.3.7) used to read only the tracks, so the rip's track 00 matched nothing and was deleted with the leftover download. sift is taken from its 0.3 branch because 0.4 needs rusqlite 0.40, whose SQLite cannot link alongside sqlx 0.9's.
+
 ## 0.1.66
 
 - **An album in review takes a pasted MusicBrainz release ID or URL.** The matcher's search sometimes misses a release MusicBrainz does have, which left only another copy or an as-is import, and as-is is refused when the files lack album tags.
