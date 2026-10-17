@@ -16,11 +16,10 @@ use anyhow::{Context, Result, bail};
 use slsk_engine::Engine;
 use slsk_engine::slsk_proto::RawStr;
 use slsk_engine::slsk_proto::peer::Directory;
-use sqlx::types::Json;
 use tokio::sync::{Mutex, Notify};
 use uuid::Uuid;
 
-use crate::db::{self, Alternate, Job, JobFile, Source};
+use crate::db::{self, Alternate, Job, JobFile, Json, Source};
 use crate::folders::Folder;
 use crate::session::Session;
 
@@ -1363,9 +1362,8 @@ impl Jobs {
         }
         // A wish that found this album would otherwise find it again on its
         // next pass: removing the album is the answer to the wish too.
-        sqlx::query("DELETE FROM wishes WHERE job_id = ?1")
-            .bind(id)
-            .execute(&self.db.write)
+        self.db
+            .run(move |c| c.execute("DELETE FROM wishes WHERE job_id = ?1", [id]))
             .await?;
         db::delete_job(&self.db, id).await?;
         Ok(())
