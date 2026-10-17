@@ -185,7 +185,7 @@ fn optimize(conn: &Connection) {
 fn migrate(conn: &mut Connection) -> Result<()> {
     let mut applied: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
     if applied == 0 {
-        let sqlx: Option<i64> = conn
+        let legacy: Option<i64> = conn
             .query_row(
                 "SELECT max(version) FROM _sqlx_migrations WHERE success",
                 [],
@@ -194,7 +194,7 @@ fn migrate(conn: &mut Connection) -> Result<()> {
             .optional()
             .unwrap_or(None)
             .flatten();
-        applied = sqlx.unwrap_or(0);
+        applied = legacy.unwrap_or(0);
     }
     let applied = usize::try_from(applied).unwrap_or(0);
     if applied > MIGRATIONS.len() {
@@ -1020,8 +1020,9 @@ mod tests {
         for sql in hot {
             let plan: Vec<String> = db
                 .run(move |c| {
-                    c.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?
-                        .query_map([], |r| r.get("detail"))?
+                    let mut s = c.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
+                    let nulls = std::iter::repeat_n(rusqlite::types::Null, s.parameter_count());
+                    s.query_map(rusqlite::params_from_iter(nulls), |r| r.get("detail"))?
                         .collect()
                 })
                 .await
@@ -1191,6 +1192,32 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(mode, "wal");
+        drop(db);
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+        }
+    }
+
+    /// A database sqlx migrated keeps its schema: its recorded migrations
+    /// count as applied rather than running again over existing tables.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_database_migrated_by_sqlx_opens_as_is() {
+        let path = std::env::temp_dir().join(format!("slsk-{}.db", Uuid::new_v4()));
+        {
+            let c = Connection::open(&path).unwrap();
+            c.execute_batch(MIGRATIONS[0]).unwrap();
+            c.execute_batch(
+                "CREATE TABLE _sqlx_migrations (version BIGINT PRIMARY KEY, success BOOLEAN NOT NULL); \
+                 INSERT INTO _sqlx_migrations VALUES (1, TRUE);",
+            )
+            .unwrap();
+        }
+        let db = Db::open(&path).await.unwrap();
+        let version: i64 = db
+            .run(|c| c.query_row("PRAGMA user_version", [], |r| r.get(0)))
+            .await
+            .unwrap();
+        assert_eq!(version, MIGRATIONS.len() as i64);
         drop(db);
         for suffix in ["", "-wal", "-shm"] {
             let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
