@@ -2,7 +2,7 @@
 
 ## 0.1.67
 
-- **A CD's hidden track before track 1 is imported as track 0.** MusicBrainz lists it as the disc's pregap, apart from its tracks, and the tagger used to read only the tracks, so the rip's track 00 matched nothing and was deleted with the leftover download. Fixed in sift 0.4, which this release moves to.
+- **A CD's hidden track before track 1 is imported as track 0.** MusicBrainz lists it as the disc's pregap, apart from its tracks, and the tagger used to read only the tracks, so the rip's track 00 matched nothing and was deleted with the leftover download. Fixed in sift 0.5, which this release moves to.
 - **The database layer uses rusqlite instead of sqlx**, as koan and sift do. sift 0.4 links SQLite through rusqlite 0.40, and sqlx 0.9 cannot share a binary with it, since each bundles its own SQLite. The stored encodings are unchanged (UUIDs as blobs, timestamps as RFC 3339 text with a `T`, JSON as text), and a database sqlx migrated opens as it is: its `_sqlx_migrations` record counts as applied, and `PRAGMA user_version` tracks migrations from here.
 
 ## 0.1.66
