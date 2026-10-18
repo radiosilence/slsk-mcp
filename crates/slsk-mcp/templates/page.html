@@ -72,8 +72,8 @@
       <select name="since" data-bind:_libsince data-on:change="$_libsince != 'date' && @post('/library/find', {contentType: 'form', selector: '#lib-find'})">
         <option value="">Imported any time</option>
         <option value="today">Imported today</option>
-        <option value="week">Imported this week</option>
-        <option value="month">Imported this month</option>
+        <option value="week">Imported in the last 7 days</option>
+        <option value="month">Imported in the last 30 days</option>
         <option value="date">Imported since…</option>
       </select>
       <input type="date" name="from" data-bind:_libfrom data-show="$_libsince == 'date'" data-on:change="@post('/library/find', {contentType: 'form', selector: '#lib-find'})">

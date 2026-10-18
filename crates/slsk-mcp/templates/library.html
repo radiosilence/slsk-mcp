@@ -33,8 +33,8 @@
   </ul>
   {% if newer.is_some() || older.is_some() %}
   <div class="actions pager">
-    {% if let Some(u) = newer %}<button type="button" class="quiet" data-indicator="_newer" data-class:busy="$_newer" data-on:click="@get('{{ u }}')">Newer</button>{% endif %}
-    {% if let Some(u) = older %}<button type="button" class="quiet" data-indicator="_older" data-class:busy="$_older" data-on:click="@get('{{ u }}')">Older</button>{% endif %}
+    {% if let Some(u) = newer %}<a href="{{ u }}" class="button quiet" data-indicator="_newer" data-class:busy="$_newer" data-on:click="evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || (evt.preventDefault(), @get('{{ u }}'))">Newer</a>{% endif %}
+    {% if let Some(u) = older %}<a href="{{ u }}" class="button quiet" data-indicator="_older" data-class:busy="$_older" data-on:click="evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || (evt.preventDefault(), @get('{{ u }}'))">Older</a>{% endif %}
   </div>
   {% endif %}
   <div class="lib-bar" data-show="$_sel > 0">

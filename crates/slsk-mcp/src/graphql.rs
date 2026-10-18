@@ -1103,8 +1103,8 @@ impl Mutation {
     /// `import -L`. With `releaseId` (one album only) that release is
     /// applied; without, the closest is applied only when it is close and
     /// complete, and `review` says why it was not. `preview: true` changes
-    /// nothing and gives the release each would match and why it might
-    /// stop; `compareRelease` is the track-by-track view for a job, and the
+    /// nothing and gives the release each would match (`releaseId`'s, when
+    /// given) and why it might stop; `compareRelease` is the track-by-track view for a job, and the
     /// web UI shows the same for a library album. One MusicBrainz search
     /// and several lookups per album.
     async fn reimport_albums(
@@ -1129,7 +1129,18 @@ impl Mutation {
         }
         let mut out = Vec::new();
         for a in albums {
-            let result = if preview {
+            let result = if preview && let Some(id) = &release_id {
+                library
+                    .compare(&a.path, id)
+                    .await
+                    .map(|c| crate::library::ReimportedAlbum {
+                        path: a.path.clone(),
+                        release: Some((&c.release).into()),
+                        review: None,
+                        to: None,
+                        problems: Vec::new(),
+                    })
+            } else if preview {
                 library
                     .rematch(&a.path)
                     .await
