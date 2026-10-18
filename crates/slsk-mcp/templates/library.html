@@ -24,6 +24,13 @@
   {% endfor %}
   {% endif %}
 
+  <h3 class="section">Artist credits</h3>
+  <p class="note">A collaboration's files name each artist (<code>ARTISTS</code>, <code>ALBUMARTISTS</code> and their MusicBrainz ids) so players list it under every artist on it. Albums filed before that are credited here: from their MusicBrainz release, or by splitting the credit where every part is an artist the library holds. Files already credited are skipped; nothing else changes.</p>
+  <form id="credit-all"><input type="hidden" name="only" value="credits"><input type="hidden" name="all" value="1"></form>
+  <div class="actions">
+    <button data-indicator="_cr_lib" data-attr:disabled="$_cr_lib" data-class:busy="$_cr_lib" data-on:click="confirm('Credit each artist across the whole library? Albums with a MusicBrainz release take about a second each.') && @post('/library/enrich', {contentType: 'form', selector: '#credit-all'})">Credit artists across the library</button>
+  </div>
+
   <h3 class="section">Re-file</h3>
   {% if groups.is_empty() %}<p class="note">Every album is where the current rules file it.</p>{% else %}
   <p class="note">Albums the current naming rules would file elsewhere. Open one to see every file it would move.</p>

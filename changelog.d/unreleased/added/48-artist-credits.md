@@ -1,1 +1,1 @@
-- **Each artist on a collaboration is credited.** Imports tag every artist on a credit (`ARTISTS`, `ALBUMARTISTS` and every MusicBrainz artist id, through sift 0.6), so players list "A × B" under both; `creditArtists(query)` adds them to albums filed before.
+- **Each artist on a collaboration is credited.** Imports tag every artist on a credit (`ARTISTS`, `ALBUMARTISTS` and every MusicBrainz artist id, through sift 0.6), so players list "A × B" under both; `creditArtists(query)` and the Library tab's "Credit artists" add them to albums filed before.

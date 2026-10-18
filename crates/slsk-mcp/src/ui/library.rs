@@ -12,9 +12,13 @@ use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 
+use std::path::Path;
+
 use super::{UiState, failed, fields, flash_ok, one, patch, sse};
 use crate::App;
-use crate::library::{AlbumMove, DuplicateSet, EnrichedAlbum, LibraryAlbum, Preview};
+use crate::library::{
+    AlbumMove, CreditedAlbum, DuplicateSet, EnrichedAlbum, LibraryAlbum, Preview,
+};
 
 pub(super) fn routes() -> Router<UiState> {
     Router::new()
@@ -310,15 +314,21 @@ async fn found_html(s: &UiState, q: String) -> String {
 
 /// A background enrichment and how far it has got. Enriching reads every
 /// file and asks two services per album, seconds each, so it runs apart
-/// from the request that started it.
+/// from the request that started it. Crediting artists runs in the same
+/// slot, since both rewrite tags across the albums asked for.
 #[derive(Default)]
 pub(super) struct EnrichRun {
+    /// Only each artist's credit, rather than everything enrich adds.
+    credit: bool,
     asked: String,
     total: usize,
     done: usize,
     current: Option<String>,
     running: bool,
     results: Vec<EnrichedAlbum>,
+    /// What crediting changed, album by album; albums it left alone are
+    /// not listed.
+    credits: Vec<CreditedAlbum>,
     error: Option<String>,
 }
 
@@ -333,12 +343,23 @@ impl EnrichView<'_> {
     fn rel<'a>(&self, p: &'a str) -> &'a str {
         rel(&self.root, p)
     }
+    fn verb(&self) -> &'static str {
+        match (self.run.credit, self.run.running) {
+            (true, true) => "Crediting artists in",
+            (true, false) => "Credited artists in",
+            (false, true) => "Enriching",
+            (false, false) => "Enriched",
+        }
+    }
     fn gain(&self, r: &EnrichedAlbum) -> String {
         r.gain_db
             .map_or_else(|| "no gain".into(), |g| format!("{g:+.1} dB"))
     }
     fn recent(&self) -> impl Iterator<Item = &EnrichedAlbum> {
         self.run.results.iter().rev().take(30)
+    }
+    fn recent_credits(&self) -> impl Iterator<Item = &CreditedAlbum> {
+        self.run.credits.iter().rev().take(30)
     }
 }
 
@@ -354,6 +375,7 @@ pub(super) fn enrich_html(s: &UiState) -> String {
 
 async fn enrich(State(s): State<UiState>, body: Bytes) -> Response {
     let form = fields(&body);
+    let credit = super::field(&form, "only") == Some("credits");
     let (query, asked) = if let Some(p) = super::field(&form, "path") {
         (
             by_path([p]),
@@ -366,6 +388,10 @@ async fn enrich(State(s): State<UiState>, body: Bytes) -> Response {
             q.split_whitespace().map(String::from).collect(),
             q.to_string(),
         )
+    } else if credit && super::field(&form, "all").is_some() {
+        // Crediting skips files already credited and reads no audio, so the
+        // whole library is a reasonable thing to ask for here.
+        (Vec::new(), "the whole library".to_string())
     } else {
         return failed(&anyhow::anyhow!(
             "Say which albums; the whole library is enriched over the API, deliberately."
@@ -375,11 +401,12 @@ async fn enrich(State(s): State<UiState>, body: Bytes) -> Response {
         let mut run = s.enrich.lock();
         if run.running {
             return failed(&anyhow::anyhow!(
-                "Already enriching {}; start another when it finishes.",
+                "Already working on {}; start another when it finishes.",
                 run.asked
             ));
         }
         *run = EnrichRun {
+            credit,
             asked,
             running: true,
             ..Default::default()
@@ -387,18 +414,41 @@ async fn enrich(State(s): State<UiState>, body: Bytes) -> Response {
     }
     let (app, state) = (s.app.clone(), s.enrich.clone());
     tokio::spawn(async move {
+        let fail = |e: anyhow::Error| {
+            let mut run = state.lock();
+            run.error = Some(format!("{e:#}"));
+            run.running = false;
+        };
         let albums = match app.library.albums(&query).await {
             Ok(a) => a,
-            Err(e) => {
-                let mut run = state.lock();
-                run.error = Some(format!("{e:#}"));
-                run.running = false;
-                return;
+            Err(e) => return fail(e),
+        };
+        let known = if credit {
+            match app.library.known_artists().await {
+                Ok(k) => k,
+                Err(e) => return fail(e),
             }
+        } else {
+            Default::default()
         };
         state.lock().total = albums.len();
         for a in albums {
             state.lock().current = Some(a.path.clone());
+            if credit {
+                let result = app.library.credit_album(Path::new(&a.path), &known).await;
+                let mut run = state.lock();
+                match result {
+                    Ok(c) => run.credits.extend(c),
+                    Err(e) => run.credits.push(CreditedAlbum {
+                        path: a.path,
+                        files: 0,
+                        artists: Vec::new(),
+                        problems: vec![format!("{e:#}")],
+                    }),
+                }
+                run.done += 1;
+                continue;
+            }
             let result = app.library.enrich(&by_path([a.path.as_str()])).await;
             let mut run = state.lock();
             match result {
@@ -413,6 +463,9 @@ async fn enrich(State(s): State<UiState>, body: Bytes) -> Response {
                 }),
             }
             run.done += 1;
+        }
+        if credit {
+            app.library.changed();
         }
         let mut run = state.lock();
         run.current = None;
