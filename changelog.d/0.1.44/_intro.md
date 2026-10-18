@@ -1,0 +1,1 @@
+- A repeated `grab` returns the earlier job only while what that job imported is still in the library. Once the album has been binned (a spare, or a damaged copy), asking again fetches a new copy instead of handing back the old job.

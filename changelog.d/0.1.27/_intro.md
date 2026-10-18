@@ -1,0 +1,1 @@
+- An album stalled on its only known copy searches again for its title, and moves to the best copy on another peer if one is online. Without this, a rare album found on one peer waited on that peer indefinitely. Searches are spaced a stall (twenty minutes) apart and skip peers that stalled recently.

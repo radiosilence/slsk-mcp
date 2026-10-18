@@ -1,0 +1,1 @@
+- Albums whose files number tracks straight through (B-side files tagged disc 2, tracks 5–8) match a release on one medium, or on sides that restart at 1, by overall position (sift). Rezzett's LP had matched with four tracks "missing" and the same four "extra".

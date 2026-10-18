@@ -1,0 +1,1 @@
+- DJ-mix folders (`mix`, `mixed`, `fabric`, `podcast`) rank behind the album unless the query names them. "Artist - fabric 91: Artist" repeats the artist's name, so it passed for the self-titled album.

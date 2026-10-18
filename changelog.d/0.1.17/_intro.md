@@ -1,0 +1,4 @@
+- `/metrics` moves to a port of its own (`METRICS_ADDR`, default 9464). The chart's NetworkPolicy had admitted the scraper to the internal port on the assumption it ran on the host network; it runs as a pod, so every scrape was refused and the dashboards were empty. Admitting it to the internal port instead would have let the metrics agent send credentials the service trusts, so it is admitted to the metrics port alone.
+- The internal port admits the MCP gateway and nothing else. It had also admitted the whole home network, for a host-network scraper that does not exist.
+- Grab ranks last the folders of a peer that already holds downloads of ours in its queue and is sending none, rather than adding to a queue that is not moving.
+- The chart takes `scraperPodLabels` (default `app: metrics-vmagent`) for the pods allowed to scrape.

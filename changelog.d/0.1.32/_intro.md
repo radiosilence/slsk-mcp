@@ -1,0 +1,2 @@
+- The uploads page keeps a history: every finished upload (who, what, how much, average speed while sending, and whether it completed), with today's and this week's totals. Recorded in Postgres as each upload ends and kept for 180 days, so it survives restarts, where the engine's own list holds only recent transfers in memory.
+- The MCP guidance mentions `enrichLibrary` and that it should run an artist or album at a time.

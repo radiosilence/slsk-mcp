@@ -1,0 +1,2 @@
+- Grab ranks a folder named close to the query ahead of one carrying much else in its name: a leaf folder with more than three words beyond the query is treated like a variant. Scene-style release names ("Artist-Album-(CAT001)-WEB-FLAC-2019-GROUP") had ranked alongside the plain album folder.
+- Filing an album that is already filed, identically, succeeds rather than failing on existing files (sift). A retried import after a crash or double submission no longer ends in an error; a partial overlap with different files is still refused.

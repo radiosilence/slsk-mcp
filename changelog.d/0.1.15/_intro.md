@@ -1,0 +1,2 @@
+- Long tracks get a length allowance in proportion to their length, so a twenty-minute side that differs by twenty seconds between editions still matches (sift).
+- The import log shows what the best match's distance is made of: album, artist, titles and lengths (sift).

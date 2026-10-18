@@ -1,6 +1,6 @@
 # Formatting is fixed before a commit, and the checks that take seconds run
-# before a push. Lint, tests and the chart are left to CI, so a push is never
-# held behind a build; `mise run check` runs the full set by hand.
+# before a push. Lint, tests and the Pulumi package are left to CI, so a push
+# is never held behind a build; `just check` runs the full set by hand.
 pre-commit:
   commands:
     fmt:
@@ -10,4 +10,4 @@ pre-commit:
 pre-push:
   commands:
     check:
-      run: mise run fast
+      run: just fast

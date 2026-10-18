@@ -1,0 +1,1 @@
+- sift 0.3.1: Discogs is consulted when MusicBrainz has no strong match, given a token. The deploy package takes `discogsToken` and passes it to the service as `DISCOGS_TOKEN`.

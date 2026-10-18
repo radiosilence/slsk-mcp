@@ -1,0 +1,1 @@
+- `grab(refetch: true)` always fetches a new copy, skipping the check that hands back an earlier job for the same query: for replacing a copy that turned out bad while the old one is still in the library.

@@ -1,0 +1,3 @@
+- Imports are renames again. The chart mounted the library and the download area as two volumes, and a rename cannot cross mounts even on one disk, so every import copied the album — minutes for a hi-res record on a USB drive. It now mounts the drive once (`mediaRoot`), with `library` and `downloads` inside it; the service refuses to start while the library is missing, which is how an unmounted drive shows.
+- The background tag pass reads with two threads rather than one per core: on a single spinning disk more readers only add seeks, and imports and uploads share the disk.
+- The web UI fits a phone: rows wrap, long names wrap rather than widening the page, and inputs no longer make iOS zoom.

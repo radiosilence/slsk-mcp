@@ -1,0 +1,1 @@
+- **Releases are cut by `just release`, which opens a release PR.** Bumping the crate, the Pulumi package and `APP_VERSION` by hand on main let the three drift and gave no place to review the notes. CHANGELOG.md is now generated from fragments in `changelog.d/`, a push releases only when it changes the version, and the GitHub release takes its notes from the changelog.
