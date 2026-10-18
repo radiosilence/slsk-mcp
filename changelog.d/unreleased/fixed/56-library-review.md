@@ -1,0 +1,1 @@
+- **Library fixes.** A re-imported album keeps its import date; binning skips a spare the bin already holds rather than stopping; the selection clears when the list is redrawn; a failed background run no longer blocks the next; "imported today" counts from local midnight; `reimportAlbums` previews the release it was given.
