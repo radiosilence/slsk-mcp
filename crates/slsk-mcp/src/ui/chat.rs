@@ -318,6 +318,7 @@ async fn view(State(s): State<UiState>, Query(q): Query<Poll>) -> Response {
     if !q.poll {
         html.push('\n');
         html.push_str(&room_list_html(&s.app));
+        html.push_str("\n<div id=\"flash\"></div>");
     }
     html.push('\n');
     html.push_str(&count_html(&s.app).await);
