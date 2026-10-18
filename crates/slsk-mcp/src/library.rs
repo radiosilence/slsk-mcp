@@ -187,8 +187,8 @@ pub struct ReimportedAlbum {
     pub path: String,
     /// The release applied, or with `preview`, the closest found.
     pub release: Option<ReleaseMatch>,
-    /// Why a re-import without a release id would stop for a choice. With
-    /// `preview` only.
+    /// Why a re-import without a release id stopped, or with `preview`,
+    /// would stop, for a choice.
     pub review: Option<String>,
     /// Where the album is filed afterwards.
     pub to: Option<String>,
@@ -417,7 +417,20 @@ impl Library {
         for d in manage::duplicates(&self.cfg, &albums) {
             let mut spares = Vec::new();
             for (album, reason) in &d.others {
-                let to = manage::bin(&mut index, &self.cfg.directory, &self.bin, album).await?;
+                // One spare that cannot move (the bin holds that path) is
+                // reported and the rest still go.
+                let to = match manage::bin(&mut index, &self.cfg.directory, &self.bin, album).await
+                {
+                    Ok(to) => to,
+                    Err(e) => {
+                        spares.push(SpareCopy {
+                            album: LibraryAlbum::from(*album),
+                            reason: format!("{reason}; not binned: {e}"),
+                            binned_to: None,
+                        });
+                        continue;
+                    }
+                };
                 self.bump();
                 tracing::info!(
                     from = %album.dir.display(),
@@ -580,6 +593,11 @@ impl Library {
         Ok(self.tagger.enrich_plan(Path::new(dir), known).await?)
     }
 
+    /// How the album at `dir` lines up against one release. Changes nothing.
+    pub async fn compare(&self, dir: &str, release_id: &str) -> anyhow::Result<sift::Comparison> {
+        Ok(self.tagger.compare(Path::new(dir), release_id).await?)
+    }
+
     /// The release re-importing the album at `dir` would match, and how its
     /// files line up against it. Changes nothing.
     pub async fn rematch(&self, dir: &str) -> anyhow::Result<sift::Rematch> {
@@ -596,10 +614,14 @@ impl Library {
         release_id: Option<&str>,
     ) -> anyhow::Result<ReimportedAlbum> {
         // Held so no other change moves files while this one does.
-        let _index = self.write().await?;
+        let mut index = self.write().await?;
+        let added = self
+            .read(&[format!("path:={dir}")])
+            .await?
+            .first()
+            .and_then(|a| a.items.iter().map(|i| i.added).min());
         let outcome = self.tagger.reimport(Path::new(dir), release_id).await;
         self.bump();
-        self.changed();
         let mut out = ReimportedAlbum {
             path: dir.to_string(),
             release: None,
@@ -612,6 +634,12 @@ impl Library {
                 dir: to, release, ..
             } => {
                 tracing::info!(from = dir, to = %to.display(), "re-imported an album");
+                // Moved files are new to a scan; the album keeps the date it
+                // first arrived, so it does not jump to the top of the list.
+                self.refresh(&mut index)?;
+                if let Some(added) = added {
+                    index.set_added(&to, added)?;
+                }
                 out.to = Some(to.to_string_lossy().into_owned());
                 out.release = release.as_ref().map(ReleaseMatch::from);
             }

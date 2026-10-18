@@ -163,9 +163,12 @@ async fn require_datastar_on_post(request: Request, next: Next) -> Response {
     next.run(request).await
 }
 
+/// A bare `\r` would start an SSE data line of its own, outside the
+/// `elements` prefix, so it is dropped before the split.
 fn patch(html: &str) -> Event {
     Event::default().event("datastar-patch-elements").data(
-        html.lines()
+        html.replace('\r', "")
+            .lines()
             .map(|l| format!("elements {l}"))
             .collect::<Vec<_>>()
             .join("\n"),
@@ -188,7 +191,11 @@ fn append(selector: &str, html: &str) -> Event {
     Event::default().event("datastar-patch-elements").data(
         [format!("selector {selector}"), "mode append".to_string()]
             .into_iter()
-            .chain(html.lines().map(|l| format!("elements {l}")))
+            .chain(
+                html.replace('\r', "")
+                    .lines()
+                    .map(|l| format!("elements {l}")),
+            )
             .collect::<Vec<_>>()
             .join("\n"),
     )

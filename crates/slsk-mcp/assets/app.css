@@ -51,7 +51,6 @@ td.num { text-align: right; width: 80px; }
 td.actions { width: 140px; text-align: right; }
 td.actions form { display: none; }
 @media (max-width: 640px) {
-  .rows.albums .when { display: none; }
   main { padding: 12px; gap: 16px; }
   header { padding: 8px 12px; }
   td:nth-child(2), td.num:nth-child(4) { display: none; }

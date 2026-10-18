@@ -159,12 +159,18 @@ impl Filter {
     }
 
     /// The earliest import time the filter admits, in seconds.
-    fn since_secs(&self, now: chrono::DateTime<chrono::Utc>) -> Option<i64> {
-        let day = |d: chrono::NaiveDate| d.and_hms_opt(0, 0, 0).map(|t| t.and_utc().timestamp());
+    /// "Today" and a date start at midnight where `now` is.
+    fn since_secs<Tz: chrono::TimeZone>(&self, now: chrono::DateTime<Tz>) -> Option<i64> {
+        let tz = now.timezone();
+        let day = |d: chrono::NaiveDate| {
+            tz.from_local_datetime(&d.and_hms_opt(0, 0, 0)?)
+                .earliest()
+                .map(|t| t.timestamp())
+        };
         match self.since.as_str() {
             "today" => day(now.date_naive()),
-            "week" => Some((now - chrono::Duration::days(7)).timestamp()),
-            "month" => Some((now - chrono::Duration::days(30)).timestamp()),
+            "week" => Some((now.clone() - chrono::Duration::days(7)).timestamp()),
+            "month" => Some((now.clone() - chrono::Duration::days(30)).timestamp()),
             "date" => chrono::NaiveDate::parse_from_str(&self.from, "%Y-%m-%d")
                 .ok()
                 .and_then(day),
@@ -176,7 +182,7 @@ impl Filter {
     /// A sort in the search comes before the default one.
     fn terms(&self) -> Vec<String> {
         let mut terms: Vec<String> = self.q.split_whitespace().map(String::from).collect();
-        if let Some(t) = self.since_secs(chrono::Utc::now()) {
+        if let Some(t) = self.since_secs(chrono::Local::now()) {
             terms.push(format!("added:{t}.."));
         }
         terms.extend(["added-", "albumartist+", "album+"].map(String::from));
@@ -327,7 +333,12 @@ impl LibraryView {
 
 async fn list_html(s: &UiState, filter: &Filter) -> String {
     let root = s.app.library.root().to_string_lossy().into_owned();
-    let view = match listing(s, filter).await {
+    let listed = if filter.since == "date" && filter.since_secs(chrono::Local::now()).is_none() {
+        Err(anyhow::anyhow!("Pick the date to list imports since."))
+    } else {
+        listing(s, filter).await
+    };
+    let view = match listed {
         Ok(rows) => {
             let total = rows.len();
             let spares = rows.iter().filter(|r| r.spare().is_some()).count();
@@ -358,12 +369,19 @@ async fn list_html(s: &UiState, filter: &Filter) -> String {
     view.render().unwrap_or_default()
 }
 
+/// The selection's counts, cleared with the list. A redrawn list keeps its
+/// form's `data-signals` attribute unchanged, so it does not reset them.
+fn unselected() -> axum::response::sse::Event {
+    super::signals(r#"{"_sel": 0, "_spares": 0}"#)
+}
+
 /// The list the address describes.
 async fn view(State(s): State<UiState>, Query(q): Query<Vec<(String, String)>>) -> Response {
     let filter = Filter::from_fields(&q);
     sse(async_stream::stream! {
         yield Ok(patch(r#"<div id="library"><p class="note">Reading the library…</p></div>"#));
         yield Ok(patch(&list_html(&s, &filter).await));
+        yield Ok(unselected());
         yield Ok(super::place("library", &filter.url()));
     })
     .into_response()
@@ -373,6 +391,7 @@ async fn find(State(s): State<UiState>, body: Bytes) -> Response {
     let filter = Filter::from_fields(&fields(&body));
     super::many(vec![
         patch(&list_html(&s, &filter).await),
+        unselected(),
         patch(r#"<div id="lib-preview"></div>"#),
         super::place("library", &filter.url()),
     ])
@@ -913,8 +932,15 @@ async fn apply(State(s): State<UiState>, Path(action): Path<String>, body: Bytes
     let (tx, rx) = tokio::sync::oneshot::channel();
     let (app, state) = (s.app.clone(), s.run.clone());
     tokio::spawn(async move {
-        if let Err(e) = run(&app, &state, action, &paths, &with).await {
-            state.lock().error = Some(format!("{e:#}"));
+        use futures_util::FutureExt;
+        // A panic in the run still frees the slot.
+        match std::panic::AssertUnwindSafe(run(&app, &state, action, &paths, &with))
+            .catch_unwind()
+            .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => state.lock().error = Some(format!("{e:#}")),
+            Err(_) => state.lock().error = Some("stopped by an internal error".into()),
         }
         {
             let mut run = state.lock();
@@ -929,6 +955,7 @@ async fn apply(State(s): State<UiState>, Path(action): Path<String>, body: Bytes
         let _ = rx.await;
         yield Ok(patch(&run_html(&s)));
         yield Ok(patch(&list_html(&s, &filter).await));
+        yield Ok(unselected());
         let (done, failed) = {
             let run = s.run.lock();
             (run.done, run.results.iter().filter(|r| !r.ok).count())
