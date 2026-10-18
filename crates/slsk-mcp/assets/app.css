@@ -14,8 +14,8 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: v
 .displaced .pill, .rejected .pill, .failed .pill { background: #3d1f23; color: var(--bad); }
 .review .pill, .downloading .pill, .importing .pill { background: #3b3220; color: var(--warn); }
 .stats, .detail, .meta, .note { color: var(--dim); font-size: 13px; }
-input, button, a.button { font: inherit; min-width: 0; max-width: 100%; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 7px 10px; }
-input:focus { outline: 1px solid var(--accent); }
+input, select, button, a.button { font: inherit; min-width: 0; max-width: 100%; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 7px 10px; }
+input:focus, select:focus { outline: 1px solid var(--accent); }
 button, a.button { cursor: pointer; background: var(--line); }
 a.button { display: inline-block; text-decoration: none; }
 button.primary, a.button.primary { background: var(--accent); color: #0b1a12; border-color: var(--accent); font-weight: 600; }
@@ -51,6 +51,7 @@ td.num { text-align: right; width: 80px; }
 td.actions { width: 140px; text-align: right; }
 td.actions form { display: none; }
 @media (max-width: 640px) {
+  .rows.albums .when { display: none; }
   main { padding: 12px; gap: 16px; }
   header { padding: 8px 12px; }
   td:nth-child(2), td.num:nth-child(4) { display: none; }
@@ -177,13 +178,38 @@ a.link { text-decoration: none; overflow-wrap: anywhere; }
 .version { padding: 24px 16px; text-align: center; font-size: 12px; }
 .version a { color: var(--dim); text-decoration: none; }
 .version a:hover { color: var(--text); }
-#refile-sel .rows > li > input[type=checkbox] { flex: none; margin: 4px 2px 0; align-self: flex-start; }
-#refile-sel .rows > li > details.album { flex: 1 1 0; min-width: 0; }
-details.album > summary { cursor: pointer; display: flex; flex-wrap: wrap; gap: 4px 10px; list-style: none; }
+/* The library: one list of albums, ticked to act on together. */
+.finder-form select { flex: 1 1 auto; }
+.finder-form input[type=date] { flex: 1 1 auto; font-size: 16px; }
+.lib-head { display: flex; flex-wrap: wrap; gap: 4px 16px; align-items: center; padding: 4px 0 8px; border-bottom: 1px solid var(--line); }
+.rows.albums > li, #pv-albums > li { flex-wrap: nowrap; align-items: flex-start; }
+.rows.albums > li > input[type=checkbox], #pv-albums > li > input[type=checkbox] { flex: none; width: 18px; height: 18px; margin: 2px 2px 0; }
+.rows.albums .album { flex: 1 1 0; min-width: 0; }
+.rows.albums .album .title { flex: 0 1 auto; font-weight: 600; }
+.rows.albums .meta.path { font-size: 12px; }
+.rows.albums .when { flex: none; white-space: nowrap; }
+.pill.spare, .pill.warn { background: #3b3220; color: var(--warn); }
+.lib-bar { position: sticky; bottom: 0; z-index: 1; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; padding: 10px 12px;
+  padding-bottom: max(10px, env(safe-area-inset-bottom)); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 -6px 24px rgba(0,0,0,.3); }
+.lib-bar .count { margin-right: auto; }
+.pager { display: flex; gap: 8px; justify-content: center; margin-top: 8px; }
+.plan .row .title { flex: 1 1 auto; }
+#pv-albums > li { flex-wrap: wrap; }
+#pv-albums > li > details.album { flex: 1 1 0; min-width: 0; }
+#pv-albums > li > .why { flex: 1 1 100%; margin: 0 0 0 30px; }
+#pv-albums > li.skipped .title { color: var(--dim); }
+#pv-albums > li.skipped > details.album { padding-left: 24px; }
+.why.warn, .meta.warn { color: var(--warn); }
+.credits > li { display: grid; gap: 2px; }
+.credits .tag { font-size: 13px; overflow-wrap: anywhere; }
+.credits .ids { color: var(--dim); font-size: 11px; }
+.pairs > li { display: flex; gap: 4px 10px; flex-wrap: wrap; }
+.run .row .title { flex: 1 1 auto; }
+details.album > summary { cursor: pointer; display: flex; flex-wrap: wrap; gap: 2px 10px; list-style: none; }
+details.album > summary .title { flex: 1 1 60%; min-width: 0; overflow-wrap: anywhere; }
 details.album > summary::-webkit-details-marker { display: none; }
 details.album > summary .path { flex: 1 1 60%; }
 details.album[open] > summary .path { color: var(--text); }
-.group-list > summary input.all { margin-right: 6px; vertical-align: middle; }
 .preview { margin: 6px 0 4px; padding: 6px 10px; border-left: 2px solid var(--line); font-size: 13px; }
 .preview .moves > li { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0; }
 .preview .from { color: var(--dim); text-decoration: line-through; text-decoration-color: var(--line); }

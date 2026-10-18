@@ -1046,14 +1046,28 @@ pub struct Mutation;
 impl Mutation {
     /// Move every spare copy found by `duplicates(query)` to the bin beside
     /// the library, at its path relative to it. Nothing is deleted, and the
-    /// bin is outside what Navidrome and the shares see. Check `duplicates`
-    /// with the same query first.
+    /// bin is outside what Navidrome and the shares see. `preview: true`
+    /// moves nothing and gives each spare's `binnedTo` as where it would go
+    /// (absent, with the reason in `reason`, when it could not be binned):
+    /// show the user that first.
     async fn bin_duplicates(
         &self,
         ctx: &Context<'_>,
         query: Vec<String>,
+        #[graphql(default)] preview: bool,
     ) -> Result<Vec<crate::library::DuplicateSet>> {
-        Ok(app(ctx).library.duplicates(&query, true).await?)
+        let library = &app(ctx).library;
+        if !preview {
+            return Ok(library.duplicates(&query, true).await?);
+        }
+        let mut sets = library.duplicates(&query, false).await?;
+        for spare in sets.iter_mut().flat_map(|d| d.spares.iter_mut()) {
+            match library.bin_destination(&spare.album.path) {
+                Ok(to) => spare.binned_to = Some(to.to_string_lossy().into_owned()),
+                Err(why) => spare.reason = format!("{}; cannot be binned: {why}", spare.reason),
+            }
+        }
+        Ok(sets)
     }
 
     /// Credit each artist on a collaboration (`ARTISTS`, `ALBUMARTISTS` and
@@ -1064,46 +1078,136 @@ impl Mutation {
     /// and `albumartist` are left as they read; files already credited are
     /// skipped, so it is safe to repeat. Lists only albums it changed or
     /// could not. A query is required, as for `enrichLibrary`; each album
-    /// with a release costs one MusicBrainz request.
+    /// with a release costs one MusicBrainz request. `preview: true` writes
+    /// nothing and lists, in `planned`, each file's credits as they would be
+    /// written and the release they come from (none for a split).
     async fn credit_artists(
         &self,
         ctx: &Context<'_>,
         query: Vec<String>,
+        #[graphql(default)] preview: bool,
     ) -> Result<Vec<crate::library::CreditedAlbum>> {
         if query.is_empty() {
             return Err(Error::new("give a query; [\"\"] means the whole library"));
         }
-        Ok(app(ctx).library.credit(&query).await?)
+        let library = &app(ctx).library;
+        if preview {
+            let known = library.known_artists().await?;
+            return Ok(library.credit_plan(&query, &known).await?);
+        }
+        Ok(library.credit(&query).await?)
+    }
+
+    /// Match albums already in the library against MusicBrainz again and
+    /// retag them, moving any the new tags file elsewhere, as beets'
+    /// `import -L`. With `releaseId` (one album only) that release is
+    /// applied; without, the closest is applied only when it is close and
+    /// complete, and `review` says why it was not. `preview: true` changes
+    /// nothing and gives the release each would match and why it might
+    /// stop; `compareRelease` is the track-by-track view for a job, and the
+    /// web UI shows the same for a library album. One MusicBrainz search
+    /// and several lookups per album.
+    async fn reimport_albums(
+        &self,
+        ctx: &Context<'_>,
+        query: Vec<String>,
+        release_id: Option<String>,
+        #[graphql(default)] preview: bool,
+    ) -> Result<Vec<crate::library::ReimportedAlbum>> {
+        if query.iter().all(|q| q.trim().is_empty()) {
+            return Err(Error::new(
+                "give a query; this retags every album it matches",
+            ));
+        }
+        let library = &app(ctx).library;
+        let albums = library.albums(&query).await?;
+        if release_id.is_some() && albums.len() > 1 {
+            return Err(Error::new(format!(
+                "releaseId applies to one album; the query matches {}",
+                albums.len()
+            )));
+        }
+        let mut out = Vec::new();
+        for a in albums {
+            let result = if preview {
+                library
+                    .rematch(&a.path)
+                    .await
+                    .map(|r| crate::library::ReimportedAlbum {
+                        path: a.path.clone(),
+                        release: r.best.as_ref().map(|b| (&b.release).into()),
+                        review: r.review,
+                        to: None,
+                        problems: Vec::new(),
+                    })
+            } else {
+                library.reimport(&a.path, release_id.as_deref()).await
+            };
+            out.push(result.unwrap_or_else(|e| crate::library::ReimportedAlbum {
+                path: a.path,
+                release: None,
+                review: None,
+                to: None,
+                problems: vec![format!("{e:#}")],
+            }));
+        }
+        Ok(out)
     }
 
     /// Add ReplayGain, MusicBrainz genres (where an album has none), lyrics
     /// and each artist's credit to matching albums, as every new import gets. Writes only
     /// those tags, but across everything the query matches: a query is
-    /// required, and a large one takes a long time.
+    /// required, and a large one takes a long time. `preview: true` writes
+    /// nothing: `genres` and `artists` are what would be added, `lyrics`
+    /// how many tracks would get lyrics (`lyricFiles` names them), and
+    /// `gainDb` is absent, since gain is measured only when it is written.
     async fn enrich_library(
         &self,
         ctx: &Context<'_>,
         query: Vec<String>,
+        #[graphql(default)] preview: bool,
     ) -> Result<Vec<crate::library::EnrichedAlbum>> {
         if query.is_empty() {
             return Err(Error::new("give a query; [\"\"] means the whole library"));
         }
-        Ok(app(ctx).library.enrich(&query).await?)
+        let library = &app(ctx).library;
+        if !preview {
+            return Ok(library.enrich(&query).await?);
+        }
+        let known = library.known_artists().await?;
+        let mut out = Vec::new();
+        for a in library.albums(&query).await? {
+            out.push(match library.enrich_plan(&a.path, &known).await {
+                Ok(p) => crate::library::EnrichedAlbum::planned(a.path, &p),
+                Err(e) => crate::library::EnrichedAlbum {
+                    path: a.path,
+                    gain_db: None,
+                    genres: Vec::new(),
+                    lyrics: 0,
+                    lyric_files: Vec::new(),
+                    artists: Vec::new(),
+                    problems: vec![format!("{e:#}")],
+                },
+            });
+        }
+        Ok(out)
     }
 
     /// Re-file the albums `refilePlan(query)` lists. Albums whose plan
     /// collides with anything stay where they are. A query is required:
     /// re-filing the whole library is a decision for its owner, made
-    /// deliberately with `query: [""]`.
+    /// deliberately with `query: [""]`. `preview: true` moves nothing and
+    /// answers as `refilePlan(query)`.
     async fn refile(
         &self,
         ctx: &Context<'_>,
         query: Vec<String>,
+        #[graphql(default)] preview: bool,
     ) -> Result<Vec<crate::library::AlbumMove>> {
         if query.is_empty() {
             return Err(Error::new("give a query; [\"\"] means the whole library"));
         }
-        Ok(app(ctx).library.refile(&query, true).await?)
+        Ok(app(ctx).library.refile(&query, !preview).await?)
     }
 
     /// Correct tags on albums already in the library, then re-file any the

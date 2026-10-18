@@ -16,3 +16,8 @@ thiserror = "2"
 strip = true
 lto = "thin"
 codegen-units = 1
+
+# radiosilence/sift#50 (dry runs for credit, enrich and reimport), until a
+# sift-music release carries it.
+[patch.crates-io]
+sift-music = { git = "https://github.com/radiosilence/sift", branch = "credit-dry-run" }

@@ -1,0 +1,15 @@
+<div id="lib-preview" class="job plan">
+  <div class="row"><strong class="title">{{ action.name() }}: {{ shown }} album{% if shown != 1 %}s{% endif %}</strong><span class="pill">preview</span></div>
+  <p class="why">{{ action.about() }} Nothing has changed yet.</p>
+  {% if selected > shown %}<p class="why warn">Only the first {{ shown }} of the {{ selected }} selected are worked out here, and only those are applied. Apply these, then preview the rest.</p>{% endif %}
+  <form id="lib-apply" data-signals="{_apply: 0}" data-on:change="$_apply = el.querySelectorAll('input[name=path]:checked').length">
+    <input type="hidden" name="q" value="{{ filter.q }}">
+    <input type="hidden" name="since" value="{{ filter.since }}">
+    <input type="hidden" name="from" value="{{ filter.from }}">
+    <input type="hidden" name="show" value="{{ filter.show }}">
+    <input type="hidden" name="page" value="{{ filter.page }}">
+    <ul id="pv-albums" class="rows"></ul>
+  </form>
+  <p id="pv-progress" class="note">Working out each album…</p>
+  <div id="pv-apply"></div>
+</div>

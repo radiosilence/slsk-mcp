@@ -43,10 +43,9 @@ pub struct UiState {
     pub config: Arc<Config>,
     pub sessions: Sessions,
     pub http: reqwest::Client,
-    enrich: Arc<parking_lot::Mutex<library::EnrichRun>>,
+    /// The library action running in the background, or the last one.
+    run: Arc<parking_lot::Mutex<library::LibraryRun>>,
     browsed: browse::Cache,
-    /// Re-file batches still running; the last to finish redraws the page.
-    refiling: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 const CSP: &str = "default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self'; img-src 'self' data:; \
@@ -58,9 +57,8 @@ pub fn router(app: Arc<App>) -> Router {
         sessions: Sessions::new(app.db.clone()),
         app,
         http: reqwest::Client::new(),
-        enrich: Default::default(),
+        run: Default::default(),
         browsed: Default::default(),
-        refiling: Default::default(),
     };
     let protected = Router::new()
         .route("/", get(page))
@@ -184,6 +182,18 @@ fn one(html: String) -> Response {
     sse(futures_util::stream::once(async move { Ok(patch(&html)) })).into_response()
 }
 
+/// Elements added at the end of the one `selector` names: rows streamed
+/// into a list as each is worked out.
+fn append(selector: &str, html: &str) -> Event {
+    Event::default().event("datastar-patch-elements").data(
+        [format!("selector {selector}"), "mode append".to_string()]
+            .into_iter()
+            .chain(html.lines().map(|l| format!("elements {l}")))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+}
+
 /// Several events in one response: fragments, then signals to reset.
 fn many(events: Vec<Event>) -> Response {
     sse(futures_util::stream::iter(events.into_iter().map(Ok))).into_response()
@@ -278,7 +288,7 @@ struct Page {
     uploads: String,
     up_count: String,
     chat_count: String,
-    enrich: String,
+    run: String,
     version: &'static str,
     /// The tab the address names, open on arrival.
     tab: &'static str,
@@ -378,6 +388,9 @@ async fn render_page(
         "_url": url,
         "_at": { tab: url },
         "_libq": if tab == "library" { param("q") } else { String::new() },
+        "_libsince": if tab == "library" { param("since") } else { String::new() },
+        "_libfrom": if tab == "library" { param("from") } else { String::new() },
+        "_libshow": if tab == "library" { param("show") } else { String::new() },
     })
     .to_string();
     let page = Page {
@@ -387,7 +400,7 @@ async fn render_page(
         uploads: uploads_html(&s.app).await,
         up_count: up_count_html(&s.app),
         chat_count: chat::count_html(&s.app).await,
-        enrich: library::enrich_html(s),
+        run: library::run_html(s),
         version: env!("CARGO_PKG_VERSION"),
         tab,
         search: !q.is_empty(),
@@ -893,7 +906,7 @@ async fn stream(State(s): State<UiState>) -> impl IntoResponse {
             yield Ok(patch(&uploads_html(&app).await));
             yield Ok(patch(&up_count_html(&app)));
             yield Ok(patch(&chat::count_html(&app).await));
-            yield Ok(patch(&library::enrich_html(&s)));
+            yield Ok(patch(&library::run_html(&s)));
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
     };

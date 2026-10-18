@@ -1,63 +1,51 @@
 <div id="library">
-{% match error %}{% when Some with (e) %}<p class="error">{{ e }}</p>{% when None %}
-  <h3 class="section">Duplicates <span class="count">{{ dups.len() }}</span></h3>
-  {% if dups.is_empty() %}<p class="note">No album is held twice.</p>{% else %}
-  <p class="note">Each album kept once; the spare copies move to the bin beside the library, where nothing sees them. Nothing is deleted.</p>
-  <div class="actions">
-    <button class="primary" data-indicator="_bin_all" data-attr:disabled="$_bin_all" data-class:busy="$_bin_all" data-on:click="confirm('Move every spare copy listed here to the bin?') && @post('/library/bin-all')">Bin all spares ({{ spares }})</button>
+{% if let Some(e) = error %}<p class="error">{{ e }}</p>{% else %}
+{% if total == 0 %}<p class="note">No albums match.</p>{% else %}
+<form id="lib-sel" data-signals="{_sel: 0, _spares: 0}"
+  data-on:change="evt.target.name == 'all' ? el.querySelectorAll('input[name=path]').forEach(c => c.checked = evt.target.checked) : (evt.target.checked || (el.querySelector('input[name=all]').checked = false)); $_sel = el.querySelector('input[name=all]').checked ? {{ total }} : el.querySelectorAll('input[name=path]:checked').length; $_spares = el.querySelector('input[name=all]').checked ? {{ spares }} : el.querySelectorAll('input[name=path][data-spare]:checked').length">
+  <input type="hidden" name="q" value="{{ filter.q }}">
+  <input type="hidden" name="since" value="{{ filter.since }}">
+  <input type="hidden" name="from" value="{{ filter.from }}">
+  <input type="hidden" name="show" value="{{ filter.show }}">
+  <div class="lib-head">
+    <label class="toggle"><input type="checkbox" name="all" value="1"> Select all {{ total }}</label>
+    <span class="note">{% if total > rows.len() %}{{ self.first() }}–{{ self.last() }} of {{ total }}, newest import first{% else %}{{ total }} album{% if total != 1 %}s{% endif %}, newest import first{% endif %}</span>
   </div>
-  {% for d in dups %}
-  {% let dk = self.key(d.keep.path) %}
-  <article class="job" data-class:busy="$_bin_{{ dk }}">
-    <form id="bin-{{ dk }}"><input type="hidden" name="path" value="{{ d.keep.path }}">{% for sp in d.spares %}<input type="hidden" name="path" value="{{ sp.album.path }}">{% endfor %}</form>
-    <div class="row"><span class="pill keep">keep</span><span class="title path">{{ self.rel(d.keep.path) }}</span></div>
-    <div class="meta">{{ self.album(d.keep) }}</div>
-    <ul class="rows tight">
-    {% for sp in d.spares %}
-      <li><span class="path">{{ self.rel(sp.album.path) }}</span><span class="meta">{{ self.album(sp.album) }} · {{ sp.reason }}</span></li>
-    {% endfor %}
-    </ul>
-    <div class="actions">
-      <button data-indicator="_bin_{{ dk }}" data-attr:disabled="$_bin_{{ dk }}" data-class:busy="$_bin_{{ dk }}" data-on:click="confirm('Move the spare copies of this album to the bin?') && @post('/library/bin', {contentType: 'form', selector: '#bin-{{ dk }}'})">Bin spares</button>
-    </div>
-  </article>
+  <ul class="rows albums">
+  {% for r in rows %}
+    <li>
+      <input type="checkbox" name="path" value="{{ r.album.path }}" aria-label="Select {{ self.rel(r.album.path) }}"{% if r.spare().is_some() %} data-spare{% endif %}>
+      <div class="album">
+        <div class="row">
+          <span class="title">{% if let Some(a) = r.album.album %}{{ a }}{% else %}{{ self.rel(r.album.path) }}{% endif %}</span>
+          {% if r.spare().is_some() %}<span class="pill spare">spare</span>{% endif %}
+          {% if r.kept() %}<span class="pill keep">kept</span>{% endif %}
+          {% if let Some((_, to)) = r.refile() %}{% if to.is_some() %}<span class="pill">would move</span>{% else %}<span class="pill">can't file</span>{% endif %}{% endif %}
+        </div>
+        <div class="meta">{% if let Some(a) = r.album.album_artist %}{{ a }}{% endif %}{% if let Some(y) = r.album.year %} · {{ y }}{% endif %} · {% if r.album.format.is_empty() %}?{% else %}{{ r.album.format }}{% endif %} · {{ r.album.tracks }} track{% if r.album.tracks != 1 %}s{% endif %}</div>
+        <div class="meta path">{{ self.rel(r.album.path) }}</div>
+        {% if let Some(why) = r.spare() %}<div class="meta">Spare: {{ why }}</div>{% endif %}
+        {% if let Some((change, to)) = r.refile() %}<div class="meta">{% if let Some(to) = to %}Rules file it at {{ self.rel(to) }} ({{ change.label() }}){% else %}The rules cannot file it here: {{ change.label() }}{% endif %}</div>{% endif %}
+      </div>
+      <span class="meta when">{{ self.imported(r.album) }}</span>
+    </li>
   {% endfor %}
-  {% endif %}
-
-  <h3 class="section">Re-file</h3>
-  {% if groups.is_empty() %}<p class="note">Every album is where the current rules file it.</p>{% else %}
-  <p class="note">Albums the current naming rules would file elsewhere. Open one to see every file it would move.</p>
-  <form id="refile-sel" data-signals="{_sel: 0}" data-init="$_sel = document.querySelectorAll('#refile-sel input[name=path]:checked').length" data-on:change="$_sel = document.querySelectorAll('#refile-sel input[name=path]:checked').length">
-  <div class="actions">
-    <button type="button" class="primary" data-indicator="_refiling" data-attr:disabled="$_sel == 0" data-class:busy="$_refiling" data-text="$_sel ? 'Re-file ' + $_sel + ' selected' : 'Re-file selected'" data-on:click="confirm('Move ' + $_sel + ' albums to where the rules file them?') && @post('/library/refile', {contentType: 'form', selector: '#refile-sel'})">Re-file selected</button>
-    {% if safe > 0 %}
-    <button type="button" data-indicator="_refile_safe" data-attr:disabled="$_refile_safe" data-class:busy="$_refile_safe" data-on:click="confirm('Re-file every album whose change only corrects its file or folder names?') && @post('/library/refile-safe')">Re-file {{ safe }} safe</button>
-    {% endif %}
+  </ul>
+  {% if newer.is_some() || older.is_some() %}
+  <div class="actions pager">
+    {% if let Some(u) = newer %}<button type="button" class="quiet" data-indicator="_newer" data-class:busy="$_newer" data-on:click="@get('{{ u }}')">Newer</button>{% endif %}
+    {% if let Some(u) = older %}<button type="button" class="quiet" data-indicator="_older" data-class:busy="$_older" data-on:click="@get('{{ u }}')">Older</button>{% endif %}
   </div>
-  {% for g in groups %}
-  <details class="group-list"{% if !g.change.safe() %} open{% endif %}>
-    <summary>{% if g.change != Change::Refused %}<input type="checkbox" class="all" title="Select all in this group" data-on:change="el.closest('details').querySelectorAll('input[name=path]').forEach(c => c.checked = el.checked)"> {% endif %}<strong>{{ g.change.label() }}</strong> <span class="count">{{ g.moves.len() }}</span>{% if g.change.safe() %} <span class="ok">safe</span>{% endif %}</summary>
-    <p class="note">{{ g.change.why() }}</p>
-    <ul class="rows">
-    {% for m in self.shown(g) %}
-      {% let k = self.key(m.from) %}
-      <li id="rf-{{ k }}" data-path="{{ m.from }}">
-        {% if m.to.is_some() %}<input type="checkbox" name="path" value="{{ m.from }}">{% endif %}
-        <details class="album" data-on:toggle="if (el.open && !el.dataset.loaded) { el.dataset.loaded = 1; @get('/library/preview?path=' + encodeURIComponent(el.closest('li').dataset.path)) }">
-          <summary><span class="path">{{ self.rel(m.from) }}</span>
-          {% match m.to %}{% when Some with (to) %}{% if g.change != Change::FileNames %}<span class="meta">→ {{ self.rel(to) }}</span>{% endif %}<span class="meta">{{ m.files }} files</span>
-          {% when None %}{% match m.refused %}{% when Some with (why) %}<span class="meta">{{ self.reason(why) }}</span>{% when None %}{% endmatch %}{% endmatch %}
-          </summary>
-          <div id="pv-{{ k }}" class="preview"><p class="note">Working out each file…</p></div>
-        </details>
-        <span id="st-{{ k }}"></span>
-      </li>
-    {% endfor %}
-    </ul>
-    {% if self.hidden(g) > 0 %}<p class="note">and {{ self.hidden(g) }} more</p>{% endif %}
-  </details>
-  {% endfor %}
-  </form>
   {% endif %}
-{% endmatch %}
+  <div class="lib-bar" data-show="$_sel > 0">
+    <span class="count" data-text="$_sel + ' selected'"></span>
+    <button type="button" data-indicator="_pv_refile" data-attr:disabled="$_pv_refile" data-class:busy="$_pv_refile" data-on:click="@post('/library/preview/refile', {contentType: 'form', selector: '#lib-sel'}); document.getElementById('lib-preview').scrollIntoView({block: 'start'})">Re-file</button>
+    <button type="button" data-indicator="_pv_credit" data-attr:disabled="$_pv_credit" data-class:busy="$_pv_credit" data-on:click="@post('/library/preview/credit', {contentType: 'form', selector: '#lib-sel'}); document.getElementById('lib-preview').scrollIntoView({block: 'start'})">Credit artists</button>
+    <button type="button" data-indicator="_pv_enrich" data-attr:disabled="$_pv_enrich" data-class:busy="$_pv_enrich" data-on:click="@post('/library/preview/enrich', {contentType: 'form', selector: '#lib-sel'}); document.getElementById('lib-preview').scrollIntoView({block: 'start'})">Enrich</button>
+    <button type="button" data-indicator="_pv_reimport" data-attr:disabled="$_pv_reimport" data-class:busy="$_pv_reimport" data-on:click="@post('/library/preview/reimport', {contentType: 'form', selector: '#lib-sel'}); document.getElementById('lib-preview').scrollIntoView({block: 'start'})">Re-import</button>
+    <button type="button" data-show="$_spares > 0" data-indicator="_pv_bin" data-attr:disabled="$_pv_bin" data-class:busy="$_pv_bin" data-on:click="@post('/library/preview/bin', {contentType: 'form', selector: '#lib-sel'}); document.getElementById('lib-preview').scrollIntoView({block: 'start'})">Bin spares</button>
+  </div>
+</form>
+{% endif %}
+{% endif %}
 </div>

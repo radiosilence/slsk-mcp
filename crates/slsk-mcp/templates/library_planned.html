@@ -1,0 +1,55 @@
+<li id="pv-{{ p.key }}" class="planned{% if !p.applicable %} skipped{% endif %}">
+  {% if p.applicable %}<input type="checkbox" name="path" value="{{ p.path }}" aria-label="Apply to {{ p.title }}"{% if p.ticked %} checked{% endif %}>{% if let Some(w) = p.with %}<input type="hidden" name="with-{{ p.key }}" value="{{ w }}">{% endif %}{% endif %}
+  <details class="album">
+    <summary>
+      <span class="title">{{ p.title }}</span>
+      <span class="meta">
+      {% match p.body %}
+      {% when Body::Nothing %}nothing to do
+      {% when Body::Refile with { change, into, moves } %}{% if let Some(d) = into %}→ {{ d }} · {% endif %}{{ moves.len() }} file{% if moves.len() != 1 %}s{% endif %}{% if !change.is_empty() %} · {{ change }}{% endif %}
+      {% when Body::Credit with (credits) %}{{ credits.len() }} file{% if credits.len() != 1 %}s{% endif %} credited
+      {% when Body::Enrich with { credits, genres, lyrics } %}{% if genres.is_empty() %}no new genres{% else %}{{ genres.join(", ") }}{% endif %} · lyrics for {{ lyrics.len() }}{% if !credits.is_empty() %} · credits for {{ credits.len() }}{% endif %} · gain measured on apply
+      {% when Body::Reimport with (c) %}{{ c.release.artist }} — {{ c.release.title }}{% if let Some(d) = c.release.date %} ({{ d }}){% endif %} · distance {{ c.release.distance }}{% if !c.missing.is_empty() %} · {{ c.missing.len() }} missing{% endif %}{% if !c.extra.is_empty() %} · {{ c.extra.len() }} extra{% endif %}
+      {% when Body::Bin with { to, keep, reason } %}→ {{ to }}
+      {% endmatch %}
+      </span>
+    </summary>
+    <p class="meta path">{{ self.rel(p.path) }}</p>
+    {% match p.body %}
+    {% when Body::Nothing %}
+    {% when Body::Refile with { change, into, moves } %}
+    {% if let Some(d) = into %}<p class="meta">Into <span class="path">{{ d }}</span></p>{% endif %}
+    <ul class="rows tight moves">
+    {% for (from, to) in moves %}
+      <li>{% if from == to %}<span class="path">{{ from }}</span>{% else %}<span class="path from">{{ from }}</span><span class="path to">→ {{ to }}</span>{% endif %}</li>
+    {% endfor %}
+    </ul>
+    {% when Body::Credit with (credits) %}
+    {% include "library_credits.html" %}
+    {% when Body::Enrich with { credits, genres, lyrics } %}
+    <p class="meta">Genres: {% if genres.is_empty() %}none added (the album has some, or MusicBrainz has none){% else %}<strong>{{ genres.join("; ") }}</strong> on every track{% endif %}</p>
+    <p class="meta">Lyrics: {% if lyrics.is_empty() %}none found for tracks without them{% endif %}</p>
+    {% if !lyrics.is_empty() %}
+    <ul class="rows tight">
+    {% for l in lyrics %}
+      <li><span class="path">{{ l.file }}</span><span class="meta">{% if l.synced %}synced{% else %}plain{% endif %}, {{ l.lines }} lines{% if !l.first.is_empty() %}: “{{ l.first }}”{% endif %}</span></li>
+    {% endfor %}
+    </ul>
+    {% endif %}
+    {% if !credits.is_empty() %}<p class="meta">Artist credits:</p>{% include "library_credits.html" %}{% endif %}
+    <p class="meta">ReplayGain: measured on apply.</p>
+    {% when Body::Reimport with (c) %}
+    <p class="meta">{% if c.release.id.starts_with("discogs:") %}{{ c.release.id }}{% else %}<a href="https://musicbrainz.org/release/{{ c.release.id }}" target="_blank" rel="noopener">MusicBrainz release</a>{% endif %}{% if let Some(m) = c.release.media %} · {{ m }}{% endif %}{% if let Some(co) = c.release.country %} · {{ co }}{% endif %}</p>
+    <ul class="rows tight pairs">
+    {% for pr in c.pairs %}
+      <li><span class="path">{{ pr.position }}. {{ pr.title }}</span><span class="meta{% if !self.close(pr.title_distance) %} warn{% endif %}">{% if let Some(t) = pr.file_title %}{% if t.as_str() != pr.title.as_str() %}was “{{ t }}”{% else %}title matches{% endif %}{% else %}{{ pr.file }}{% endif %}</span><span class="meta">{{ self.secs(pr.length_delta_secs) }}</span></li>
+    {% endfor %}
+    </ul>
+    {% if !c.missing.is_empty() %}<p class="why warn">No file for: {% for m in c.missing %}{{ m.disc }}-{{ m.position }} {{ m.title }}{% if !loop.last %}, {% endif %}{% endfor %}</p>{% endif %}
+    {% if !c.extra.is_empty() %}<p class="why warn">Not on the release: {{ c.extra.join(", ") }}</p>{% endif %}
+    {% when Body::Bin with { to, keep, reason } %}
+    <p class="meta">Spare: {{ reason }}. The copy kept is <span class="path">{{ self.rel(keep) }}</span>.</p>
+    {% endmatch %}
+  </details>
+  {% if let Some(n) = p.note %}<p class="why{% if p.applicable %} warn{% endif %}">{{ n }}</p>{% endif %}
+</li>
