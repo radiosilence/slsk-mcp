@@ -420,6 +420,15 @@ impl Action {
         }
     }
 
+    /// The apply button's words, before the count.
+    fn verb(self) -> &'static str {
+        match self {
+            Self::Credit => "Credit artists on",
+            Self::Bin => "Bin",
+            _ => self.name(),
+        }
+    }
+
     fn doing(self) -> &'static str {
         match self {
             Self::Refile => "Re-filing",
@@ -785,8 +794,9 @@ async fn preview(State(s): State<UiState>, Path(action): Path<String>, body: Byt
             String::new()
         } else {
             format!(
-                r#"<button type="button" class="primary" data-indicator="_applying" data-attr:disabled="$_apply == 0 || $_applying" data-class:busy="$_applying" data-text="'{name} ' + $_apply + ($_apply == 1 ? ' album' : ' albums')" data-on:click="@post('/library/apply/{slug}', {{contentType: 'form', selector: '#lib-apply'}})">{name}</button>"#,
+                r#"<button type="button" class="primary" data-indicator="_applying" data-attr:disabled="$_apply == 0 || $_applying" data-class:busy="$_applying" data-text="'{verb} ' + $_apply + ($_apply == 1 ? ' album' : ' albums')" data-on:click="@post('/library/apply/{slug}', {{contentType: 'form', selector: '#lib-apply'}})">{name}</button>"#,
                 name = action.name(),
+                verb = action.verb(),
                 slug = action.slug(),
             )
         };
