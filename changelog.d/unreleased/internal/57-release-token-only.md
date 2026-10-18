@@ -1,0 +1,1 @@
+- **The GitHub release is published with `RELEASE_TOKEN` only.** The fallback to the workflow token is gone now that the secret is set; a missing token fails the job by name, as in the other repositories.

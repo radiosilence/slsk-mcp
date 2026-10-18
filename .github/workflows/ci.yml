@@ -294,11 +294,19 @@ jobs:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: artifacts
-      # The workflow token until RELEASE_TOKEN is set; a release made with it
-      # starts no workflows of its own.
+      # Release writes go through RELEASE_TOKEN: a release made with the
+      # workflow token starts no workflows of its own.
+      - name: Check the release token
+        env:
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          if [ -z "$RELEASE_TOKEN" ]; then
+            echo "::error::RELEASE_TOKEN is not set; the release cannot be published"
+            exit 1
+          fi
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
-          token: ${{ secrets.RELEASE_TOKEN || github.token }}
+          token: ${{ secrets.RELEASE_TOKEN }}
           tag_name: v${{ needs.version.outputs.version }}
           target_commitish: ${{ github.sha }}
           name: v${{ needs.version.outputs.version }}
