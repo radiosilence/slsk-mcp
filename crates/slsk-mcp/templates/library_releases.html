@@ -1,4 +1,4 @@
-<form id="lib-retag" class="retag">
+<form id="lib-retag" data-on:submit__prevent="@post('/library/preview/reimport', {contentType: 'form', selector: '#lib-retag'})" class="retag">
   <input type="hidden" name="path" value="{{ path }}">
   <input type="hidden" name="q" value="{{ filter.q }}">
   <input type="hidden" name="since" value="{{ filter.since }}">

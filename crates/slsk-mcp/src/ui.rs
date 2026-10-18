@@ -905,6 +905,9 @@ async fn uploads_html(app: &App) -> String {
 async fn stream(State(s): State<UiState>) -> impl IntoResponse {
     let app = s.app.clone();
     let events = async_stream::stream! {
+        // The library run is sent when it moves: it lists every album it
+        // has done, which after a large run is long.
+        let mut run_at = None;
         for _ in 0..20 {
             yield Ok(patch(&status_html(&app).await));
             yield Ok(patch(&jobs_html(&app).await));
@@ -912,7 +915,11 @@ async fn stream(State(s): State<UiState>) -> impl IntoResponse {
             yield Ok(patch(&uploads_html(&app).await));
             yield Ok(patch(&up_count_html(&app)));
             yield Ok(patch(&chat::count_html(&app).await));
-            yield Ok(patch(&library::run_html(&s)));
+            let at = library::run_stamp(&s);
+            if run_at.as_ref() != Some(&at) {
+                yield Ok(patch(&library::run_html(&s)));
+                run_at = Some(at);
+            }
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
     };

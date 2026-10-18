@@ -1252,7 +1252,7 @@ fn edits_from(tracks: &[sift::meta::Track], form: &[(String, String)]) -> TagEdi
             continue;
         };
         let (now, varies) = consensus(tracks, field);
-        if (varies && typed.is_empty()) || (!varies && typed == now.unwrap_or_default()) {
+        if (varies && typed.is_empty()) || (!varies && typed == now.unwrap_or_default().trim()) {
             continue;
         }
         edits
@@ -1271,12 +1271,33 @@ fn edits_from(tracks: &[sift::meta::Track], form: &[(String, String)]) -> TagEdi
             let Some(typed) = raw(&format!("t{i}-{field}")) else {
                 continue;
             };
-            if typed != t.field(field).unwrap_or_default() {
+            if typed != t.field(field).unwrap_or_default().trim() {
                 changes.push((field.to_string(), (!typed.is_empty()).then_some(typed)));
             }
         }
         if !changes.is_empty() {
             edits.tracks.push((t.path.clone(), changes));
+        }
+    }
+    // A credit typed by hand no longer matches the file's list of artists
+    // and their ids, so those are cleared; Credit artists splits it again.
+    for t in tracks {
+        let all = edits.for_file(&t.path);
+        let edits_field = |f: &str| all.iter().any(|(n, _)| n == f);
+        let mut clear = Vec::new();
+        if edits_field("artist") && !t.artists.is_empty() && !edits_field("artists") {
+            clear.push(("artists".to_string(), None));
+        }
+        if edits_field("albumartist") && !t.album_artists.is_empty() && !edits_field("albumartists")
+        {
+            clear.push(("albumartists".to_string(), None));
+        }
+        if clear.is_empty() {
+            continue;
+        }
+        match edits.tracks.iter_mut().find(|(p, _)| *p == t.path) {
+            Some((_, c)) => c.extend(clear),
+            None => edits.tracks.push((t.path.clone(), clear)),
         }
     }
     edits
@@ -1376,6 +1397,18 @@ impl RunView<'_> {
     fn failed(&self) -> usize {
         self.run.results.iter().filter(|r| !r.ok).count()
     }
+}
+
+/// What the run panel shows, cheaply: it changes whenever the panel does.
+pub(super) fn run_stamp(s: &UiState) -> (bool, usize, usize, Option<String>, bool) {
+    let run = s.run.lock();
+    (
+        run.running,
+        run.done,
+        run.total,
+        run.current.clone(),
+        run.error.is_some(),
+    )
 }
 
 pub(super) fn run_html(s: &UiState) -> String {
@@ -1820,6 +1853,26 @@ mod tests {
         );
         let cleared = edits_from(&tracks, &form(&[("a-album", "")]));
         assert_eq!(cleared.album, [("album".to_string(), None)]);
+
+        let mut credited = tracks[0].clone();
+        credited.artist = Some("A × B".into());
+        credited.artists = vec!["A".into(), "B".into()];
+        let renamed = edits_from(
+            &[credited],
+            &form(&[
+                ("t0-file", "/m/a/1.flac"),
+                ("t0-artist", "A & B"),
+                ("t0-title", " One "),
+            ]),
+        );
+        assert_eq!(
+            renamed.tracks[0].1,
+            [
+                ("artist".to_string(), Some("A & B".to_string())),
+                ("artists".to_string(), None)
+            ],
+            "the list of artists goes with the credit; a title typed with spaces is the same title"
+        );
     }
 
     #[test]

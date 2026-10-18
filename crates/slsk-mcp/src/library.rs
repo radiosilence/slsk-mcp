@@ -92,7 +92,7 @@ impl TagEdits {
     }
 
     /// Every change to the file at `path`: the album's, then its own.
-    fn for_file(&self, path: &Path) -> Vec<sift::meta::Change> {
+    pub fn for_file(&self, path: &Path) -> Vec<sift::meta::Change> {
         let mut out = self.album.clone();
         for (p, c) in &self.tracks {
             if p == path {
