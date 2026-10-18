@@ -54,7 +54,7 @@ impl Thread {
             Kind::Room => "room",
             Kind::Private => "pm",
         };
-        super::place_url("/chat", &[("kind", kind), ("name", &self.name)])
+        super::chat_href(kind, &self.name)
     }
 
     fn from_fields(form: &[(String, String)]) -> Option<Self> {

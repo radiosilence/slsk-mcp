@@ -1,1 +1,0 @@
-- **Search result paths are links.** Each folder in a result path, and the sharer's name, is an ordinary link to that place in their shares, so it can be opened in a new tab or copied. The folders no longer stretch apart with wide gaps before each separator.

@@ -14,11 +14,12 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: v
 .displaced .pill, .rejected .pill, .failed .pill { background: #3d1f23; color: var(--bad); }
 .review .pill, .downloading .pill, .importing .pill { background: #3b3220; color: var(--warn); }
 .stats, .detail, .meta, .note { color: var(--dim); font-size: 13px; }
-input, button { font: inherit; min-width: 0; max-width: 100%; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 7px 10px; }
+input, button, a.button { font: inherit; min-width: 0; max-width: 100%; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 7px 10px; }
 input:focus { outline: 1px solid var(--accent); }
-button { cursor: pointer; background: var(--line); }
+button, a.button { cursor: pointer; background: var(--line); }
+a.button { display: inline-block; text-decoration: none; }
 button.primary { background: var(--accent); color: #0b1a12; border-color: var(--accent); font-weight: 600; }
-button.quiet { background: transparent; color: var(--dim); }
+button.quiet, a.button.quiet { background: transparent; color: var(--dim); }
 button:disabled { opacity: .5; cursor: default; }
 .finder form { display: flex; gap: 8px; flex-wrap: wrap; }
 .finder input[name=q] { flex: 1 1 100%; font-size: 16px; }
@@ -74,13 +75,13 @@ td.state { width: 90px; color: var(--dim); }
 /* In flight: set by Datastar's request indicator, so it lasts exactly as
    long as the request. */
 button:disabled { opacity: .55; cursor: progress; }
-button.busy::after, .job.busy .pill::after {
+button.busy::after, a.busy::after, .job.busy .pill::after {
   content: ""; display: inline-block; width: .8em; height: .8em; margin-left: .45em; vertical-align: -.1em;
   border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%;
   animation: spin .7s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { button.busy::after, .job.busy .pill::after { animation: none; border-right-color: currentColor; } }
+@media (prefers-reduced-motion: reduce) { button.busy::after, a.busy::after, .job.busy .pill::after { animation: none; border-right-color: currentColor; } }
 /* Errors float over the page, so one is seen wherever the tap was. */
 #flash.error { position: fixed; left: 16px; right: 16px; bottom: 16px; z-index: 10; padding: 12px 14px;
   background: var(--panel, #1b1d22); border: 1px solid var(--bad); border-radius: 8px; box-shadow: 0 6px 24px rgba(0,0,0,.35); }
@@ -109,9 +110,9 @@ button.busy::after, .job.busy .pill::after {
 .tabs { display: flex; gap: 4px; padding: 8px 16px 0; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: var(--header-h, 0); z-index: 1;
   overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
 .tabs::-webkit-scrollbar { display: none; }
-.tabs button { flex: none; white-space: nowrap; background: none; border: 0; border-bottom: 2px solid transparent; border-radius: 0; padding: 8px 12px; color: var(--dim); }
-.tabs button.busy::after { width: .6em; height: .6em; }
-.tabs button.active { color: var(--text); border-bottom-color: var(--accent); }
+.tabs a { flex: none; text-decoration: none; white-space: nowrap; background: none; border: 0; border-bottom: 2px solid transparent; border-radius: 0; padding: 8px 12px; color: var(--dim); }
+.tabs a.busy::after { width: .6em; height: .6em; }
+.tabs a.active { color: var(--text); border-bottom-color: var(--accent); }
 .tabs .count:empty { display: none; }
 .uploads .files { list-style: none; margin: 8px 0 0; padding: 0; }
 .uploads .files li { display: flex; align-items: center; gap: 8px; padding: 4px 0; min-width: 0; }
@@ -138,7 +139,7 @@ button.busy::after, .job.busy .pill::after {
 .rows > li > .row { flex: 1 1 100%; }
 .rows > li > .path, .rows > li > .name { flex: 1 1 60%; min-width: 0; }
 .rows > li > .meta { flex: 0 1 auto; }
-.rows > li button { flex: none; padding: 4px 10px; font-size: 13px; }
+.rows > li button, .rows > li a.button { flex: none; padding: 4px 10px; font-size: 13px; }
 .rows.tight > li { padding: 4px 0; border-bottom: 0; }
 .rows > li.busy { opacity: .7; }
 .rows .buttons { display: flex; gap: 6px; flex: none; }

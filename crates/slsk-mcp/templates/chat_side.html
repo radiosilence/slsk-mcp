@@ -4,7 +4,7 @@
   {% if rooms.is_empty() %}<p class="note">In no rooms.</p>{% endif %}
   <ul class="rows">
   {% for r in rooms %}
-    <li><button type="button" class="link" name="room" value="{{ r.0 }}" data-indicator="_opening" data-attr:disabled="$_opening" data-on:click="@post('/chat/open', {contentType: 'form', selector: '#act'})">{{ r.0 }}</button><span class="meta">{{ r.1 }} in the room</span></li>
+    <li><a href="{{ crate::ui::chat_href("room", r.0) }}" data-indicator="_opening" data-on:click__prevent="$tab = 'chat'; $_msg = ''; @get(el.getAttribute('href'))">{{ r.0 }}</a><span class="meta">{{ r.1 }} in the room</span></li>
   {% endfor %}
   </ul>
   <h3 class="section">Messages</h3>
@@ -13,7 +13,7 @@
   {% for c in conversations %}
     <li{% if c.unread > 0 %} class="unread"{% endif %}>
       <div class="row">
-        <button type="button" class="link" name="username" value="{{ c.username }}" data-indicator="_opening" data-attr:disabled="$_opening" data-on:click="@post('/chat/open', {contentType: 'form', selector: '#act'})">{{ c.username }}</button>
+        <a href="{{ crate::ui::chat_href("pm", c.username) }}" data-indicator="_opening" data-on:click__prevent="$tab = 'chat'; $_msg = ''; @get(el.getAttribute('href'))">{{ c.username }}</a>
         {% if c.unread > 0 %}<span class="badge">{{ c.unread }}</span>{% endif %}
         <span class="meta">{{ self.ago(c) }}</span>
       </div>
@@ -27,10 +27,10 @@
   {% for b in buddies %}
     <li data-class:busy="$_bud_{{ loop.index }}">
       <div class="row">
-        <button type="button" class="link" name="username" value="{{ b.username }}" data-indicator="_opening" data-attr:disabled="$_opening" data-on:click="@post('/chat/open', {contentType: 'form', selector: '#act'})">{{ b.username }}</button>
+        <a href="{{ crate::ui::chat_href("pm", b.username) }}" data-indicator="_opening" data-on:click__prevent="$tab = 'chat'; $_msg = ''; @get(el.getAttribute('href'))">{{ b.username }}</a>
         <span class="pill {{ b.status }}">{{ b.status }}</span>
         <span class="grow"></span>
-        <button type="button" class="quiet" name="username" value="{{ b.username }}" data-on:click="$tab = 'browse'; @post('/browse', {contentType: 'form', selector: '#act'})">Browse</button>
+        <a class="button quiet" href="{{ crate::ui::browse_href(b.username, "") }}" data-on:click__prevent="$tab = 'browse'; @get(el.getAttribute('href'))">Browse</a>
         <button type="button" class="quiet" name="username" value="{{ b.username }}" data-indicator="_bud_{{ loop.index }}" data-attr:disabled="$_bud_{{ loop.index }}" data-class:busy="$_bud_{{ loop.index }}" data-on:click="@post('/chat/buddy/remove', {contentType: 'form', selector: '#act'})">Remove</button>
       </div>
       {% if !b.note.is_empty() %}<div class="meta">{{ b.note }}</div>{% endif %}

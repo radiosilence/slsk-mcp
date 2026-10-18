@@ -325,6 +325,16 @@ async fn page(
 }
 
 /// An address with its query, as the page keeps it.
+/// A user's shares at a folder (the top when `key` is empty).
+fn browse_href(username: &str, key: &str) -> String {
+    place_url("/browse", &[("username", username), ("key", key)])
+}
+
+/// A conversation: `kind` is `room` or `pm`.
+fn chat_href(kind: &str, name: &str) -> String {
+    place_url("/chat", &[("kind", kind), ("name", name)])
+}
+
 fn place_url(path: &str, params: &[(&str, &str)]) -> String {
     let query: String = url::form_urlencoded::Serializer::new(String::new())
         .extend_pairs(params.iter().filter(|(_, v)| !v.is_empty()))
@@ -919,9 +929,6 @@ impl ResultsView {
     }
     fn crumbs(&self, f: &Folder) -> Vec<browse::Child> {
         browse::crumbs(f.remote_path.as_bytes())
-    }
-    fn browse_url(&self, f: &Folder, key: &str) -> String {
-        place_url("/browse", &[("username", &f.username), ("key", key)])
     }
     /// A file's path below the result's folder, which keeps a disc
     /// subfolder's name when discs are grouped into one result.

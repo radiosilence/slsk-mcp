@@ -21,15 +21,15 @@
   {{ status|safe }}
 </header>
 <nav class="tabs">
-  <button type="button" data-tab="albums" data-class:active="$tab == 'albums'" data-on:click="$tab = 'albums'; $_url = $_at.albums || '/'">Albums</button>
-  <button type="button" data-tab="uploads" data-class:active="$tab == 'uploads'" data-on:click="$tab = 'uploads'; $_url = '/uploads'">Uploads {{ up_count|safe }}</button>
-  <button type="button" data-tab="wishlist" data-class:active="$tab == 'wishlist'" data-indicator="_t_wish" data-class:busy="$_t_wish" data-on:click="$tab = 'wishlist'; $_url = '/wishlist'; @get($_url)">Wishlist</button>
-  <button type="button" data-tab="library" data-class:active="$tab == 'library'" data-indicator="_t_lib" data-class:busy="$_t_lib" data-on:click="$tab = 'library'; $_url = $_at.library || '/library'; @get($_url)">Library</button>
-  <button type="button" data-tab="browse" data-class:active="$tab == 'browse'" data-on:click="$tab = 'browse'; $_url = $_at.browse || '/browse'; $_url.includes('username=') && @get($_url)">Browse</button>
-  <button type="button" data-tab="chat" data-class:active="$tab == 'chat'" data-indicator="_t_chat" data-class:busy="$_t_chat" data-on:click="$tab = 'chat'; $_url = $_at.chat || '/chat'; @get($_url)">Chat {{ chat_count|safe }}</button>
-  <button type="button" data-tab="bans" data-class:active="$tab == 'bans'" data-indicator="_t_bans" data-class:busy="$_t_bans" data-on:click="$tab = 'bans'; $_url = '/bans'; @get($_url)">Bans</button>
-  <button type="button" data-tab="settings" data-class:active="$tab == 'settings'" data-indicator="_t_set" data-class:busy="$_t_set" data-on:click="$tab = 'settings'; $_url = '/settings'; @get($_url)">Settings</button>
-  <button type="button" data-tab="triage" data-class:active="$tab == 'triage'" data-indicator="_t_tri" data-class:busy="$_t_tri" data-on:click="$tab = 'triage'; $_url = '/triage'; @get($_url)">Triage</button>
+  <a href="/" data-tab="albums" data-class:active="$tab == 'albums'" data-on:click__prevent="$tab = 'albums'; $_url = $_at.albums || '/'">Albums</a>
+  <a href="/uploads" data-tab="uploads" data-class:active="$tab == 'uploads'" data-on:click__prevent="$tab = 'uploads'; $_url = '/uploads'">Uploads {{ up_count|safe }}</a>
+  <a href="/wishlist" data-tab="wishlist" data-class:active="$tab == 'wishlist'" data-indicator="_t_wish" data-class:busy="$_t_wish" data-on:click__prevent="$tab = 'wishlist'; $_url = '/wishlist'; @get($_url)">Wishlist</a>
+  <a href="/library" data-tab="library" data-class:active="$tab == 'library'" data-indicator="_t_lib" data-class:busy="$_t_lib" data-on:click__prevent="$tab = 'library'; $_url = $_at.library || '/library'; @get($_url)">Library</a>
+  <a href="/browse" data-tab="browse" data-class:active="$tab == 'browse'" data-on:click__prevent="$tab = 'browse'; $_url = $_at.browse || '/browse'; $_url.includes('username=') && @get($_url)">Browse</a>
+  <a href="/chat" data-tab="chat" data-class:active="$tab == 'chat'" data-indicator="_t_chat" data-class:busy="$_t_chat" data-on:click__prevent="$tab = 'chat'; $_url = $_at.chat || '/chat'; @get($_url)">Chat {{ chat_count|safe }}</a>
+  <a href="/bans" data-tab="bans" data-class:active="$tab == 'bans'" data-indicator="_t_bans" data-class:busy="$_t_bans" data-on:click__prevent="$tab = 'bans'; $_url = '/bans'; @get($_url)">Bans</a>
+  <a href="/settings" data-tab="settings" data-class:active="$tab == 'settings'" data-indicator="_t_set" data-class:busy="$_t_set" data-on:click__prevent="$tab = 'settings'; $_url = '/settings'; @get($_url)">Settings</a>
+  <a href="/triage" data-tab="triage" data-class:active="$tab == 'triage'" data-indicator="_t_tri" data-class:busy="$_t_tri" data-on:click__prevent="$tab = 'triage'; $_url = '/triage'; @get($_url)">Triage</a>
 </nav>
 <main>
   <form id="act" hidden></form>
