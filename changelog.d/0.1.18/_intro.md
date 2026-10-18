@@ -1,0 +1,2 @@
+- A copy whose files will not parse (a truncated or corrupt FLAC) moves to the next source by itself. It stopped as `failed`, waiting for someone to ask for another copy, though the fault was the copy's and not the album's.
+- Compilations tagged `VA` are matched as "Various Artists" (sift).

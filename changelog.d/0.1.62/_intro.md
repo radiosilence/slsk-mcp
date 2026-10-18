@@ -1,0 +1,1 @@
+- **Upload slots have no ceiling, and default to 500.** The Settings page and `setUploadSlots` held the count to 100 for no reason the engine has. Each running upload costs a socket and a 256 KiB buffer, and past what saturates the uplink more slots share it more ways rather than send more, so the number to pick follows the connection.

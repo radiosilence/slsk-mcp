@@ -1,0 +1,1 @@
+- **Imports file under the artist folder already there when names differ only in case** (sift 0.3.2). "The Squire Of Gothos" and "The Squire of Gothos" no longer make two folders; each part of the destination takes the spelling already on disk.

@@ -1,0 +1,1 @@
+- **The web UI shows its version**, at the foot of every page, linked to that release's notes.

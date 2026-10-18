@@ -1,0 +1,1 @@
+- `modifyAlbums(query, changes)` corrects tags on albums already in the library, with beets' `field=value` and `field!`, and re-files any the change moves; a move onto an existing album is refused and reported. Until now tags could only be settled while a job was in review. Backed by sift's `modify`.

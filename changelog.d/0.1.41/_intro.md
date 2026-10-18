@@ -1,0 +1,1 @@
+- A repeated `grab` returns the job the first one made. `grab` searches before it answers, which can outlast an MCP connector's timeout, and the retry started a second download of the same album. Grabs for one query now take turns, and each returns a job for that query made in the last day unless it failed.

@@ -1,0 +1,2 @@
+- Browse: Download folder is offered at every level, not only in a folder holding files. Everything under the folder is downloaded as one job per album, with disc folders kept inside their album; above 100 files it asks first, and more than 200 albums is refused as a whole collection.
+- Chat: sending no longer asks for confirmation in the web UI. The MCP keeps its preview and confirm steps.

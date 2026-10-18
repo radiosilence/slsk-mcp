@@ -1,0 +1,1 @@
+- A download that receives nothing for twenty minutes moves to its next source. Some peers queue every file and never send one (no free slot for strangers, or a queue they never work through), which held albums indefinitely while four other sources sat untried. A slow peer that is sending is left alone.

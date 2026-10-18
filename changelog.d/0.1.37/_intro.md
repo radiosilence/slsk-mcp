@@ -1,0 +1,1 @@
+- A job whose album is already in the library, as another copy in the same format, ends as imported and points at the album there, and the new copy is dropped. It failed with "… is already in the library" and offered another copy, which would have been refused the same way.

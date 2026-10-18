@@ -1,0 +1,2 @@
+- Searching again for a stalled album accepts only a copy as good as the one it replaces: lossless for a lossless album, and at least four-fifths of its tracks. It had replaced a 21-file FLAC Boiler Room set with a one-file 192 kbps video rip, and a twelve-track album with a single track from it.
+- A rip numbering its tracks straight through a vinyl release whose sides restart at 1 matches every track instead of only the first side's (sift).
