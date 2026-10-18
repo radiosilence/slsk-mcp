@@ -184,7 +184,9 @@ impl ServerHandler for SlskMcp {
                  rules would put them; `refile(query)` moves them. Show the user a plan before acting on more than \
                  a handful of albums: moving files can cost the player its play counts. Every import gets \
                  ReplayGain, genres and lyrics automatically; `enrichLibrary(query)` adds them to albums \
-                 imported before, one artist or album at a time, since each takes seconds.\n\n\
+                 imported before, one artist or album at a time, since each takes seconds. Every import also \
+                 credits each artist on a collaboration in its own tags; `creditArtists(query)` does that \
+                 alone, quickly, for albums filed before.\n\n\
                  The client is also a chat client: rooms, private messages (`conversations`, `messages`), \
                  buddies and interests. `sendMessage` and `say` reach real people, so they take two calls: \
                  PREVIEW returns a token and sends nothing; show the user the preview, and only after they agree \
