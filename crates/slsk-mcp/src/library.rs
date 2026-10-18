@@ -45,6 +45,8 @@ pub struct LibraryAlbum {
     pub year: Option<String>,
     pub format: String,
     pub tracks: usize,
+    /// When the album's first file was indexed, in seconds since the epoch.
+    pub added: Option<i64>,
 }
 
 impl From<&Album> for LibraryAlbum {
@@ -62,6 +64,7 @@ impl From<&Album> for LibraryAlbum {
             year: text("year"),
             format: text("format").unwrap_or_default(),
             tracks: a.items.len(),
+            added: a.items.iter().map(|i| i.added).min(),
         }
     }
 }
@@ -103,18 +106,118 @@ pub struct EnrichedAlbum {
     pub genres: Vec<String>,
     /// Tracks given lyrics.
     pub lyrics: usize,
+    /// With `preview`, the files that would be given lyrics.
+    pub lyric_files: Vec<String>,
     /// Artists credited one by one where the files named them only together.
     pub artists: Vec<String>,
     pub problems: Vec<String>,
 }
 
+impl EnrichedAlbum {
+    /// What a preview reports: the plan's additions, gain unmeasured.
+    pub fn planned(path: String, p: &sift::EnrichPlan) -> Self {
+        let mut artists: Vec<String> = Vec::new();
+        for c in &p.credits.files {
+            for a in c.artists.iter().chain(&c.album_artists) {
+                if !artists.contains(a) {
+                    artists.push(a.clone());
+                }
+            }
+        }
+        Self {
+            path,
+            gain_db: None,
+            genres: p.genres.clone(),
+            lyrics: p.lyrics.len(),
+            lyric_files: p.lyrics.iter().map(|l| file_name(&l.path)).collect(),
+            artists,
+            problems: p.problems.clone(),
+        }
+    }
+}
+
 #[derive(SimpleObject)]
 pub struct CreditedAlbum {
     pub path: String,
-    /// Files given artist credits.
+    /// Files given artist credits, or with `preview`, that would be.
     pub files: usize,
     pub artists: Vec<String>,
+    /// With `preview`, each file's credits as they would be written.
+    pub planned: Vec<CreditWrite>,
     pub problems: Vec<String>,
+}
+
+/// The credits one file would be given. A list left empty is not written.
+#[derive(SimpleObject, Clone)]
+pub struct CreditWrite {
+    /// The file's name within its album.
+    pub file: String,
+    pub artists: Vec<String>,
+    pub artist_ids: Vec<String>,
+    pub album_artists: Vec<String>,
+    pub album_artist_ids: Vec<String>,
+    /// The MusicBrainz release the credits come from; absent when the
+    /// file's own credit was split by artists the library holds.
+    pub release: Option<String>,
+}
+
+impl From<&sift::PlannedCredit> for CreditWrite {
+    fn from(c: &sift::PlannedCredit) -> Self {
+        Self {
+            file: file_name(&c.path),
+            artists: c.artists.clone(),
+            artist_ids: c.artist_ids.clone(),
+            album_artists: c.album_artists.clone(),
+            album_artist_ids: c.album_artist_ids.clone(),
+            release: c.release.clone(),
+        }
+    }
+}
+
+fn file_name(p: &Path) -> String {
+    p.file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// What re-importing an album did, or with `preview`, would do.
+#[derive(SimpleObject, Clone)]
+pub struct ReimportedAlbum {
+    pub path: String,
+    /// The release applied, or with `preview`, the closest found.
+    pub release: Option<ReleaseMatch>,
+    /// Why a re-import without a release id would stop for a choice. With
+    /// `preview` only.
+    pub review: Option<String>,
+    /// Where the album is filed afterwards.
+    pub to: Option<String>,
+    pub problems: Vec<String>,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct ReleaseMatch {
+    pub id: String,
+    pub artist: String,
+    pub title: String,
+    pub date: Option<String>,
+    pub distance: f64,
+    pub missing: usize,
+    pub extra: usize,
+}
+
+impl From<&sift::Candidate> for ReleaseMatch {
+    fn from(c: &sift::Candidate) -> Self {
+        Self {
+            id: c.id.clone(),
+            artist: c.artist.clone(),
+            title: c.title.clone(),
+            date: c.date.clone(),
+            distance: c.distance,
+            missing: c.missing,
+            extra: c.extra,
+        }
+    }
 }
 
 #[derive(SimpleObject, Clone)]
@@ -201,7 +304,7 @@ impl Library {
 
     /// The whole library's duplicates and re-file plan, worked out once per
     /// change to the index. Concurrent callers wait for one computation.
-    async fn overview(&self) -> anyhow::Result<Arc<Overview>> {
+    pub async fn overview(&self) -> anyhow::Result<Arc<Overview>> {
         let mut cached = self.overview.lock().await;
         // Read before the albums: a change landing during the computation
         // leaves this generation behind, and the next call works it out again.
@@ -336,6 +439,19 @@ impl Library {
         Ok(out)
     }
 
+    /// Where binning the album at `dir` would put it, or why it cannot be
+    /// binned: the bin already holds that path, or it is not in the library.
+    pub fn bin_destination(&self, dir: &str) -> Result<PathBuf, String> {
+        let rel = Path::new(dir)
+            .strip_prefix(&self.cfg.directory)
+            .map_err(|_| "not under the library".to_string())?;
+        let dest = self.bin.join(rel);
+        if dest.exists() {
+            return Err(format!("the bin already holds {}", dest.display()));
+        }
+        Ok(dest)
+    }
+
     /// Every artist the library holds an album by: what a collaboration's
     /// credit is split against.
     pub async fn known_artists(&self) -> anyhow::Result<sift::credits::Known> {
@@ -366,6 +482,7 @@ impl Library {
                 gain_db: e.gain_db,
                 genres: e.genres,
                 lyrics: e.lyrics,
+                lyric_files: Vec::new(),
                 artists: e.artists,
                 problems: e.problems,
             });
@@ -380,12 +497,21 @@ impl Library {
     /// already carry the credits are left alone, so it can run again.
     pub async fn credit(&self, query: &[String]) -> anyhow::Result<Vec<CreditedAlbum>> {
         let known = self.known_artists().await?;
+        self.credit_with(query, &known).await
+    }
+
+    /// [`Self::credit`] against artists already listed.
+    pub async fn credit_with(
+        &self,
+        query: &[String],
+        known: &sift::credits::Known,
+    ) -> anyhow::Result<Vec<CreditedAlbum>> {
         let mut out = Vec::new();
         for a in self.read(query).await? {
             // One unreadable album (moved since the index last looked, a
             // corrupt file) is reported and passed over, so a long run
             // still finishes.
-            let c = match self.tagger.credit(&a.dir, &known).await {
+            let c = match self.tagger.credit(&a.dir, known).await {
                 Ok(c) => c,
                 Err(e) => sift::Credited {
                     problems: vec![format!("{e:#}")],
@@ -399,10 +525,103 @@ impl Library {
                 path: a.dir.to_string_lossy().into_owned(),
                 files: c.files,
                 artists: c.artists,
+                planned: Vec::new(),
                 problems: c.problems,
             });
         }
         self.changed();
+        Ok(out)
+    }
+
+    /// What [`Self::credit`] would write to matching albums, writing
+    /// nothing. Albums with nothing to credit are left out.
+    pub async fn credit_plan(
+        &self,
+        query: &[String],
+        known: &sift::credits::Known,
+    ) -> anyhow::Result<Vec<CreditedAlbum>> {
+        let mut out = Vec::new();
+        for a in self.read(query).await? {
+            let plan = match self.tagger.credit_plan(&a.dir, known).await {
+                Ok(p) => p,
+                Err(e) => sift::CreditPlan {
+                    problems: vec![format!("{e:#}")],
+                    ..Default::default()
+                },
+            };
+            if plan.files.is_empty() && plan.problems.is_empty() {
+                continue;
+            }
+            let mut artists: Vec<String> = Vec::new();
+            for c in &plan.files {
+                for a in c.artists.iter().chain(&c.album_artists) {
+                    if !artists.contains(a) {
+                        artists.push(a.clone());
+                    }
+                }
+            }
+            out.push(CreditedAlbum {
+                path: a.dir.to_string_lossy().into_owned(),
+                files: plan.files.len(),
+                artists,
+                planned: plan.files.iter().map(CreditWrite::from).collect(),
+                problems: plan.problems,
+            });
+        }
+        Ok(out)
+    }
+
+    /// What enriching the album at `dir` would add, writing nothing.
+    pub async fn enrich_plan(
+        &self,
+        dir: &str,
+        known: &sift::credits::Known,
+    ) -> anyhow::Result<sift::EnrichPlan> {
+        Ok(self.tagger.enrich_plan(Path::new(dir), known).await?)
+    }
+
+    /// The release re-importing the album at `dir` would match, and how its
+    /// files line up against it. Changes nothing.
+    pub async fn rematch(&self, dir: &str) -> anyhow::Result<sift::Rematch> {
+        Ok(self.tagger.rematch(Path::new(dir)).await?)
+    }
+
+    /// Match the album at `dir` against MusicBrainz again and retag it,
+    /// moving it if the new tags file it elsewhere. With `release_id`, that
+    /// release is applied, as when a person answers a review; without, the
+    /// closest is applied only when it is close and complete.
+    pub async fn reimport(
+        &self,
+        dir: &str,
+        release_id: Option<&str>,
+    ) -> anyhow::Result<ReimportedAlbum> {
+        // Held so no other change moves files while this one does.
+        let _index = self.write().await?;
+        let outcome = self.tagger.reimport(Path::new(dir), release_id).await;
+        self.bump();
+        self.changed();
+        let mut out = ReimportedAlbum {
+            path: dir.to_string(),
+            release: None,
+            review: None,
+            to: None,
+            problems: Vec::new(),
+        };
+        match outcome? {
+            sift::Outcome::Imported {
+                dir: to, release, ..
+            } => {
+                tracing::info!(from = dir, to = %to.display(), "re-imported an album");
+                out.to = Some(to.to_string_lossy().into_owned());
+                out.release = release.as_ref().map(ReleaseMatch::from);
+            }
+            sift::Outcome::Review {
+                reason, candidates, ..
+            } => {
+                out.review = Some(reason);
+                out.release = candidates.first().map(ReleaseMatch::from);
+            }
+        }
         Ok(out)
     }
 

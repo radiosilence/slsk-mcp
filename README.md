@@ -134,6 +134,11 @@ at import can be fixed later without touching the server by hand.
 Each import is followed by what beets' `replaygain`, `lastgenre` and `lyrics`
 plugins add: loudness normalisation for players, genres from MusicBrainz, and
 synced lyrics from LRCLIB. `enrichLibrary` backfills albums imported before.
+`reimportAlbums` matches albums already filed against MusicBrainz again and
+retags them, as beets' `import -L`. `binDuplicates`, `refile`,
+`creditArtists`, `enrichLibrary` and `reimportAlbums` take `preview: true`,
+which returns what they would write and changes nothing, so a client can show
+the change before making it.
 
 A collaboration is tagged with each of its artists (`ARTISTS`,
 `ALBUMARTISTS` and every MusicBrainz artist id, as Picard writes them) while
@@ -240,21 +245,36 @@ the other, and nothing else to either.
 ## The web UI
 
 The UI reaches everything GraphQL and MCP do, so a phone is a full client:
-albums and uploads, then the wishlist, the library (duplicates, re-filing,
-enrichment), browsing a user's shares, rooms and private messages, bans,
+albums and uploads, then the wishlist, the library (one list of albums to
+re-file, credit, enrich, re-import or bin), browsing a user's shares, rooms and private messages, bans,
 settings and triage. Each action calls the same Rust the GraphQL resolvers
 call. Buttons show busy while their request is in flight and then the
 server's answer, never a guess. Anything that changes the library or reaches
 other people (binning, re-filing, enriching, banning, sending a message) asks
-first.
+first; library changes show exactly what they will do before they do it.
 
-Re-filing groups albums by what would change. File names, `_`/`-` folder
-spelling and the folder's year only correct how an album is written, so they
-can be applied together; an album whose tags name a different artist or
-album than its folder is moved one at a time, after a look. Library actions
-name albums by exact path, so they act only on what was shown. Enrichment
-runs in the background, an album at a time, with progress on the page, since
-it takes seconds per album.
+The Library tab is one list of albums, newest import first, narrowed by a
+search (beets' query terms), an import date, or what needs attention: albums
+held more than once, and albums not where the current naming rules file them.
+Each row says when it was imported and carries those marks, with the reason a
+copy is spare and where the rules would put it. Albums ticked in the list, or
+every album the filter finds, are acted on together: re-file, credit artists,
+enrich, re-import (match against MusicBrainz again) and bin spares.
+
+Every one of those previews first, album by album, before anything changes:
+each file's move, each file's artist credits and whether they come from the
+MusicBrainz release or a split by artists the library already holds, the
+genres and lyrics enriching would add, the release a re-import would apply
+with its tracks against the files, where each spare would go in the bin. Gain
+is the exception, since measuring it means decoding the audio; the preview
+says it is measured on apply. Each album can be unticked in the preview, and
+applying applies what the preview showed and nothing else. A preview works
+out at most 50 albums for the actions that ask MusicBrainz or LRCLIB, and 500
+for the rest, so a large selection is applied in parts. The run goes on in
+the background, an album at a time, with progress and a result for each.
+
+The GraphQL mutations behind these take `preview: true` for the same answer
+without the change, so an assistant can show it first.
 
 ## Security notes
 

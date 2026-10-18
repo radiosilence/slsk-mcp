@@ -69,10 +69,23 @@
   <div data-show="$tab == 'library'" class="area">
     <form id="lib-find" class="finder-form" data-indicator="_finding" data-on:submit__prevent="@post('/library/find', {contentType: 'form', selector: '#lib-find'})">
       <input name="q" data-bind:_libq placeholder="burial, artist:burial, year:1990..1999" autocomplete="off">
-      <button type="submit" data-attr:disabled="$_finding" data-class:busy="$_finding">Find albums</button>
+      <select name="since" data-bind:_libsince data-on:change="$_libsince != 'date' && @post('/library/find', {contentType: 'form', selector: '#lib-find'})">
+        <option value="">Imported any time</option>
+        <option value="today">Imported today</option>
+        <option value="week">Imported this week</option>
+        <option value="month">Imported this month</option>
+        <option value="date">Imported since…</option>
+      </select>
+      <input type="date" name="from" data-bind:_libfrom data-show="$_libsince == 'date'" data-on:change="@post('/library/find', {contentType: 'form', selector: '#lib-find'})">
+      <select name="show" data-bind:_libshow data-on:change="@post('/library/find', {contentType: 'form', selector: '#lib-find'})">
+        <option value="">Every album</option>
+        <option value="dups">Held more than once</option>
+        <option value="moves">Not where the rules file them</option>
+      </select>
+      <button type="submit" data-attr:disabled="$_finding" data-class:busy="$_finding">Find</button>
     </form>
-    <div id="lib-found"></div>
-    {{ enrich|safe }}
+    {{ run|safe }}
+    <div id="lib-preview"></div>
     <div id="library"></div>
   </div>
   <div data-show="$tab == 'browse'" class="area">

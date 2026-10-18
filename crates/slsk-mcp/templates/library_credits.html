@@ -1,0 +1,10 @@
+<ul class="rows tight credits">
+{% for c in credits %}
+  <li>
+    <span class="path">{{ c.file }}</span>
+    <span class="meta">{% if let Some(r) = c.release %}from release {{ r }}{% else %}split by artists the library holds{% endif %}</span>
+    {% if !c.artists.is_empty() %}<span class="tag">ARTISTS <strong>{{ c.artists.join(" / ") }}</strong>{% if !c.artist_ids.is_empty() %} <span class="ids">{{ c.artist_ids.join(", ") }}</span>{% endif %}</span>{% endif %}
+    {% if !c.album_artists.is_empty() %}<span class="tag">ALBUMARTISTS <strong>{{ c.album_artists.join(" / ") }}</strong>{% if !c.album_artist_ids.is_empty() %} <span class="ids">{{ c.album_artist_ids.join(", ") }}</span>{% endif %}</span>{% endif %}
+  </li>
+{% endfor %}
+</ul>

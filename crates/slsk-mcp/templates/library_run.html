@@ -1,0 +1,25 @@
+<div id="lib-run">
+{% if let Some(action) = run.action %}
+<div class="job run">
+  <div class="row"><strong class="title">{{ self.verb() }} {{ run.total }} album{% if run.total != 1 %}s{% endif %}</strong>{% if !run.running %}<span class="pill{% if self.failed() > 0 %} warn{% else %} keep{% endif %}">{% if self.failed() > 0 %}{{ self.failed() }} failed{% else %}done{% endif %}</span>{% endif %}</div>
+  {% if run.running %}
+  <p class="note">{{ run.done }} of {{ run.total }}{% if let Some(c) = run.current %} · now {{ self.rel(c) }}{% endif %}</p>
+  <progress class="bar" max="{{ run.total.max(1) }}" value="{{ run.done }}">{{ run.done }}</progress>
+  {% endif %}
+  {% if let Some(e) = run.error %}<p class="error">{{ e }}</p>{% endif %}
+  <details class="peek"{% if run.running %} open{% endif %}>
+    <summary>Each album</summary>
+    <ul class="rows">
+    {% for r in self.recent() %}
+      <li class="settled {% if r.ok %}moved{% else %}left{% endif %}">
+        <span class="path">{{ self.rel(r.path) }}</span>
+        <span class="pill">{% if r.ok %}done{% else %}failed{% endif %}</span>
+        <span class="meta">{{ r.detail }}</span>
+        {% for p in r.problems %}<span class="error">{{ p }}</span>{% endfor %}
+      </li>
+    {% endfor %}
+    </ul>
+  </details>
+</div>
+{% endif %}
+</div>
