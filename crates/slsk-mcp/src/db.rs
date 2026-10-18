@@ -2,21 +2,32 @@
 //! restart. Transfer progress is not here: it lives in the engine's memory and
 //! is read from there.
 //!
-//! One file in the state directory, opened once. Reads go through a pool of
-//! read-only connections, which WAL lets run beside a write; every write goes
-//! through a single connection, so writes queue in the process instead of
-//! contending for SQLite's lock. sqlx runs each connection on its own thread,
-//! so a query never occupies an async worker.
+//! One file in the state directory, reached through a pool of rusqlite
+//! connections as koan and sift reach theirs. rusqlite blocks, so every
+//! statement runs on tokio's blocking pool through [`Db::run`] and never
+//! occupies an async worker. WAL lets reads run beside a write; writers wait
+//! on one another through `busy_timeout`, and a transaction that writes opens
+//! with `BEGIN IMMEDIATE` so it waits for the lock up front instead of failing
+//! when it tries to upgrade a read.
+//!
+//! Encodings are fixed by the rows already stored: UUIDs as 16-byte blobs
+//! (rusqlite's `uuid` feature), timestamps as RFC 3339 text with a `T`, which
+//! is what the schema's `strftime` defaults write and what [`ts`] produces,
+//! and JSON as text through [`Json`]. rusqlite's own chrono encoding uses a
+//! space instead of the `T`, which would sort and compare wrongly against the
+//! stored values, so timestamps are bound with [`ts`] and read with
+//! [`ts_from`].
 
-use std::path::Path;
-use std::str::FromStr;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
+use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
-use sqlx::types::Json;
 use uuid::Uuid;
+
+pub use rusqlite::Result;
 
 /// Completed uploads since a time.
 pub(crate) const UPLOAD_TOTALS: &str = "SELECT COUNT(*), COALESCE(SUM(bytes), 0) FROM uploads \
@@ -66,52 +77,77 @@ macro_rules! now {
 }
 pub(crate) use now;
 
+/// Migrations in order; `PRAGMA user_version` counts those applied.
+const MIGRATIONS: &[&str] = &[include_str!("../migrations/0001_init.sql")];
+
+/// How many idle connections to keep. More than the concurrency the service
+/// reaches, so the steady state never opens one; a burst past it closes the
+/// extras when they come back.
+const KEEP_IDLE: usize = 8;
+
 #[derive(Clone)]
-pub struct Db {
-    pub read: SqlitePool,
-    pub write: SqlitePool,
+pub struct Db(Arc<Pool>);
+
+struct Pool {
+    path: PathBuf,
+    idle: parking_lot::Mutex<Vec<Connection>>,
 }
 
 impl Db {
+    /// Open (or create) the database at `path` and bring its schema up to
+    /// date.
     pub async fn open(path: &Path) -> anyhow::Result<Self> {
-        let base = SqliteConnectOptions::from_str("sqlite:")?
-            .filename(path)
-            .journal_mode(SqliteJournalMode::Wal)
-            .synchronous(SqliteSynchronous::Normal)
-            .busy_timeout(Duration::from_secs(5))
-            .foreign_keys(true)
-            .pragma("temp_store", "memory");
-        let write = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(base.clone().create_if_missing(true))
-            .await?;
-        sqlx::migrate!("./migrations").run(&write).await?;
-        let read = SqlitePoolOptions::new()
-            .max_connections(4)
-            .connect_with(base.read_only(true))
-            .await?;
-        let db = Self { read, write };
-        db.optimize().await;
+        let path = path.to_path_buf();
+        let db = tokio::task::spawn_blocking(move || -> anyhow::Result<Self> {
+            let mut conn = Connection::open(&path)?;
+            configure(&conn)?;
+            conn.pragma_update(None, "journal_mode", "WAL")?;
+            migrate(&mut conn)?;
+            optimize(&conn);
+            Ok(Self(Arc::new(Pool {
+                path,
+                idle: parking_lot::Mutex::new(vec![conn]),
+            })))
+        })
+        .await??;
         Ok(db)
     }
 
-    /// An in-memory database for tests: one shared connection, so the pools
-    /// see the same data.
+    /// A fresh database in a temporary file, for tests: a file rather than
+    /// `:memory:` so every pooled connection sees the same data.
     #[cfg(test)]
     pub async fn memory() -> Self {
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(
-                SqliteConnectOptions::from_str("sqlite::memory:")
-                    .unwrap()
-                    .foreign_keys(true),
-            )
-            .await
-            .unwrap();
-        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
-        Self {
-            read: pool.clone(),
-            write: pool,
+        let path = std::env::temp_dir().join(format!("slsk-test-{}.db", Uuid::new_v4()));
+        Self::open(&path).await.expect("test database")
+    }
+
+    /// Run `f` on a pooled connection, on the blocking pool.
+    pub async fn run<T, F>(&self, f: F) -> Result<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(&mut Connection) -> Result<T> + Send + 'static,
+    {
+        let pool = self.0.clone();
+        match tokio::task::spawn_blocking(move || {
+            let mut conn = match pool.idle.lock().pop() {
+                Some(c) => c,
+                None => {
+                    let c = Connection::open(&pool.path)?;
+                    configure(&c)?;
+                    c
+                }
+            };
+            let out = f(&mut conn);
+            let mut idle = pool.idle.lock();
+            if idle.len() < KEEP_IDLE {
+                idle.push(conn);
+            }
+            out
+        })
+        .await
+        {
+            Ok(r) => r,
+            Err(e) => std::panic::resume_unwind(e.into_panic()),
         }
     }
 
@@ -119,12 +155,107 @@ impl Db {
     /// it costs milliseconds; without statistics SQLite can pick an index that
     /// only supplies the ordering and read the whole table.
     pub async fn optimize(&self) {
-        if let Err(e) = sqlx::query("PRAGMA analysis_limit = 400; PRAGMA optimize = 0x10002;")
-            .execute(&self.write)
-            .await
-        {
-            tracing::warn!(error = %e, "database optimize failed");
-        }
+        let _ = self
+            .run(|c| {
+                optimize(c);
+                Ok(())
+            })
+            .await;
+    }
+}
+
+/// Settings every connection needs; WAL is a property of the file and is set
+/// once, at open.
+fn configure(conn: &Connection) -> Result<()> {
+    conn.busy_timeout(Duration::from_secs(5))?;
+    conn.execute_batch(
+        "PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON; PRAGMA temp_store = MEMORY;",
+    )
+}
+
+fn optimize(conn: &Connection) {
+    if let Err(e) = conn.execute_batch("PRAGMA analysis_limit = 400; PRAGMA optimize = 0x10002;") {
+        tracing::warn!(error = %e, "database optimize failed");
+    }
+}
+
+/// Apply the migrations `user_version` says are missing. A database created
+/// while the service used sqlx records its migrations in `_sqlx_migrations`
+/// instead, and those count as applied.
+fn migrate(conn: &mut Connection) -> Result<()> {
+    let mut applied: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if applied == 0 {
+        let legacy: Option<i64> = conn
+            .query_row(
+                "SELECT max(version) FROM _sqlx_migrations WHERE success",
+                [],
+                |r| r.get(0),
+            )
+            .optional()
+            .unwrap_or(None)
+            .flatten();
+        applied = legacy.unwrap_or(0);
+    }
+    let applied = usize::try_from(applied).unwrap_or(0);
+    if applied > MIGRATIONS.len() {
+        return newer_schema(applied);
+    }
+    for (i, sql) in MIGRATIONS.iter().enumerate().skip(applied) {
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        tx.execute_batch(sql)?;
+        tx.pragma_update(None, "user_version", (i + 1) as i64)?;
+        tx.commit()?;
+    }
+    conn.pragma_update(None, "user_version", MIGRATIONS.len() as i64)
+}
+
+/// A database migrated by a newer build: refuse it rather than run against a
+/// schema this one does not know.
+fn newer_schema(found: usize) -> Result<()> {
+    Err(rusqlite::Error::SqliteFailure(
+        rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_MISMATCH),
+        Some(format!(
+            "database schema version {found} is newer than this build's {}",
+            MIGRATIONS.len()
+        )),
+    ))
+}
+
+/// A timestamp as the schema stores it, for binding.
+pub fn ts(t: &chrono::DateTime<chrono::Utc>) -> String {
+    t.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, false)
+}
+
+/// A stored timestamp, read back.
+pub fn ts_from(s: &str) -> Result<chrono::DateTime<chrono::Utc>> {
+    chrono::DateTime::parse_from_rfc3339(s)
+        .map(|t| t.with_timezone(&chrono::Utc))
+        .map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
+        })
+}
+
+/// A JSON column, read and written through serde.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Json<T>(pub T);
+
+impl<T: Serialize> ToSql for Json<T> {
+    fn to_sql(&self) -> Result<ToSqlOutput<'_>> {
+        serde_json::to_string(&self.0)
+            .map(ToSqlOutput::from)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
+    }
+}
+
+impl<T: serde::de::DeserializeOwned> FromSql for Json<T> {
+    fn column_result(v: ValueRef<'_>) -> FromSqlResult<Self> {
+        let bytes = match v {
+            ValueRef::Text(b) | ValueRef::Blob(b) => b,
+            _ => return Err(FromSqlError::InvalidType),
+        };
+        serde_json::from_slice(bytes)
+            .map(Json)
+            .map_err(FromSqlError::other)
     }
 }
 
@@ -139,27 +270,34 @@ pub fn id_list(ids: &[Uuid]) -> String {
     .unwrap_or_else(|_| "[]".into())
 }
 
-pub async fn active_account(db: &Db) -> sqlx::Result<Option<(String, String)>> {
-    sqlx::query_as("SELECT username, sealed_password FROM accounts WHERE active")
-        .fetch_optional(&db.read)
-        .await
+pub async fn active_account(db: &Db) -> Result<Option<(String, String)>> {
+    db.run(|c| {
+        c.query_row(
+            "SELECT username, sealed_password FROM accounts WHERE active",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+    })
+    .await
 }
 
-pub async fn save_account(db: &Db, username: &str, sealed: &str) -> sqlx::Result<()> {
-    let mut tx = db.write.begin().await?;
-    sqlx::query("UPDATE accounts SET active = FALSE WHERE active AND username <> ?1")
-        .bind(username)
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query(
-        concat!("INSERT INTO accounts (username, sealed_password, active) VALUES (?1, ?2, TRUE)
+pub async fn save_account(db: &Db, username: &str, sealed: &str) -> Result<()> {
+    let (username, sealed) = (username.to_string(), sealed.to_string());
+    db.run(move |c| {
+        let tx = c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        tx.execute(
+            "UPDATE accounts SET active = FALSE WHERE active AND username <> ?1",
+            params![username],
+        )?;
+        tx.execute(
+            concat!("INSERT INTO accounts (username, sealed_password, active) VALUES (?1, ?2, TRUE)
          ON CONFLICT (username) DO UPDATE SET sealed_password = EXCLUDED.sealed_password, active = TRUE, updated_at = ", now!(), ""),
-    )
-    .bind(username)
-    .bind(sealed)
-    .execute(&mut *tx)
-    .await?;
-    tx.commit().await
+            params![username, sealed],
+        )?;
+        tx.commit()
+    })
+    .await
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -203,7 +341,7 @@ impl From<crate::folders::Folder> for Alternate {
     }
 }
 
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Debug, Clone)]
 pub struct Job {
     pub id: Uuid,
     pub account: String,
@@ -224,7 +362,30 @@ pub struct Job {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-#[derive(Debug, Clone, sqlx::FromRow)]
+impl Job {
+    pub fn from_row(r: &rusqlite::Row<'_>) -> Result<Self> {
+        Ok(Self {
+            id: r.get("id")?,
+            account: r.get("account")?,
+            title: r.get("title")?,
+            source: r.get("source")?,
+            alternates: r.get("alternates")?,
+            status: r.get("status")?,
+            error: r.get("error")?,
+            import_log: r.get("import_log")?,
+            candidates: r.get("candidates")?,
+            library_path: r.get("library_path")?,
+            analysis: r.get("analysis")?,
+            approved: r.get("approved")?,
+            as_is_blocker: r.get("as_is_blocker")?,
+            replaces: r.get("replaces")?,
+            created_at: ts_from(&r.get::<_, String>("created_at")?)?,
+            updated_at: ts_from(&r.get::<_, String>("updated_at")?)?,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct JobFile {
     pub job_id: Uuid,
     pub peer: String,
@@ -235,36 +396,50 @@ pub struct JobFile {
     pub error: Option<String>,
 }
 
-pub async fn insert_job(db: &Db, job: &Job, files: &[JobFile]) -> sqlx::Result<()> {
-    let mut tx = db.write.begin().await?;
-    sqlx::query("INSERT INTO jobs (id, account, title, source, alternates, status) VALUES (?1, ?2, ?3, ?4, ?5, ?6)")
-        .bind(job.id)
-        .bind(&job.account)
-        .bind(&job.title)
-        .bind(&job.source)
-        .bind(&job.alternates)
-        .bind(&job.status)
-        .execute(&mut *tx)
-        .await?;
-    for f in files {
-        sqlx::query("INSERT INTO job_files (job_id, peer, remote, size, subdir) VALUES (?1, ?2, ?3, ?4, ?5)")
-            .bind(f.job_id)
-            .bind(&f.peer)
-            .bind(&f.remote)
-            .bind(f.size)
-            .bind(&f.subdir)
-            .execute(&mut *tx)
-            .await?;
+impl JobFile {
+    pub fn from_row(r: &rusqlite::Row<'_>) -> Result<Self> {
+        Ok(Self {
+            job_id: r.get("job_id")?,
+            peer: r.get("peer")?,
+            remote: r.get("remote")?,
+            size: r.get("size")?,
+            subdir: r.get("subdir")?,
+            state: r.get("state")?,
+            error: r.get("error")?,
+        })
     }
-    tx.commit().await
 }
 
-pub async fn set_replaces(db: &Db, id: Uuid) -> sqlx::Result<()> {
-    sqlx::query("UPDATE jobs SET replaces = true WHERE id = ?1")
-        .bind(id)
-        .execute(&db.write)
-        .await?;
+fn insert_files(c: &Connection, files: &[JobFile]) -> Result<()> {
+    let mut s = c.prepare_cached(
+        "INSERT INTO job_files (job_id, peer, remote, size, subdir) VALUES (?1, ?2, ?3, ?4, ?5)",
+    )?;
+    for f in files {
+        s.execute(params![f.job_id, f.peer, f.remote, f.size, f.subdir])?;
+    }
     Ok(())
+}
+
+pub async fn insert_job(db: &Db, job: &Job, files: &[JobFile]) -> Result<()> {
+    let (job, files) = (job.clone(), files.to_vec());
+    db.run(move |c| {
+        let tx = c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        tx.execute(
+            "INSERT INTO jobs (id, account, title, source, alternates, status) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![job.id, job.account, job.title, job.source, job.alternates, job.status],
+        )?;
+        insert_files(&tx, &files)?;
+        tx.commit()
+    })
+    .await
+}
+
+pub async fn set_replaces(db: &Db, id: Uuid) -> Result<()> {
+    db.run(move |c| {
+        c.execute("UPDATE jobs SET replaces = true WHERE id = ?1", params![id])?;
+        Ok(())
+    })
+    .await
 }
 
 pub async fn replace_files(
@@ -273,69 +448,79 @@ pub async fn replace_files(
     source: &Source,
     alternates: &[Alternate],
     files: &[JobFile],
-) -> sqlx::Result<()> {
-    let mut tx = db.write.begin().await?;
-    sqlx::query("DELETE FROM job_files WHERE job_id = ?1")
-        .bind(job)
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query(concat!("UPDATE jobs SET source = ?2, alternates = ?3, status = 'downloading', error = NULL, updated_at = ", now!(), " WHERE id = ?1"))
-        .bind(job)
-        .bind(Json(source))
-        .bind(Json(alternates))
-        .execute(&mut *tx)
-        .await?;
-    for f in files {
-        sqlx::query("INSERT INTO job_files (job_id, peer, remote, size, subdir) VALUES (?1, ?2, ?3, ?4, ?5)")
-            .bind(f.job_id)
-            .bind(&f.peer)
-            .bind(&f.remote)
-            .bind(f.size)
-            .bind(&f.subdir)
-            .execute(&mut *tx)
-            .await?;
-    }
-    tx.commit().await
-}
-
-pub async fn jobs(db: &Db, status: Option<&str>, limit: i64) -> sqlx::Result<Vec<Job>> {
-    match status {
-        Some(status) => sqlx::query_as(JOBS_OF_STATUS).bind(status).bind(limit),
-        None => sqlx::query_as(JOBS).bind(limit),
-    }
-    .fetch_all(&db.read)
+) -> Result<()> {
+    let (source, alternates, files) = (source.clone(), alternates.to_vec(), files.to_vec());
+    db.run(move |c| {
+        let tx = c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        tx.execute("DELETE FROM job_files WHERE job_id = ?1", params![job])?;
+        tx.execute(
+            concat!("UPDATE jobs SET source = ?2, alternates = ?3, status = 'downloading', error = NULL, updated_at = ", now!(), " WHERE id = ?1"),
+            params![job, Json(&source), Json(&alternates)],
+        )?;
+        insert_files(&tx, &files)?;
+        tx.commit()
+    })
     .await
 }
 
-pub async fn job(db: &Db, id: Uuid) -> sqlx::Result<Option<Job>> {
-    sqlx::query_as("SELECT * FROM jobs WHERE id = ?1")
-        .bind(id)
-        .fetch_optional(&db.read)
-        .await
+pub async fn jobs(db: &Db, status: Option<&str>, limit: i64) -> Result<Vec<Job>> {
+    let status = status.map(str::to_string);
+    db.run(move |c| match status {
+        Some(status) => c
+            .prepare_cached(JOBS_OF_STATUS)?
+            .query_map(params![status, limit], Job::from_row)?
+            .collect(),
+        None => c
+            .prepare_cached(JOBS)?
+            .query_map(params![limit], Job::from_row)?
+            .collect(),
+    })
+    .await
+}
+
+pub async fn job(db: &Db, id: Uuid) -> Result<Option<Job>> {
+    db.run(move |c| {
+        c.prepare_cached("SELECT * FROM jobs WHERE id = ?1")?
+            .query_row(params![id], Job::from_row)
+            .optional()
+    })
+    .await
 }
 
 /// The newest job a grab for `query` made in the last day, unless it failed:
 /// asking again for what is already on its way is the same request.
-pub async fn live_grab(db: &Db, query: &str) -> sqlx::Result<Option<Job>> {
-    sqlx::query_as(LIVE_GRAB)
-        .bind(query.trim())
-        .bind(chrono::Utc::now() - chrono::Duration::days(1))
-        .fetch_optional(&db.read)
-        .await
+pub async fn live_grab(db: &Db, query: &str) -> Result<Option<Job>> {
+    let query = query.trim().to_string();
+    let since = ts(&(chrono::Utc::now() - chrono::Duration::days(1)));
+    db.run(move |c| {
+        c.prepare_cached(LIVE_GRAB)?
+            .query_row(params![query, since], Job::from_row)
+            .optional()
+    })
+    .await
 }
 
-pub async fn job_files(db: &Db, id: Uuid) -> sqlx::Result<Vec<JobFile>> {
-    sqlx::query_as(JOB_FILES).bind(id).fetch_all(&db.read).await
+pub async fn job_files(db: &Db, id: Uuid) -> Result<Vec<JobFile>> {
+    db.run(move |c| {
+        c.prepare_cached(JOB_FILES)?
+            .query_map(params![id], JobFile::from_row)?
+            .collect()
+    })
+    .await
 }
 
 /// The files of every job in `ids`, by job, in one query.
 pub async fn files_of_jobs(
     db: &Db,
     ids: &[Uuid],
-) -> sqlx::Result<std::collections::HashMap<Uuid, Vec<JobFile>>> {
-    let rows: Vec<JobFile> = sqlx::query_as(FILES_OF_JOBS)
-        .bind(id_list(ids))
-        .fetch_all(&db.read)
+) -> Result<std::collections::HashMap<Uuid, Vec<JobFile>>> {
+    let ids = id_list(ids);
+    let rows: Vec<JobFile> = db
+        .run(move |c| {
+            c.prepare_cached(FILES_OF_JOBS)?
+                .query_map(params![ids], JobFile::from_row)?
+                .collect()
+        })
         .await?;
     let mut by_job: std::collections::HashMap<Uuid, Vec<JobFile>> = Default::default();
     for f in rows {
@@ -344,31 +529,36 @@ pub async fn files_of_jobs(
     Ok(by_job)
 }
 
-pub async fn set_status(db: &Db, id: Uuid, status: &str, error: Option<&str>) -> sqlx::Result<()> {
-    sqlx::query(concat!(
-        "UPDATE jobs SET status = ?2, error = ?3, updated_at = ",
-        now!(),
-        " WHERE id = ?1"
-    ))
-    .bind(id)
-    .bind(status)
-    .bind(error)
-    .execute(&db.write)
+pub async fn set_status(db: &Db, id: Uuid, status: &str, error: Option<&str>) -> Result<()> {
+    let (status, error) = (status.to_string(), error.map(str::to_string));
+    db.run(move |c| {
+        c.execute(
+            concat!(
+                "UPDATE jobs SET status = ?2, error = ?3, updated_at = ",
+                now!(),
+                " WHERE id = ?1"
+            ),
+            params![id, status, error],
+        )?;
+        Ok(())
+    })
     .await
-    .map(|_| ())
 }
 
-pub async fn set_import_log(db: &Db, id: Uuid, log: &str) -> sqlx::Result<()> {
-    sqlx::query(concat!(
-        "UPDATE jobs SET import_log = ?2, updated_at = ",
-        now!(),
-        " WHERE id = ?1"
-    ))
-    .bind(id)
-    .bind(log)
-    .execute(&db.write)
+pub async fn set_import_log(db: &Db, id: Uuid, log: &str) -> Result<()> {
+    let log = log.to_string();
+    db.run(move |c| {
+        c.execute(
+            concat!(
+                "UPDATE jobs SET import_log = ?2, updated_at = ",
+                now!(),
+                " WHERE id = ?1"
+            ),
+            params![id, log],
+        )?;
+        Ok(())
+    })
     .await
-    .map(|_| ())
 }
 
 pub async fn set_file_state(
@@ -378,79 +568,76 @@ pub async fn set_file_state(
     remote: &[u8],
     state: &str,
     error: Option<&str>,
-) -> sqlx::Result<()> {
+) -> Result<()> {
+    let (peer, remote, state, error) = (
+        peer.to_string(),
+        remote.to_vec(),
+        state.to_string(),
+        error.map(str::to_string),
+    );
     // A file's bytes count toward the lifetime total once, on the way into
-    // completed. The writer is one connection, so nothing changes the row
-    // between reading and updating it.
-    let mut tx = db.write.begin().await?;
-    let prev: Option<(String, i64)> = sqlx::query_as(FILE_STATE)
-        .bind(id)
-        .bind(peer)
-        .bind(remote)
-        .fetch_optional(&mut *tx)
-        .await?;
-    sqlx::query(
-        "UPDATE job_files SET state = ?4, error = ?5 WHERE job_id = ?1 AND peer = ?2 AND remote = ?3",
-    )
-    .bind(id)
-    .bind(peer)
-    .bind(remote)
-    .bind(state)
-    .bind(error)
-    .execute(&mut *tx)
-    .await?;
-    if let Some((was, size)) = prev
-        && state == "completed"
-        && was != "completed"
-    {
-        add_total(&mut tx, "downloaded_bytes", size).await?;
-    }
-    tx.commit().await
+    // completed. The transaction holds the write lock from its start, so
+    // nothing changes the row between reading and updating it.
+    db.run(move |c| {
+        let tx = c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let prev: Option<(String, i64)> = tx
+            .prepare_cached(FILE_STATE)?
+            .query_row(params![id, peer, remote], |r| Ok((r.get(0)?, r.get(1)?)))
+            .optional()?;
+        tx.execute(
+            "UPDATE job_files SET state = ?4, error = ?5 WHERE job_id = ?1 AND peer = ?2 AND remote = ?3",
+            params![id, peer, remote, state, error],
+        )?;
+        if let Some((was, size)) = prev
+            && state == "completed"
+            && was != "completed"
+        {
+            add_total(&tx, "downloaded_bytes", size)?;
+        }
+        tx.commit()
+    })
+    .await
 }
 
-async fn add_total(
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-    name: &str,
-    by: i64,
-) -> sqlx::Result<()> {
-    sqlx::query(
+fn add_total(c: &Connection, name: &str, by: i64) -> Result<()> {
+    c.prepare_cached(
         "INSERT INTO totals (name, value) VALUES (?1, ?2) \
          ON CONFLICT (name) DO UPDATE SET value = value + excluded.value",
-    )
-    .bind(name)
-    .bind(by)
-    .execute(&mut **tx)
+    )?
+    .execute(params![name, by])?;
+    Ok(())
+}
+
+pub async fn delete_job(db: &Db, id: Uuid) -> Result<()> {
+    db.run(move |c| {
+        c.execute("DELETE FROM jobs WHERE id = ?1", params![id])?;
+        Ok(())
+    })
     .await
-    .map(|_| ())
 }
 
-pub async fn delete_job(db: &Db, id: Uuid) -> sqlx::Result<()> {
-    sqlx::query("DELETE FROM jobs WHERE id = ?1")
-        .bind(id)
-        .execute(&db.write)
-        .await
-        .map(|_| ())
+pub async fn bans(db: &Db, account: &str) -> Result<Vec<String>> {
+    let account = account.to_string();
+    db.run(move |c| {
+        c.prepare_cached("SELECT username FROM bans WHERE account = ?1 ORDER BY username")?
+            .query_map(params![account], |r| r.get(0))?
+            .collect()
+    })
+    .await
 }
 
-pub async fn bans(db: &Db, account: &str) -> sqlx::Result<Vec<String>> {
-    sqlx::query_scalar("SELECT username FROM bans WHERE account = ?1 ORDER BY username")
-        .bind(account)
-        .fetch_all(&db.read)
-        .await
-}
-
-pub async fn set_ban(db: &Db, account: &str, username: &str, banned: bool) -> sqlx::Result<()> {
+pub async fn set_ban(db: &Db, account: &str, username: &str, banned: bool) -> Result<()> {
     let q = if banned {
         "INSERT INTO bans (account, username) VALUES (?1, ?2) ON CONFLICT DO NOTHING"
     } else {
         "DELETE FROM bans WHERE account = ?1 AND username = ?2"
     };
-    sqlx::query(q)
-        .bind(account)
-        .bind(username)
-        .execute(&db.write)
-        .await
-        .map(|_| ())
+    let (account, username) = (account.to_string(), username.to_string());
+    db.run(move |c| {
+        c.execute(q, params![account, username])?;
+        Ok(())
+    })
+    .await
 }
 
 /// Append an outcome to the job's history. See `0004_events.sql`.
@@ -462,24 +649,34 @@ pub async fn record_event(
     outcome: &str,
     cause: Option<&str>,
     detail: Option<&str>,
-) -> sqlx::Result<()> {
-    sqlx::query(
-        "INSERT INTO job_events (job_id, title, version, outcome, cause, detail, peer) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-    )
-    .bind(job_id)
-    .bind(title)
-    .bind(env!("CARGO_PKG_VERSION"))
-    .bind(outcome)
-    .bind(cause)
-    .bind(detail)
-    .bind(peer)
-    .execute(&db.write)
+) -> Result<()> {
+    let (title, peer, outcome, cause, detail) = (
+        title.to_string(),
+        peer.map(str::to_string),
+        outcome.to_string(),
+        cause.map(str::to_string),
+        detail.map(str::to_string),
+    );
+    db.run(move |c| {
+        c.prepare_cached(
+            "INSERT INTO job_events (job_id, title, version, outcome, cause, detail, peer) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        )?
+        .execute(params![
+            job_id,
+            title,
+            env!("CARGO_PKG_VERSION"),
+            outcome,
+            cause,
+            detail,
+            peer
+        ])?;
+        Ok(())
+    })
     .await
-    .map(|_| ())
 }
 
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Debug, Clone)]
 pub struct JobEvent {
     pub job_id: Uuid,
     pub title: String,
@@ -490,41 +687,64 @@ pub struct JobEvent {
     pub detail: Option<String>,
 }
 
+impl JobEvent {
+    pub fn from_row(r: &rusqlite::Row<'_>) -> Result<Self> {
+        Ok(Self {
+            job_id: r.get("job_id")?,
+            title: r.get("title")?,
+            at: ts_from(&r.get::<_, String>("at")?)?,
+            version: r.get("version")?,
+            outcome: r.get("outcome")?,
+            cause: r.get("cause")?,
+            detail: r.get("detail")?,
+        })
+    }
+}
+
 /// Events with a cause since `since`, newest first.
-pub async fn events_since(
-    db: &Db,
-    since: chrono::DateTime<chrono::Utc>,
-) -> sqlx::Result<Vec<JobEvent>> {
-    sqlx::query_as(EVENTS_SINCE)
-        .bind(since)
-        .fetch_all(&db.read)
-        .await
+pub async fn events_since(db: &Db, since: chrono::DateTime<chrono::Utc>) -> Result<Vec<JobEvent>> {
+    let since = ts(&since);
+    db.run(move |c| {
+        c.prepare_cached(EVENTS_SINCE)?
+            .query_map(params![since], JobEvent::from_row)?
+            .collect()
+    })
+    .await
 }
 
 /// Every event ever recorded, by outcome and cause: monotonic, so it serves
 /// as a counter.
-pub async fn event_counts(db: &Db) -> sqlx::Result<Vec<(String, Option<String>, i64)>> {
-    sqlx::query_as("SELECT outcome, cause, count(*) FROM job_events GROUP BY 1, 2")
-        .fetch_all(&db.read)
-        .await
+pub async fn event_counts(db: &Db) -> Result<Vec<(String, Option<String>, i64)>> {
+    db.run(|c| {
+        c.prepare_cached("SELECT outcome, cause, count(*) FROM job_events GROUP BY 1, 2")?
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect()
+    })
+    .await
 }
 
 /// Peers that stalled a download in the last day. Events from before the
 /// peer was recorded name it through their job's source.
-pub async fn stalled_peers(db: &Db) -> sqlx::Result<Vec<String>> {
-    sqlx::query_scalar(STALLED_PEERS)
-        .bind(chrono::Utc::now() - chrono::Duration::days(1))
-        .fetch_all(&db.read)
-        .await
+pub async fn stalled_peers(db: &Db) -> Result<Vec<String>> {
+    let since = ts(&(chrono::Utc::now() - chrono::Duration::days(1)));
+    db.run(move |c| {
+        c.prepare_cached(STALLED_PEERS)?
+            .query_map(params![since], |r| r.get(0))?
+            .collect()
+    })
+    .await
 }
 
-pub async fn set_imported(db: &Db, id: Uuid, path: &str) -> sqlx::Result<()> {
-    sqlx::query(concat!("UPDATE jobs SET status = 'imported', library_path = ?2, error = NULL, candidates = NULL, updated_at = ", now!(), " WHERE id = ?1"))
-        .bind(id)
-        .bind(path)
-        .execute(&db.write)
-        .await
-        .map(|_| ())
+pub async fn set_imported(db: &Db, id: Uuid, path: &str) -> Result<()> {
+    let path = path.to_string();
+    db.run(move |c| {
+        c.execute(
+            concat!("UPDATE jobs SET status = 'imported', library_path = ?2, error = NULL, candidates = NULL, updated_at = ", now!(), " WHERE id = ?1"),
+            params![id, path],
+        )?;
+        Ok(())
+    })
+    .await
 }
 
 pub async fn set_review(
@@ -532,90 +752,113 @@ pub async fn set_review(
     id: Uuid,
     reason: &str,
     candidates: &[sift::Candidate],
-) -> sqlx::Result<()> {
-    sqlx::query(concat!(
-        "UPDATE jobs SET status = 'review', error = ?2, candidates = ?3, updated_at = ",
-        now!(),
-        " WHERE id = ?1"
-    ))
-    .bind(id)
-    .bind(reason)
-    .bind(Json(candidates))
-    .execute(&db.write)
+) -> Result<()> {
+    let (reason, candidates) = (reason.to_string(), Json(candidates.to_vec()));
+    db.run(move |c| {
+        c.execute(
+            concat!(
+                "UPDATE jobs SET status = 'review', error = ?2, candidates = ?3, updated_at = ",
+                now!(),
+                " WHERE id = ?1"
+            ),
+            params![id, reason, candidates],
+        )?;
+        Ok(())
+    })
     .await
-    .map(|_| ())
 }
 
 pub async fn set_analysis(
     db: &Db,
     id: Uuid,
     analysis: &[crate::analysis::TrackAnalysis],
-) -> sqlx::Result<()> {
-    sqlx::query(concat!(
-        "UPDATE jobs SET analysis = ?2, updated_at = ",
-        now!(),
-        " WHERE id = ?1"
-    ))
-    .bind(id)
-    .bind(Json(analysis))
-    .execute(&db.write)
+) -> Result<()> {
+    let analysis = Json(analysis.to_vec());
+    db.run(move |c| {
+        c.execute(
+            concat!(
+                "UPDATE jobs SET analysis = ?2, updated_at = ",
+                now!(),
+                " WHERE id = ?1"
+            ),
+            params![id, analysis],
+        )?;
+        Ok(())
+    })
     .await
-    .map(|_| ())
 }
 
 /// Move a job to `importing` if it is waiting on a decision. One statement,
 /// so two requests for the same job cannot both succeed.
-pub async fn claim_import(db: &Db, id: Uuid) -> sqlx::Result<bool> {
-    sqlx::query(concat!(
-        "UPDATE jobs SET status = 'importing', error = NULL, updated_at = ",
-        now!(),
-        " \
-         WHERE id = ?1 AND status IN ('review', 'suspect', 'failed') RETURNING id"
-    ))
-    .bind(id)
-    .fetch_optional(&db.write)
+pub async fn claim_import(db: &Db, id: Uuid) -> Result<bool> {
+    db.run(move |c| {
+        Ok(c.query_row(
+            concat!(
+                "UPDATE jobs SET status = 'importing', error = NULL, updated_at = ",
+                now!(),
+                " \
+                 WHERE id = ?1 AND status IN ('review', 'suspect', 'failed') RETURNING id"
+            ),
+            params![id],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
+    })
     .await
-    .map(|row| row.is_some())
 }
 
 /// Move a job from one of `from` to `to`, in one statement, so a job that
 /// has moved on meanwhile is left alone. Whether it moved.
-pub async fn move_status(db: &Db, id: Uuid, from: &[&str], to: &str) -> sqlx::Result<bool> {
-    sqlx::query(concat!(
-        "UPDATE jobs SET status = ?2, updated_at = ",
-        now!(),
-        " WHERE id = ?1 AND status IN (SELECT value FROM json_each(?3)) RETURNING id"
-    ))
-    .bind(id)
-    .bind(to)
-    .bind(serde_json::to_string(from).unwrap_or_default())
-    .fetch_optional(&db.write)
+pub async fn move_status(db: &Db, id: Uuid, from: &[&str], to: &str) -> Result<bool> {
+    let (from, to) = (
+        serde_json::to_string(from).unwrap_or_default(),
+        to.to_string(),
+    );
+    db.run(move |c| {
+        Ok(c.query_row(
+            concat!(
+                "UPDATE jobs SET status = ?2, updated_at = ",
+                now!(),
+                " WHERE id = ?1 AND status IN (SELECT value FROM json_each(?3)) RETURNING id"
+            ),
+            params![id, to, from],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
+    })
     .await
-    .map(|row| row.is_some())
 }
 
-pub async fn set_as_is_blocker(db: &Db, id: Uuid, blocker: &str) -> sqlx::Result<()> {
-    sqlx::query("UPDATE jobs SET as_is_blocker = ?2 WHERE id = ?1")
-        .bind(id)
-        .bind(blocker)
-        .execute(&db.write)
-        .await
-        .map(|_| ())
-}
-
-pub async fn set_approved(db: &Db, id: Uuid) -> sqlx::Result<()> {
-    sqlx::query(concat!(
-        "UPDATE jobs SET approved = TRUE, updated_at = ",
-        now!(),
-        " WHERE id = ?1"
-    ))
-    .bind(id)
-    .execute(&db.write)
+pub async fn set_as_is_blocker(db: &Db, id: Uuid, blocker: &str) -> Result<()> {
+    let blocker = blocker.to_string();
+    db.run(move |c| {
+        c.execute(
+            "UPDATE jobs SET as_is_blocker = ?2 WHERE id = ?1",
+            params![id, blocker],
+        )?;
+        Ok(())
+    })
     .await
-    .map(|_| ())
 }
 
-#[derive(sqlx::FromRow, Clone)]
+pub async fn set_approved(db: &Db, id: Uuid) -> Result<()> {
+    db.run(move |c| {
+        c.execute(
+            concat!(
+                "UPDATE jobs SET approved = TRUE, updated_at = ",
+                now!(),
+                " WHERE id = ?1"
+            ),
+            params![id],
+        )?;
+        Ok(())
+    })
+    .await
+}
+
+#[derive(Clone)]
 pub struct UploadRow {
     pub username: String,
     pub filename: String,
@@ -626,97 +869,124 @@ pub struct UploadRow {
     pub finished_at: chrono::DateTime<chrono::Utc>,
 }
 
+impl UploadRow {
+    pub fn from_row(r: &rusqlite::Row<'_>) -> Result<Self> {
+        Ok(Self {
+            username: r.get("username")?,
+            filename: r.get("filename")?,
+            size: r.get("size")?,
+            bytes: r.get("bytes")?,
+            state: r.get("state")?,
+            seconds: r.get("seconds")?,
+            finished_at: ts_from(&r.get::<_, String>("finished_at")?)?,
+        })
+    }
+}
+
 /// A finished upload, with how long it was seen sending when known.
 pub async fn record_upload(
     db: &Db,
     t: &slsk_engine::TransferView,
     seconds: Option<f64>,
-) -> sqlx::Result<()> {
-    let mut tx = db.write.begin().await?;
-    sqlx::query(
-        "INSERT INTO uploads (username, filename, size, bytes, state, error, seconds) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-    )
-    .bind(&t.username)
-    .bind(t.filename.to_string_lossy())
-    .bind(t.size as i64)
-    .bind(t.bytes as i64)
-    .bind(t.state)
-    .bind(t.error.as_deref())
-    .bind(seconds)
-    .execute(&mut *tx)
-    .await?;
-    add_total(&mut tx, "uploaded_bytes", t.bytes as i64).await?;
-    add_total(&mut tx, &format!("uploads_{}", t.state), 1).await?;
-    if t.state == "completed" {
-        sqlx::query(concat!(
-            "INSERT INTO served_users (username, first_served, last_served, uploads, bytes) \
-             VALUES (lower(?1), ",
-            now!(),
-            ", ",
-            now!(),
-            ", 1, ?2) \
-             ON CONFLICT (username) DO UPDATE SET last_served = ",
-            now!(),
-            ", \
-                 uploads = served_users.uploads + 1, bytes = served_users.bytes + EXCLUDED.bytes"
-        ))
-        .bind(&t.username)
-        .bind(t.bytes as i64)
-        .execute(&mut *tx)
-        .await?;
-    }
-    tx.commit().await
+) -> Result<()> {
+    let (username, filename, size, bytes, state, error) = (
+        t.username.clone(),
+        t.filename.to_string_lossy(),
+        t.size as i64,
+        t.bytes as i64,
+        t.state,
+        t.error.clone(),
+    );
+    db.run(move |c| {
+        let tx = c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        tx.prepare_cached(
+            "INSERT INTO uploads (username, filename, size, bytes, state, error, seconds) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        )?
+        .execute(params![username, filename, size, bytes, state, error, seconds])?;
+        add_total(&tx, "uploaded_bytes", bytes)?;
+        add_total(&tx, &format!("uploads_{state}"), 1)?;
+        if state == "completed" {
+            tx.prepare_cached(concat!(
+                "INSERT INTO served_users (username, first_served, last_served, uploads, bytes) \
+                 VALUES (lower(?1), ",
+                now!(),
+                ", ",
+                now!(),
+                ", 1, ?2) \
+                 ON CONFLICT (username) DO UPDATE SET last_served = ",
+                now!(),
+                ", \
+                     uploads = served_users.uploads + 1, bytes = served_users.bytes + EXCLUDED.bytes"
+            ))?
+            .execute(params![username, bytes])?;
+        }
+        tx.commit()
+    })
+    .await
 }
 
-pub async fn recent_uploads(db: &Db, limit: i64) -> sqlx::Result<Vec<UploadRow>> {
-    sqlx::query_as(RECENT_UPLOADS)
-        .bind(limit)
-        .fetch_all(&db.read)
-        .await
+pub async fn recent_uploads(db: &Db, limit: i64) -> Result<Vec<UploadRow>> {
+    db.run(move |c| {
+        c.prepare_cached(RECENT_UPLOADS)?
+            .query_map(params![limit], UploadRow::from_row)?
+            .collect()
+    })
+    .await
 }
 
 /// Completed uploads since `since`: how many, and how many bytes.
-pub async fn upload_totals(
-    db: &Db,
-    since: chrono::DateTime<chrono::Utc>,
-) -> sqlx::Result<(i64, i64)> {
-    sqlx::query_as(UPLOAD_TOTALS)
-        .bind(since)
-        .fetch_one(&db.read)
-        .await
+pub async fn upload_totals(db: &Db, since: chrono::DateTime<chrono::Utc>) -> Result<(i64, i64)> {
+    let since = ts(&since);
+    db.run(move |c| {
+        c.prepare_cached(UPLOAD_TOTALS)?
+            .query_row(params![since], |r| Ok((r.get(0)?, r.get(1)?)))
+    })
+    .await
 }
 
 /// History older than `days` goes; it is for looking back weeks, not years.
-pub async fn prune_uploads(db: &Db, days: i32) -> sqlx::Result<u64> {
-    Ok(sqlx::query("DELETE FROM uploads WHERE finished_at < ?1")
-        .bind(chrono::Utc::now() - chrono::Duration::days(i64::from(days)))
-        .execute(&db.write)
-        .await?
-        .rows_affected())
+pub async fn prune_uploads(db: &Db, days: i32) -> Result<u64> {
+    let before = ts(&(chrono::Utc::now() - chrono::Duration::days(i64::from(days))));
+    db.run(move |c| {
+        Ok(c.execute(
+            "DELETE FROM uploads WHERE finished_at < ?1",
+            params![before],
+        )? as u64)
+    })
+    .await
 }
 
 /// Lifetime totals by name: `uploaded_bytes`, `downloaded_bytes`, and
 /// `uploads_<state>`.
-pub async fn totals(db: &Db) -> sqlx::Result<Vec<(String, i64)>> {
-    sqlx::query_as("SELECT name, value FROM totals ORDER BY name")
-        .fetch_all(&db.read)
-        .await
+pub async fn totals(db: &Db) -> Result<Vec<(String, i64)>> {
+    db.run(|c| {
+        c.prepare_cached("SELECT name, value FROM totals ORDER BY name")?
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect()
+    })
+    .await
 }
 
 /// Distinct users an upload has finished to: in the last day, the last week,
 /// and ever.
-pub async fn served_user_counts(db: &Db) -> sqlx::Result<(i64, i64, i64)> {
-    sqlx::query_as(
-        "SELECT \
-             COUNT(*) FILTER (WHERE last_served >= ?1), \
-             COUNT(*) FILTER (WHERE last_served >= ?2), \
-             COUNT(*) \
-         FROM served_users",
-    )
-    .bind(chrono::Utc::now() - chrono::Duration::days(1))
-    .bind(chrono::Utc::now() - chrono::Duration::days(7))
-    .fetch_one(&db.read)
+pub async fn served_user_counts(db: &Db) -> Result<(i64, i64, i64)> {
+    let now = chrono::Utc::now();
+    let (day, week) = (
+        ts(&(now - chrono::Duration::days(1))),
+        ts(&(now - chrono::Duration::days(7))),
+    );
+    db.run(move |c| {
+        c.query_row(
+            "SELECT \
+                 COUNT(*) FILTER (WHERE last_served >= ?1), \
+                 COUNT(*) FILTER (WHERE last_served >= ?2), \
+                 COUNT(*) \
+             FROM served_users",
+            params![day, week],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+    })
     .await
 }
 
@@ -748,15 +1018,15 @@ mod tests {
             crate::auth::session::SESSION,
         ];
         for sql in hot {
-            use sqlx::Row;
-            let plan: Vec<String> =
-                sqlx::query(sqlx::AssertSqlSafe(format!("EXPLAIN QUERY PLAN {sql}")))
-                    .fetch_all(&db.read)
-                    .await
-                    .unwrap()
-                    .iter()
-                    .map(|r| r.get("detail"))
-                    .collect();
+            let plan: Vec<String> = db
+                .run(move |c| {
+                    let mut s = c.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
+                    let nulls = std::iter::repeat_n(rusqlite::types::Null, s.parameter_count());
+                    s.query_map(rusqlite::params_from_iter(nulls), |r| r.get("detail"))?
+                        .collect()
+                })
+                .await
+                .unwrap();
             // `SCAN t` alone reads every row; `SCAN t USING INDEX` walks an
             // index in order and stops at the LIMIT.
             let scans: Vec<_> = plan
@@ -851,9 +1121,8 @@ mod tests {
         let found = live_grab(&db, "burial untrue").await.unwrap().unwrap();
         assert_eq!(found.id, j.id);
         assert!((chrono::Utc::now() - found.created_at).num_seconds() < 5);
-        sqlx::query("UPDATE jobs SET created_at = ?1")
-            .bind(chrono::Utc::now() - chrono::Duration::hours(25))
-            .execute(&db.write)
+        let old = ts(&(chrono::Utc::now() - chrono::Duration::hours(25)));
+        db.run(move |c| c.execute("UPDATE jobs SET created_at = ?1", params![old]))
             .await
             .unwrap();
         assert!(live_grab(&db, "burial untrue").await.unwrap().is_none());
@@ -879,30 +1148,34 @@ mod tests {
     #[tokio::test]
     async fn conversations_show_the_latest_message_and_unread_count() {
         let db = Db::memory().await;
-        for (peer, out, body, at) in [
-            ("ann", false, "first", "2026-10-01T10:00:00+00:00"),
-            ("ann", false, "second", "2026-10-01T11:00:00.5+00:00"),
-            ("ann", true, "reply", "2026-10-01T11:00:00+00:00"),
-            ("bob", true, "hello", "2026-10-01T09:00:00+00:00"),
-        ] {
-            sqlx::query("INSERT INTO messages (account, peer, outgoing, body, at) VALUES ('me', ?1, ?2, ?3, ?4)")
-                .bind(peer)
-                .bind(out)
-                .bind(body)
-                .bind(at)
-                .execute(&db.write)
-                .await
-                .unwrap();
-        }
-        let rows: Vec<(String, String, bool, chrono::DateTime<chrono::Utc>, i64)> =
-            sqlx::query_as(crate::social::CONVERSATIONS)
-                .bind("me")
-                .fetch_all(&db.read)
-                .await
-                .unwrap();
+        let rows = db
+            .run(|c| {
+                for (peer, out, body, at) in [
+                    ("ann", false, "first", "2026-10-01T10:00:00+00:00"),
+                    ("ann", false, "second", "2026-10-01T11:00:00.5+00:00"),
+                    ("ann", true, "reply", "2026-10-01T11:00:00+00:00"),
+                    ("bob", true, "hello", "2026-10-01T09:00:00+00:00"),
+                ] {
+                    c.execute(
+                        "INSERT INTO messages (account, peer, outgoing, body, at) VALUES ('me', ?1, ?2, ?3, ?4)",
+                        params![peer, out, body, at],
+                    )?;
+                }
+                c.prepare(crate::social::CONVERSATIONS)?
+                    .query_map(params!["me"], |r| {
+                        Ok((
+                            r.get::<_, String>(0)?,
+                            r.get::<_, String>(1)?,
+                            r.get::<_, i64>(4)?,
+                        ))
+                    })?
+                    .collect::<Result<Vec<_>>>()
+            })
+            .await
+            .unwrap();
         let view: Vec<_> = rows
             .iter()
-            .map(|r| (r.0.as_str(), r.1.as_str(), r.4))
+            .map(|r| (r.0.as_str(), r.1.as_str(), r.2))
             .collect();
         assert_eq!(view, [("ann", "second", 2), ("bob", "hello", 0)]);
     }
@@ -914,18 +1187,37 @@ mod tests {
         let j = job("a", "downloading");
         insert_job(&db, &j, &[]).await.unwrap();
         assert_eq!(super::job(&db, j.id).await.unwrap().unwrap().title, "a");
-        assert!(
-            sqlx::query("DELETE FROM jobs")
-                .execute(&db.read)
-                .await
-                .is_err(),
-            "readers are read-only"
-        );
-        let mode: String = sqlx::query_scalar("PRAGMA journal_mode")
-            .fetch_one(&db.read)
+        let mode: String = db
+            .run(|c| c.query_row("PRAGMA journal_mode", [], |r| r.get(0)))
             .await
             .unwrap();
         assert_eq!(mode, "wal");
+        drop(db);
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+        }
+    }
+
+    /// A database sqlx migrated keeps its schema: its recorded migrations
+    /// count as applied rather than running again over existing tables.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_database_migrated_by_sqlx_opens_as_is() {
+        let path = std::env::temp_dir().join(format!("slsk-{}.db", Uuid::new_v4()));
+        {
+            let c = Connection::open(&path).unwrap();
+            c.execute_batch(MIGRATIONS[0]).unwrap();
+            c.execute_batch(
+                "CREATE TABLE _sqlx_migrations (version BIGINT PRIMARY KEY, success BOOLEAN NOT NULL); \
+                 INSERT INTO _sqlx_migrations VALUES (1, TRUE);",
+            )
+            .unwrap();
+        }
+        let db = Db::open(&path).await.unwrap();
+        let version: i64 = db
+            .run(|c| c.query_row("PRAGMA user_version", [], |r| r.get(0)))
+            .await
+            .unwrap();
+        assert_eq!(version, MIGRATIONS.len() as i64);
         drop(db);
         for suffix in ["", "-wal", "-shm"] {
             let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));

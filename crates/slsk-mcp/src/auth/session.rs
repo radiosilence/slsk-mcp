@@ -1,7 +1,7 @@
 //! Server-side sessions and login flows, keyed by opaque ids.
 //!
 //! Cookies carry an id and nothing else — no JWT, nothing forgeable, nothing
-//! claim-bearing on the client. Sessions are rows in Postgres, keyed by the
+//! claim-bearing on the client. Sessions are rows in SQLite, keyed by the
 //! id's SHA-256, so a deploy signs no one out and the table alone signs no one
 //! in. A login flow lasts minutes and is used once, so it stays in memory: a
 //! restart mid-login costs one retry.
@@ -13,8 +13,11 @@ use std::time::{Duration, Instant};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use rand::Rng as _;
+use rusqlite::{OptionalExtension, params};
 use sha2::{Digest, Sha256};
 use tokio::sync::RwLock;
+
+use crate::db::ts;
 
 /// A signed-in session that has not expired.
 pub(crate) const SESSION: &str =
@@ -61,33 +64,37 @@ impl Sessions {
         URL_SAFE_NO_PAD.encode(bytes)
     }
 
-    pub async fn create(&self, sub: &str, ttl: Duration) -> sqlx::Result<String> {
+    pub async fn create(&self, sub: &str, ttl: Duration) -> crate::db::Result<String> {
         let id = Self::token();
+        let id_hash = hash(&id);
+        let sub = sub.to_string();
         // Expired rows go on each sign-in; there are too few to need a sweeper.
         let now = chrono::Utc::now();
-        sqlx::query("DELETE FROM ui_sessions WHERE expires_at < ?1")
-            .bind(now)
-            .execute(&self.db.write)
+        self.db
+            .run(move |c| {
+                c.execute("DELETE FROM ui_sessions WHERE expires_at < ?1", [ts(&now)])?;
+                c.execute(
+                    "INSERT INTO ui_sessions (id_hash, sub, expires_at) \
+                     VALUES (?1, ?2, ?3)",
+                    params![id_hash, sub, ts(&(now + ttl))],
+                )
+            })
             .await?;
-        sqlx::query(
-            "INSERT INTO ui_sessions (id_hash, sub, expires_at) \
-             VALUES (?1, ?2, ?3)",
-        )
-        .bind(hash(&id))
-        .bind(sub)
-        .bind(now + ttl)
-        .execute(&self.db.write)
-        .await?;
         Ok(id)
     }
 
     /// `None` for an unknown or expired id, and when the database cannot be
     /// asked: a sign-in page is the safe answer to not knowing.
     pub async fn get(&self, id: &str) -> Option<Session> {
-        sqlx::query_scalar::<_, String>(SESSION)
-            .bind(hash(id))
-            .bind(chrono::Utc::now())
-            .fetch_optional(&self.db.read)
+        let id_hash = hash(id);
+        self.db
+            .run(move |c| {
+                c.prepare_cached(SESSION)?
+                    .query_row(params![id_hash, ts(&chrono::Utc::now())], |r| {
+                        r.get::<_, String>(0)
+                    })
+                    .optional()
+            })
             .await
             .inspect_err(|e| tracing::warn!(error = %e, "session lookup failed"))
             .ok()
@@ -96,9 +103,10 @@ impl Sessions {
     }
 
     pub async fn delete(&self, id: &str) {
-        if let Err(e) = sqlx::query("DELETE FROM ui_sessions WHERE id_hash = ?1")
-            .bind(hash(id))
-            .execute(&self.db.write)
+        let id_hash = hash(id);
+        if let Err(e) = self
+            .db
+            .run(move |c| c.execute("DELETE FROM ui_sessions WHERE id_hash = ?1", [id_hash]))
             .await
         {
             tracing::warn!(error = %e, "session delete failed");
