@@ -1,0 +1,1 @@
+- **Crediting holds up over many albums.** The web UI's enrich reads the library's artists once per run rather than once per album, and an unreadable album is reported instead of ending a `creditArtists` run.
