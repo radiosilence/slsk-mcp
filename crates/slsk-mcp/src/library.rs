@@ -348,9 +348,19 @@ impl Library {
     /// across what the query matches, so it is for a deliberate backfill.
     pub async fn enrich(&self, query: &[String]) -> anyhow::Result<Vec<EnrichedAlbum>> {
         let known = self.known_artists().await?;
+        self.enrich_with(query, &known).await
+    }
+
+    /// [`Self::enrich`] against artists already listed, for a caller
+    /// enriching album by album that should not read the index each time.
+    pub async fn enrich_with(
+        &self,
+        query: &[String],
+        known: &sift::credits::Known,
+    ) -> anyhow::Result<Vec<EnrichedAlbum>> {
         let mut out = Vec::new();
         for a in self.read(query).await? {
-            let e = self.tagger.enrich(&a.dir, &known).await?;
+            let e = self.tagger.enrich(&a.dir, known).await?;
             out.push(EnrichedAlbum {
                 path: a.dir.to_string_lossy().into_owned(),
                 gain_db: e.gain_db,
@@ -372,7 +382,16 @@ impl Library {
         let known = self.known_artists().await?;
         let mut out = Vec::new();
         for a in self.read(query).await? {
-            let c = self.tagger.credit(&a.dir, &known).await?;
+            // One unreadable album (moved since the index last looked, a
+            // corrupt file) is reported and passed over, so a long run
+            // still finishes.
+            let c = match self.tagger.credit(&a.dir, &known).await {
+                Ok(c) => c,
+                Err(e) => sift::Credited {
+                    problems: vec![format!("{e:#}")],
+                    ..Default::default()
+                },
+            };
             if c.files == 0 && c.problems.is_empty() {
                 continue;
             }

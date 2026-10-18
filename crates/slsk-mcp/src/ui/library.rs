@@ -387,8 +387,14 @@ async fn enrich(State(s): State<UiState>, body: Bytes) -> Response {
     }
     let (app, state) = (s.app.clone(), s.enrich.clone());
     tokio::spawn(async move {
-        let albums = match app.library.albums(&query).await {
-            Ok(a) => a,
+        let listed = async {
+            Ok::<_, anyhow::Error>((
+                app.library.albums(&query).await?,
+                app.library.known_artists().await?,
+            ))
+        };
+        let (albums, known) = match listed.await {
+            Ok(l) => l,
             Err(e) => {
                 let mut run = state.lock();
                 run.error = Some(format!("{e:#}"));
@@ -399,7 +405,10 @@ async fn enrich(State(s): State<UiState>, body: Bytes) -> Response {
         state.lock().total = albums.len();
         for a in albums {
             state.lock().current = Some(a.path.clone());
-            let result = app.library.enrich(&by_path([a.path.as_str()])).await;
+            let result = app
+                .library
+                .enrich_with(&by_path([a.path.as_str()]), &known)
+                .await;
             let mut run = state.lock();
             match result {
                 Ok(r) => run.results.extend(r),
