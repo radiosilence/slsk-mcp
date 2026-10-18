@@ -1,0 +1,1 @@
+- **Library tab is one list, every write previewed.** Albums are listed newest import first, filtered by a search, an import date, duplicates or albums the rules file elsewhere; ticked albums are re-filed, credited, enriched, re-imported or have spares binned, each shown album by album before anything changes, then applied in the background.

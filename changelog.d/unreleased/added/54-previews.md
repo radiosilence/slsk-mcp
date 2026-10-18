@@ -1,0 +1,1 @@
+- **Previews over the API.** `binDuplicates`, `refile`, `creditArtists` and `enrichLibrary` take `preview: true` to return what they would write without writing it; `reimportAlbums` matches albums already filed against MusicBrainz again.
