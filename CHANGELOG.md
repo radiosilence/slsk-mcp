@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.0
+
+### Added
+
+- **Previews over the API.** `binDuplicates`, `refile`, `creditArtists` and `enrichLibrary` take `preview: true` to return what they would write without writing it; `reimportAlbums` matches albums already filed against MusicBrainz again.
+
+### Changed
+
+- **Library tab is one list, every write previewed.** Albums are listed newest import first, filtered by a search, an import date, duplicates or albums the rules file elsewhere; ticked albums are re-filed, credited, enriched, re-imported or have spares binned, each shown album by album before anything changes, then applied in the background.
+
+### Fixed
+
+- **Navigation is made of links.** The tabs, the triage period, the folders in a search result or browse listing, and every control that opens a user's shares or a conversation are ordinary links to that place, so they can be opened in a new tab or copied. Triage keeps its period in the address. Folders in a search result path no longer stretch apart with wide gaps before each separator.
+
+### Internal
+
+- **Release script recuts a stale branch.** `scripts/release.sh` deletes a release branch whose PR was closed or merged, locally and on origin, and cuts it again from origin/main; a branch with an open PR still stops it.
+
 ## 0.2.0
 
 ### Added
