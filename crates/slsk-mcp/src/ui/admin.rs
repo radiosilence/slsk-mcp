@@ -268,7 +268,7 @@ struct Days {
 
 async fn triage(State(s): State<UiState>, Query(q): Query<Days>) -> Response {
     let days = q.days.unwrap_or(7).clamp(1, 365);
-    let view = match crate::graphql::triage(&s.app, days, 5).await {
+    let view = match crate::graphql::triage(&s.app, days, usize::MAX).await {
         Ok(causes) => TriageView {
             days,
             causes,

@@ -142,10 +142,6 @@ struct Info {
     free: bool,
 }
 
-/// Folders shown at one level. Every real collection fits; this only bounds
-/// a peer sending an absurd share list.
-const SHOWN: usize = 1_000_000;
-
 #[derive(Template)]
 #[template(path = "browse.html")]
 struct BrowseView {
@@ -153,7 +149,6 @@ struct BrowseView {
     folders: usize,
     crumbs: Vec<Child>,
     children: Vec<Child>,
-    more: usize,
     here_key: String,
     /// Files in this folder and every folder under it.
     tree_files: usize,
@@ -183,9 +178,7 @@ fn quality(f: &slsk_engine::slsk_proto::peer::FileEntry) -> String {
 }
 
 fn render(username: &str, dirs: &[Directory], at: &[u8], info: Option<Info>) -> String {
-    let (mut children, here) = level(dirs, at);
-    let more = children.len().saturating_sub(SHOWN);
-    children.truncate(SHOWN);
+    let (children, here) = level(dirs, at);
     let files = here
         .map(|d| {
             d.files
@@ -209,7 +202,6 @@ fn render(username: &str, dirs: &[Directory], at: &[u8], info: Option<Info>) -> 
         folders: dirs.len(),
         crumbs: crumbs(at),
         children,
-        more,
         here_key: key(at),
         tree_files: albums(dirs, at).values().map(Vec::len).sum(),
         files,
@@ -226,7 +218,6 @@ fn note(username: &str, error: String) -> String {
         folders: 0,
         crumbs: Vec::new(),
         children: Vec::new(),
-        more: 0,
         here_key: String::new(),
         tree_files: 0,
         files: Vec::new(),

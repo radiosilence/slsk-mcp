@@ -45,7 +45,7 @@ pub(crate) const STALLED_PEERS: &str = "SELECT DISTINCT coalesce(e.peer, j.sourc
 
 /// Events with a cause, newest first.
 pub(crate) const EVENTS_SINCE: &str = "SELECT job_id, title, at, version, outcome, cause, detail FROM job_events \
-         WHERE cause IS NOT NULL AND at >= ?1 ORDER BY at DESC LIMIT 5000";
+         WHERE cause IS NOT NULL AND at >= ?1 ORDER BY at DESC";
 
 /// One file's state, before it changes.
 pub(crate) const FILE_STATE: &str =

@@ -25,7 +25,6 @@
     <li><a class="link" href="{{ crate::ui::browse_href(username, c.key) }}" data-indicator="_browsing" data-on:click="evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || (evt.preventDefault(), $_browsing || ($tab = 'browse', @get(el.getAttribute('href'))))">{{ c.name }}</a><span class="meta">{{ c.files }} files</span></li>
   {% endfor %}
   </ul>
-  {% if more > 0 %}<p class="note">and {{ more }} more folders</p>{% endif %}
   {% endif %}
   {% if !files.is_empty() %}
   <form id="browse-files">

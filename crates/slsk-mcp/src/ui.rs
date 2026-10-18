@@ -680,7 +680,7 @@ impl JobsView {
 }
 
 async fn jobs_html(app: &App) -> String {
-    let jobs = match crate::db::jobs(&app.db, None, 40).await {
+    let jobs = match crate::db::jobs(&app.db, None, i64::MAX).await {
         Ok(rows) => graphql::job_views(app, rows).await.unwrap_or_else(|e| {
             tracing::warn!(error = ?e, "could not show jobs");
             Vec::new()
@@ -747,7 +747,6 @@ fn transfers_html(app: &App) -> String {
             .into_iter()
             .filter(|t| !matches!(t.state, "completed" | "cancelled"))
             .rev()
-            .take(100)
             .map(Transfer::from)
             .collect()
     });
@@ -875,7 +874,7 @@ async fn uploads_html(app: &App) -> String {
         .and_hms_opt(0, 0, 0)
         .map(|t| t.and_utc())
         .unwrap_or(now);
-    let history = crate::db::recent_uploads(&app.db, 40)
+    let history = crate::db::recent_uploads(&app.db, i64::MAX)
         .await
         .inspect_err(|e| tracing::warn!(error = %e, "could not read upload history"))
         .unwrap_or_default();
@@ -1019,7 +1018,7 @@ async fn search(State(s): State<UiState>, axum::Form(form): axum::Form<SearchFor
                 responses.push(r);
             }
             let done = tokio::time::Instant::now() >= deadline;
-            let folders = crate::folders::relevant(crate::folders::group(&responses, &filter), &query).into_iter().take(60).collect();
+            let folders = crate::folders::relevant(crate::folders::group(&responses, &filter), &query);
             let view = ResultsView { query: query.clone(), folders, searching: !done, responses: responses.len() };
             yield Ok(patch(&view.render().unwrap_or_default()));
             if done {
