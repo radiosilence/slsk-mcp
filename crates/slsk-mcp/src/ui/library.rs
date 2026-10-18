@@ -832,7 +832,7 @@ enum Body {
         lyrics: Vec<Lyric>,
     },
     Reimport {
-        release: sift::Candidate,
+        release: Box<sift::Candidate>,
         files: Vec<FileChanges>,
         missing: Vec<String>,
         untouched: Vec<String>,
@@ -1121,7 +1121,7 @@ async fn plan_one(
                 p.with = Some(release);
                 let c = &plan.comparison;
                 p.body = Body::Reimport {
-                    release: c.release.clone(),
+                    release: Box::new(c.release.clone()),
                     files: plan
                         .files
                         .into_iter()

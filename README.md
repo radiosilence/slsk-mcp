@@ -271,8 +271,9 @@ filter finds, are re-filed, credited, enriched, re-tagged against their
 closest release, or have their spare copies binned together.
 
 Every write previews first, album by album: each field a re-tag or edit
-changes in each file, as it is and as it would be, and where the file moves;
-each file's move for a re-file; each file's artist credits and whether they
+changes in each file, as it is and as it would be, and where the file moves
+(for a re-tag, also whether the cover is replaced and where the album's other
+files go); each file's move for a re-file; each file's artist credits and whether they
 come from the MusicBrainz release or a split by artists the library already
 holds; the genres and lyrics enriching would add; where each spare would go
 in the bin. Gain is the exception, since measuring it means decoding the
