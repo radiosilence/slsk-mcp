@@ -9,7 +9,7 @@
     {% if kind == "pm" %}
     <form id="thread-peer"><input type="hidden" name="username" value="{{ name }}"></form>
     <div class="actions">
-      <button type="button" class="quiet" data-on:click="$tab = 'browse'; @post('/browse', {contentType: 'form', selector: '#thread-peer'})">Browse shares</button>
+      <a class="button quiet" href="{{ crate::ui::browse_href(name, "") }}" data-on:click="evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || (evt.preventDefault(), $tab = 'browse', @get(el.getAttribute('href')))">Browse shares</a>
       <button type="button" class="quiet" data-indicator="_bud_add" data-attr:disabled="$_bud_add" data-class:busy="$_bud_add" data-on:click="@post('/chat/buddy/add', {contentType: 'form', selector: '#thread-peer'})">Add buddy</button>
     </div>
     {% else %}

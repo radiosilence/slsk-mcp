@@ -264,10 +264,7 @@ fn browse_at(s: UiState, form: &[(String, String)], fresh: bool) -> Response {
     let Ok(at) = URL_SAFE_NO_PAD.decode(&key) else {
         return failed(&anyhow::anyhow!("not a folder key"));
     };
-    let here = super::place(
-        "browse",
-        &super::place_url("/browse", &[("username", &username), ("key", &key)]),
-    );
+    let here = super::place("browse", &super::browse_href(&username, &key));
     let Some(engine) = s.app.session.engine().cloned() else {
         return failed(&anyhow::anyhow!("Sign in to Soulseek first."));
     };
