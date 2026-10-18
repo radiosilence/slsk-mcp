@@ -920,6 +920,9 @@ impl ResultsView {
     fn crumbs(&self, f: &Folder) -> Vec<browse::Child> {
         browse::crumbs(f.remote_path.as_bytes())
     }
+    fn browse_url(&self, f: &Folder, key: &str) -> String {
+        place_url("/browse", &[("username", &f.username), ("key", key)])
+    }
     /// A file's path below the result's folder, which keeps a disc
     /// subfolder's name when discs are grouped into one result.
     fn within(&self, f: &Folder, file: &crate::folders::File) -> String {

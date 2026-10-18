@@ -1,1 +1,0 @@
-- **Search result paths no longer gap.** Each folder in a result path had stretched to fill the row, leaving wide spaces before every separator.
