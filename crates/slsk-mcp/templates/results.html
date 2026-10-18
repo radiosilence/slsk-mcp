@@ -9,7 +9,7 @@
       <button class="primary" data-indicator="_dl_{{ loop.index }}" data-attr:disabled="$_dl_{{ loop.index }}" data-class:busy="$_dl_{{ loop.index }}" data-on:click="@post('/download', {contentType: 'form', selector: '#dl-{{ loop.index }}'})">Download</button>
     </div>
     <div class="meta">
-      <a href="{{ crate::ui::browse_href(f.username, self.key(f)) }}" data-indicator="_browsing" data-on:click__prevent="$tab = 'browse'; @get(el.getAttribute('href'))">{{ f.username }}</a> · {{ f.audio_files }} tracks · {{ self.quality(f) }} · {{ self.size(f.total_size) }} ·
+      <a href="{{ crate::ui::browse_href(f.username, self.key(f).as_str()) }}" data-indicator="_browsing" data-on:click__prevent="$tab = 'browse'; @get(el.getAttribute('href'))">{{ f.username }}</a> · {{ f.audio_files }} tracks · {{ self.quality(f) }} · {{ self.size(f.total_size) }} ·
       {% if f.free_slot %}<span class="ok">free slot</span>{% else %}queue {{ f.queue_length }}{% endif %} · {{ self.size(f.speed as u64) }}/s
     </div>
     <details class="peek" data-ignore-morph>
