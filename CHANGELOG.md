@@ -1,9 +1,18 @@
 # Changelog
 
-## 0.1.69
+## 0.2.0
 
-- **A search result's path is a set of links into that peer's shares.** Each folder in it opens Browse there, so a sibling release or the artist's other albums are one click away. Peers send Windows-style paths; they are shown with `/`.
-- **A search result lists its files under a toggle**, from what the peer sent with the result, so it opens instantly without fetching the peer's whole share list. A search only returns files whose paths matched, so a folder can hold more than it shows.
+### Added
+
+- **Each artist on a collaboration is credited.** Imports tag every artist on a credit (`ARTISTS`, `ALBUMARTISTS` and every MusicBrainz artist id, through sift 0.6), so players list "A × B" under both; `creditArtists(query)` adds them to albums filed before.
+
+### Fixed
+
+- **Crediting holds up over many albums.** The web UI's enrich reads the library's artists once per run rather than once per album, and an unreadable album is reported instead of ending a `creditArtists` run.
+
+### Internal
+
+- **Releases are cut by `just release`, which opens a release PR.** Bumping the crate, the Pulumi package and `APP_VERSION` by hand on main let the three drift and gave no place to review the notes. CHANGELOG.md is now generated from fragments in `changelog.d/`, a push releases only when it changes the version, and the GitHub release takes its notes from the changelog.
 
 ## 0.1.68
 
