@@ -166,7 +166,7 @@ struct RoomListView {
 
 fn room_list_html(app: &App) -> String {
     RoomListView {
-        rooms: app.social.room_list().into_iter().take(100).collect(),
+        rooms: app.social.room_list(),
     }
     .render()
     .unwrap_or_default()
@@ -195,7 +195,12 @@ impl LinesView {
 /// Newest first, so the latest is under the composer without scrolling.
 async fn lines_html(app: &App, t: &Thread) -> String {
     let view = match t.kind {
-        Kind::Room => match app.social.rooms(200).into_iter().find(|r| r.0 == t.name) {
+        Kind::Room => match app
+            .social
+            .rooms(usize::MAX)
+            .into_iter()
+            .find(|r| r.0 == t.name)
+        {
             Some((_, _, lines)) => LinesView {
                 note: lines
                     .is_empty()
@@ -225,7 +230,7 @@ async fn lines_html(app: &App, t: &Thread) -> String {
         Kind::Private => {
             // The person is looking at it, so it has been read.
             let _ = app.social.mark_read(&t.name).await;
-            match app.social.messages(&t.name, 200).await {
+            match app.social.messages(&t.name, i64::MAX).await {
                 Ok(rows) => LinesView {
                     note: rows.is_empty().then(|| "No messages yet.".into()),
                     lines: rows
