@@ -18,7 +18,7 @@ input, button, a.button { font: inherit; min-width: 0; max-width: 100%; color: v
 input:focus { outline: 1px solid var(--accent); }
 button, a.button { cursor: pointer; background: var(--line); }
 a.button { display: inline-block; text-decoration: none; }
-button.primary { background: var(--accent); color: #0b1a12; border-color: var(--accent); font-weight: 600; }
+button.primary, a.button.primary { background: var(--accent); color: #0b1a12; border-color: var(--accent); font-weight: 600; }
 button.quiet, a.button.quiet { background: transparent; color: var(--dim); }
 button:disabled { opacity: .5; cursor: default; }
 .finder form { display: flex; gap: 8px; flex-wrap: wrap; }

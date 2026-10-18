@@ -29,7 +29,7 @@
   <a href="/chat" data-tab="chat" data-class:active="$tab == 'chat'" data-indicator="_t_chat" data-class:busy="$_t_chat" data-on:click__prevent="$tab = 'chat'; $_url = $_at.chat || '/chat'; @get($_url)">Chat {{ chat_count|safe }}</a>
   <a href="/bans" data-tab="bans" data-class:active="$tab == 'bans'" data-indicator="_t_bans" data-class:busy="$_t_bans" data-on:click__prevent="$tab = 'bans'; $_url = '/bans'; @get($_url)">Bans</a>
   <a href="/settings" data-tab="settings" data-class:active="$tab == 'settings'" data-indicator="_t_set" data-class:busy="$_t_set" data-on:click__prevent="$tab = 'settings'; $_url = '/settings'; @get($_url)">Settings</a>
-  <a href="/triage" data-tab="triage" data-class:active="$tab == 'triage'" data-indicator="_t_tri" data-class:busy="$_t_tri" data-on:click__prevent="$tab = 'triage'; $_url = '/triage'; @get($_url)">Triage</a>
+  <a href="/triage" data-tab="triage" data-class:active="$tab == 'triage'" data-indicator="_t_tri" data-class:busy="$_t_tri" data-on:click__prevent="$tab = 'triage'; $_url = $_at.triage || '/triage'; @get($_url)">Triage</a>
 </nav>
 <main>
   <form id="act" hidden></form>

@@ -280,5 +280,11 @@ async fn triage(State(s): State<UiState>, Query(q): Query<Days>) -> Response {
             error: Some(e.message),
         },
     };
-    one(view.render().unwrap_or_default())
+    many(vec![
+        patch(&view.render().unwrap_or_default()),
+        super::place(
+            "triage",
+            &super::place_url("/triage", &[("days", &days.to_string())]),
+        ),
+    ])
 }
