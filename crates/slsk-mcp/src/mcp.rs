@@ -186,7 +186,8 @@ impl ServerHandler for SlskMcp {
                  ReplayGain, genres and lyrics automatically; `enrichLibrary(query)` adds them to albums \
                  imported before, one artist or album at a time, since each takes seconds. Every import also \
                  credits each artist on a collaboration in its own tags; `creditArtists(query)` does that \
-                 alone, quickly, for albums filed before.\n\n\
+                 alone for albums filed before, reading no audio but asking MusicBrainz once per album with a \
+                 release, about a second each: scope it to an artist or album, as for `enrichLibrary`.\n\n\
                  The client is also a chat client: rooms, private messages (`conversations`, `messages`), \
                  buddies and interests. `sendMessage` and `say` reach real people, so they take two calls: \
                  PREVIEW returns a token and sends nothing; show the user the preview, and only after they agree \
