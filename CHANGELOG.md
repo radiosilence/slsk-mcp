@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.69
+
+### Internal
+
+- **Releases are cut by `just release`, which opens a release PR.** Bumping the crate, the Pulumi package and `APP_VERSION` by hand on main let the three drift and gave no place to review the notes. CHANGELOG.md is now generated from fragments in `changelog.d/`, a push releases only when it changes the version, and the GitHub release takes its notes from the changelog.
+
 ## 0.1.68
 
 - **A hidden track before track 1 is imported when the rip leaves it unnumbered.** MusicBrainz gives a pregap an estimated length that rips rarely share, and sift judged the track by it, so an untagged track 00 was left behind even when the release was chosen by hand, and a release missing the hidden track outscored the complete CD. sift 0.5.1 matches a pregap by title and position.
