@@ -1,0 +1,1 @@
+- **sift from crates.io.** The Library tab's re-tag and edit previews take sift-music 0.8 from crates.io rather than a sift branch.
