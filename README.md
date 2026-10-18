@@ -253,25 +253,36 @@ server's answer, never a guess. Anything that changes the library or reaches
 other people (binning, re-filing, enriching, banning, sending a message) asks
 first; library changes show exactly what they will do before they do it.
 
-The Library tab is one list of albums, newest import first, narrowed by a
-search (beets' query terms), an import date, or what needs attention: albums
-held more than once, and albums not where the current naming rules file them.
-Each row says when it was imported and carries those marks, with the reason a
-copy is spare and where the rules would put it. Albums ticked in the list, or
-every album the filter finds, are acted on together: re-file, credit artists,
-enrich, re-import (match against MusicBrainz again) and bin spares.
+The Library tab is a manager for the library sift files. It lists every
+album, newest import first, narrowed by a search (beets' query terms), an
+import date (today, this week, this month, or since a date, from local
+midnight) or what needs attention: albums held more than once, and albums
+not where the current naming rules file them. Each row says when it was
+imported and carries those marks, with the reason a copy is spare and where
+the rules would put it. The list is not paged.
 
-Every one of those previews first, album by album, before anything changes:
-each file's move, each file's artist credits and whether they come from the
-MusicBrainz release or a split by artists the library already holds, the
-genres and lyrics enriching would add, the release a re-import would apply
-with its tracks against the files, where each spare would go in the bin. Gain
-is the exception, since measuring it means decoding the audio; the preview
-says it is measured on apply. Each album can be unticked in the preview, and
-applying applies what the preview showed and nothing else. A preview works
-out at most 50 albums for the actions that ask MusicBrainz or LRCLIB, and 500
-for the rest, so a large selection is applied in parts. The run goes on in
-the background, an album at a time, with progress and a result for each.
+Opening an album shows its files with every tag sift reads, where the rules
+file it, and what can be done to it. Re-tagging lists the MusicBrainz
+releases that fit the files, closest first, or takes a release id or link
+pasted from MusicBrainz, and retags the files in place: nothing is
+downloaded. Editing takes album-wide fields and each file's disc, track,
+title and artist by hand. Albums ticked in the list, or every album the
+filter finds, are re-filed, credited, enriched, re-tagged against their
+closest release, or have their spare copies binned together.
+
+Every write previews first, album by album: each field a re-tag or edit
+changes in each file, as it is and as it would be, and where the file moves
+(for a re-tag, also whether the cover is replaced and where the album's other
+files go); each file's move for a re-file; each file's artist credits and whether they
+come from the MusicBrainz release or a split by artists the library already
+holds; the genres and lyrics enriching would add; where each spare would go
+in the bin. Gain is the exception, since measuring it means decoding the
+audio; the preview says it is measured on apply. Each album can be unticked
+in the preview, and applying applies what the preview showed and nothing
+else. A preview works out at most 50 albums for the actions that ask
+MusicBrainz or LRCLIB; local ones preview every album selected. The run goes
+on in the background, an album at a time, with progress and a result for
+each.
 
 The GraphQL mutations behind these take `preview: true` for the same answer
 without the change, so an assistant can show it first.

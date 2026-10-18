@@ -188,8 +188,17 @@ fn one(html: String) -> Response {
 /// Elements added at the end of the one `selector` names: rows streamed
 /// into a list as each is worked out.
 fn append(selector: &str, html: &str) -> Event {
+    insert(selector, "append", html)
+}
+
+/// Elements added at the start of the one `selector` names.
+fn prepend(selector: &str, html: &str) -> Event {
+    insert(selector, "prepend", html)
+}
+
+fn insert(selector: &str, mode: &str, html: &str) -> Event {
     Event::default().event("datastar-patch-elements").data(
-        [format!("selector {selector}"), "mode append".to_string()]
+        [format!("selector {selector}"), format!("mode {mode}")]
             .into_iter()
             .chain(
                 html.replace('\r', "")
@@ -398,6 +407,7 @@ async fn render_page(
         "_libsince": if tab == "library" { param("since") } else { String::new() },
         "_libfrom": if tab == "library" { param("from") } else { String::new() },
         "_libshow": if tab == "library" { param("show") } else { String::new() },
+        "_libalbum": if tab == "library" { param("album") } else { String::new() },
     })
     .to_string();
     let page = Page {
@@ -905,6 +915,10 @@ async fn uploads_html(app: &App) -> String {
 async fn stream(State(s): State<UiState>) -> impl IntoResponse {
     let app = s.app.clone();
     let events = async_stream::stream! {
+        // The library run is sent when it moves, and while it runs only
+        // its head and the albums done since: it lists every album, which
+        // in a large run is long.
+        let mut run_sent = library::RunSent::default();
         for _ in 0..20 {
             yield Ok(patch(&status_html(&app).await));
             yield Ok(patch(&jobs_html(&app).await));
@@ -912,7 +926,9 @@ async fn stream(State(s): State<UiState>) -> impl IntoResponse {
             yield Ok(patch(&uploads_html(&app).await));
             yield Ok(patch(&up_count_html(&app)));
             yield Ok(patch(&chat::count_html(&app).await));
-            yield Ok(patch(&library::run_html(&s)));
+            for e in library::run_events(&s, &mut run_sent) {
+                yield Ok(e);
+            }
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
     };

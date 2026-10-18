@@ -1,0 +1,1 @@
+- **Library manager.** An album opens in detail with its files and tags; it can be re-tagged in place from a MusicBrainz release (picked or pasted) or edited by hand, each previewed field by field, old and new, with the move it causes. The list is no longer paged.

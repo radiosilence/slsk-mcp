@@ -78,6 +78,39 @@ pub struct SpareCopy {
     pub binned_to: Option<String>,
 }
 
+/// Hand edits to one album's tags: fields set on every file, and fields set
+/// on single files. See [`Library::edit_plan`].
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct TagEdits {
+    pub album: Vec<sift::meta::Change>,
+    pub tracks: Vec<(PathBuf, Vec<sift::meta::Change>)>,
+}
+
+impl TagEdits {
+    pub fn is_empty(&self) -> bool {
+        self.album.is_empty() && self.tracks.iter().all(|(_, c)| c.is_empty())
+    }
+
+    /// Every change to the file at `path`: the album's, then its own.
+    pub fn for_file(&self, path: &Path) -> Vec<sift::meta::Change> {
+        let mut out = self.album.clone();
+        for (p, c) in &self.tracks {
+            if p == path {
+                out.extend(c.iter().cloned());
+            }
+        }
+        out
+    }
+}
+
+/// What a hand edit would change. See [`Library::edit_plan`].
+pub struct EditPlan {
+    /// Each file and the fields that would change in it.
+    pub files: Vec<(PathBuf, Vec<sift::meta::TagChange>)>,
+    /// Where the edited tags would file the album.
+    pub refile: Preview,
+}
+
 /// See [`Library::preview`].
 pub enum Preview {
     InPlace,
@@ -228,6 +261,20 @@ pub struct AlbumMove {
     /// Why the album was left where it is.
     pub refused: Option<String>,
     pub files: usize,
+}
+
+/// Edits only name fields `meta::set` writes.
+fn check_editable(edits: &TagEdits) -> anyhow::Result<()> {
+    let all = edits
+        .album
+        .iter()
+        .chain(edits.tracks.iter().flat_map(|(_, c)| c));
+    for (field, _) in all {
+        if !sift::meta::EDITABLE.contains(&field.as_str()) {
+            anyhow::bail!("{field} is not a field that can be edited");
+        }
+    }
+    Ok(())
 }
 
 impl Library {
@@ -591,6 +638,99 @@ impl Library {
         known: &sift::credits::Known,
     ) -> anyhow::Result<sift::EnrichPlan> {
         Ok(self.tagger.enrich_plan(Path::new(dir), known).await?)
+    }
+
+    /// The files of the album at `dir` and the tags each carries, read from
+    /// the files now rather than the index.
+    pub async fn tracks(&self, dir: &str) -> anyhow::Result<Vec<sift::meta::Track>> {
+        let mut tracks = self.tagger.tracks(Path::new(dir)).await?;
+        tracks.sort_by_key(|t| (t.disc, t.track, t.path.clone()));
+        Ok(tracks)
+    }
+
+    /// Every field re-tagging the album at `dir` from `release_id` would
+    /// change, file by file, and where each file would go. Changes nothing.
+    pub async fn retag_plan(&self, dir: &str, release_id: &str) -> anyhow::Result<sift::Retag> {
+        Ok(self.tagger.retag_plan(Path::new(dir), release_id).await?)
+    }
+
+    /// What `edits` would change in each of `tracks`, the files of the
+    /// album at `dir` as just read, and where the edited tags would file
+    /// it. Changes nothing.
+    pub async fn edit_plan(
+        &self,
+        dir: &str,
+        tracks: &[sift::meta::Track],
+        edits: &TagEdits,
+    ) -> anyhow::Result<EditPlan> {
+        check_editable(edits)?;
+        let edited: Vec<sift::meta::Track> = tracks
+            .iter()
+            .map(|t| {
+                let mut e = t.clone();
+                e.apply(&edits.for_file(&t.path));
+                e
+            })
+            .collect();
+        let files = tracks
+            .iter()
+            .zip(&edited)
+            .map(|(t, e)| (t.path.clone(), sift::meta::diff(t, e)))
+            .collect();
+        let Some(mut album) = self
+            .read(&[format!("path:={dir}")])
+            .await?
+            .into_iter()
+            .next()
+        else {
+            anyhow::bail!("{dir} is no longer in the library");
+        };
+        // The move is planned from the tags just read, edited, rather than
+        // the index's copy of them.
+        for item in &mut album.items {
+            if let Some(e) = edited.iter().find(|e| e.path == item.track.path) {
+                item.track = e.clone();
+            } else {
+                let changes = edits.for_file(&item.track.path);
+                item.track.apply(&changes);
+            }
+        }
+        let refile = match tokio::task::block_in_place(|| manage::plan_move(&self.cfg, &album)) {
+            Plan::InPlace => Preview::InPlace,
+            Plan::Refused(why) => Preview::Refused(why),
+            Plan::Moves(moves) => {
+                Preview::Moves(moves.into_iter().map(|m| (m.from, m.to)).collect())
+            }
+        };
+        Ok(EditPlan { files, refile })
+    }
+
+    /// Write `edits` to the album at `dir`, then re-file it where its new
+    /// tags put it: moved (`to`), left with the reason (`refused`), or in
+    /// place (neither).
+    pub async fn edit(&self, dir: &str, edits: &TagEdits) -> anyhow::Result<AlbumMove> {
+        check_editable(edits)?;
+        {
+            let _index = self.write().await?;
+            for t in self.tagger.tracks(Path::new(dir)).await? {
+                let changes = edits.for_file(&t.path);
+                if changes.is_empty() {
+                    continue;
+                }
+                tokio::task::block_in_place(|| sift::meta::set(&t.path, &changes))?;
+            }
+            self.bump();
+        }
+        tracing::info!(dir, edits = ?edits, "edited tags");
+        let mut moved = None;
+        self.refile_each(&[format!("path:={dir}")], |m| moved = Some(m))
+            .await?;
+        Ok(moved.unwrap_or(AlbumMove {
+            from: dir.to_string(),
+            to: None,
+            refused: None,
+            files: 0,
+        }))
     }
 
     /// How the album at `dir` lines up against one release. Changes nothing.

@@ -17,7 +17,9 @@ strip = true
 lto = "thin"
 codegen-units = 1
 
-# radiosilence/sift#50 (dry runs for credit, enrich and reimport), until a
-# sift-music release carries it.
+# radiosilence/sift#54 (retag and hand-edit previews), until sift-music
+# 0.8.0 is published. That branch is still versioned 0.7, so the crate's
+# requirement stays "0.7" until this block is replaced by
+# `sift-music = "0.8"` in crates/slsk-mcp/Cargo.toml.
 [patch.crates-io]
-sift-music = { git = "https://github.com/radiosilence/sift", branch = "credit-dry-run" }
+sift-music = { git = "https://github.com/radiosilence/sift", branch = "library-manager" }

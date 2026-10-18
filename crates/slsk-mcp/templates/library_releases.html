@@ -1,0 +1,24 @@
+<form id="lib-retag" data-on:submit__prevent="@post('/library/preview/reimport', {contentType: 'form', selector: '#lib-retag'})" class="retag">
+  <input type="hidden" name="path" value="{{ path }}">
+  {% include "library_filter.html" %}
+  {% if let Some(e) = error %}<p class="error">{{ e }}</p>{% endif %}
+  {% if candidates.is_empty() %}<p class="note">MusicBrainz has nothing that fits these files. Paste a release from its page.</p>{% else %}
+  <p class="note">Releases that fit these files, closest first. Pick one to see every tag it would change.{% if let Some(r) = review %} The tagger would not choose on its own: {{ r }}.{% endif %}</p>
+  <ul class="rows candidates">
+  {% for c in candidates %}
+    <li>
+      <label class="pick">
+        <input type="radio" name="release" value="{{ c.id }}"{% if loop.first %} checked{% endif %}>
+        <span class="title">{{ c.artist }} — {{ c.title }}</span>
+      </label>
+      <span class="meta">{% if let Some(d) = c.date %}{{ d }} · {% endif %}{% if let Some(co) = c.country %}{{ co }} · {% endif %}{% if let Some(m) = c.media %}{{ m }} · {% endif %}{{ c.tracks }} tracks · distance {{ c.distance }}{% if c.missing > 0 %} · {{ c.missing }} missing{% endif %}{% if c.extra > 0 %} · {{ c.extra }} unmatched{% endif %}{% if let Some(d) = c.disambiguation %} · {{ d }}{% endif %}</span>
+      {% if !c.id.starts_with("discogs:") %}<a class="meta" href="https://musicbrainz.org/release/{{ c.id }}" target="_blank" rel="noopener">MusicBrainz</a>{% endif %}
+    </li>
+  {% endfor %}
+  </ul>
+  {% endif %}
+  <div class="finder-form">
+    <input name="pasted" placeholder="Or paste a MusicBrainz release id or link" autocomplete="off">
+    <button type="button" data-indicator="_pv_retag" data-attr:disabled="$_pv_retag" data-class:busy="$_pv_retag" data-on:click="@post('/library/preview/reimport', {contentType: 'form', selector: '#lib-retag'})">Preview re-tag</button>
+  </div>
+</form>

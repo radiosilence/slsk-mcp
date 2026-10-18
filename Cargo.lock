@@ -2758,8 +2758,8 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
 name = "sift-music"
-version = "0.6.0"
-source = "git+https://github.com/radiosilence/sift?branch=credit-dry-run#f4aa2c273e19da0e0f900b1dfab7d32df83f64cd"
+version = "0.7.0"
+source = "git+https://github.com/radiosilence/sift?branch=library-manager#5e2d2d1bff9dd48aac0dbdd18e73829bba579da7"
 dependencies = [
  "anyhow",
  "bytes",

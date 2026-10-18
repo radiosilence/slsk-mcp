@@ -1,0 +1,38 @@
+<div id="lib-album" class="job album-detail">
+  <div class="row">
+    <strong class="title">{{ self.title() }}</strong>
+    {% if row.spare().is_some() %}<span class="pill spare">spare</span>{% endif %}
+    {% if row.kept() %}<span class="pill keep">kept</span>{% endif %}
+    <button type="button" class="quiet" aria-label="Close" data-on:click="document.getElementById('lib-album').replaceChildren(); $_libalbum = ''; $_url = '{{ self.closed() }}'; $_at.library = $_url">Close</button>
+  </div>
+  <p class="meta">{% if let Some(a) = row.album.album_artist %}{{ a }}{% endif %}{% if let Some(y) = row.album.year %} · {{ y }}{% endif %} · {% if row.album.format.is_empty() %}?{% else %}{{ row.album.format }}{% endif %} · {{ row.album.tracks }} track{% if row.album.tracks != 1 %}s{% endif %}</p>
+  <p class="meta path">{{ self.rel(row.album.path) }}</p>
+  <p class="meta">{% if let Some((change, to)) = row.refile() %}{% if let Some(to) = to %}The rules file it at <span class="path">{{ self.rel(to) }}</span> ({{ change.label() }}).{% else %}The rules cannot file it: {{ change.label() }}.{% endif %}{% else %}Where the rules file it.{% endif %}{% if let Some(why) = row.spare() %} Spare copy: {{ why }}.{% endif %}</p>
+  <form id="lib-one">
+    <input type="hidden" name="path" value="{{ row.album.path }}">
+    {% include "library_filter.html" %}
+  </form>
+  <div class="actions">
+    <button type="button" data-indicator="_al_retag" data-attr:disabled="$_al_retag" data-class:busy="$_al_retag" data-on:click="@get('/library/album/releases', {contentType: 'form', selector: '#lib-one'})">Re-tag from MusicBrainz</button>
+    <button type="button" data-indicator="_al_edit" data-attr:disabled="$_al_edit" data-class:busy="$_al_edit" data-on:click="@get('/library/album/edit', {contentType: 'form', selector: '#lib-one'})">Edit tags</button>
+    {% if row.refile().is_some() %}<button type="button" data-indicator="_al_refile" data-attr:disabled="$_al_refile" data-class:busy="$_al_refile" data-on:click="@post('/library/preview/refile', {contentType: 'form', selector: '#lib-one'})">Re-file</button>{% endif %}
+    <button type="button" data-indicator="_al_credit" data-attr:disabled="$_al_credit" data-class:busy="$_al_credit" data-on:click="@post('/library/preview/credit', {contentType: 'form', selector: '#lib-one'})">Credit artists</button>
+    <button type="button" data-indicator="_al_enrich" data-attr:disabled="$_al_enrich" data-class:busy="$_al_enrich" data-on:click="@post('/library/preview/enrich', {contentType: 'form', selector: '#lib-one'})">Enrich</button>
+    {% if row.spare().is_some() %}<button type="button" data-indicator="_al_bin" data-attr:disabled="$_al_bin" data-class:busy="$_al_bin" data-on:click="@post('/library/preview/bin', {contentType: 'form', selector: '#lib-one'})">Bin this copy</button>{% endif %}
+  </div>
+  <div id="lib-retag"></div>
+  <div id="lib-edit"></div>
+  <ul class="rows tight files">
+  {% for t in tracks %}
+    <li>
+      <details class="album">
+        <summary><span class="title">{% if let Some(d) = t.disc %}{% if t.disc_total.unwrap_or(1) > 1 %}{{ d }}-{% endif %}{% endif %}{% if let Some(n) = t.track %}{{ n }}. {% endif %}{% if let Some(title) = t.title %}{{ title }}{% else %}{{ self.file(t) }}{% endif %}</span><span class="meta">{% if let Some(a) = t.artist %}{{ a }} · {% endif %}{{ self.length(t) }}</span></summary>
+        <p class="meta path">{{ self.file(t) }}</p>
+        <table class="tags">
+        {% for (name, value) in self.tags(t) %}<tr><th>{{ name }}</th><td>{{ value }}</td></tr>{% endfor %}
+        </table>
+      </details>
+    </li>
+  {% endfor %}
+  </ul>
+</div>

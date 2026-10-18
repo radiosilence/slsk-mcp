@@ -3,13 +3,10 @@
 {% if total == 0 %}<p class="note">No albums match.</p>{% else %}
 <form id="lib-sel" data-signals="{_sel: 0, _spares: 0}"
   data-on:change="evt.target.name == 'all' ? el.querySelectorAll('input[name=path]').forEach(c => c.checked = evt.target.checked) : (evt.target.checked || (el.querySelector('input[name=all]').checked = false)); $_sel = el.querySelector('input[name=all]').checked ? {{ total }} : el.querySelectorAll('input[name=path]:checked').length; $_spares = el.querySelector('input[name=all]').checked ? {{ spares }} : el.querySelectorAll('input[name=path][data-spare]:checked').length">
-  <input type="hidden" name="q" value="{{ filter.q }}">
-  <input type="hidden" name="since" value="{{ filter.since }}">
-  <input type="hidden" name="from" value="{{ filter.from }}">
-  <input type="hidden" name="show" value="{{ filter.show }}">
+  {% include "library_filter.html" %}
   <div class="lib-head">
     <label class="toggle"><input type="checkbox" name="all" value="1"> Select all {{ total }}</label>
-    <span class="note">{% if total > rows.len() %}{{ self.first() }}–{{ self.last() }} of {{ total }}, newest import first{% else %}{{ total }} album{% if total != 1 %}s{% endif %}, newest import first{% endif %}</span>
+    <span class="note">{{ total }} album{% if total != 1 %}s{% endif %}, newest import first</span>
   </div>
   <ul class="rows albums">
   {% for r in rows %}
@@ -17,7 +14,7 @@
       <input type="checkbox" name="path" value="{{ r.album.path }}" aria-label="Select {{ self.rel(r.album.path) }}"{% if r.spare().is_some() %} data-spare{% endif %}>
       <div class="album">
         <div class="row">
-          <span class="title">{% if let Some(a) = r.album.album %}{{ a }}{% else %}{{ self.rel(r.album.path) }}{% endif %}</span>
+          {% let (href, get) = self.opening(r.album.path) %}<a class="title link" href="{{ href }}" data-on:click="evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || (evt.preventDefault(), @get('{{ get }}'), document.getElementById('lib-album').scrollIntoView({block: 'start'}))">{% if let Some(a) = r.album.album %}{{ a }}{% else %}{{ self.rel(r.album.path) }}{% endif %}</a>
           {% if r.spare().is_some() %}<span class="pill spare">spare</span>{% endif %}
           {% if r.kept() %}<span class="pill keep">kept</span>{% endif %}
           {% if let Some((_, to)) = r.refile() %}{% if to.is_some() %}<span class="pill">would move</span>{% else %}<span class="pill">can't file</span>{% endif %}{% endif %}
@@ -31,18 +28,12 @@
     </li>
   {% endfor %}
   </ul>
-  {% if newer.is_some() || older.is_some() %}
-  <div class="actions pager">
-    {% if let Some(u) = newer %}<a href="{{ u }}" class="button quiet" data-indicator="_newer" data-class:busy="$_newer" data-on:click="evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || (evt.preventDefault(), @get('{{ u }}'))">Newer</a>{% endif %}
-    {% if let Some(u) = older %}<a href="{{ u }}" class="button quiet" data-indicator="_older" data-class:busy="$_older" data-on:click="evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || (evt.preventDefault(), @get('{{ u }}'))">Older</a>{% endif %}
-  </div>
-  {% endif %}
   <div class="lib-bar" data-show="$_sel > 0">
     <span class="count" data-text="$_sel + ' selected'"></span>
     <button type="button" data-indicator="_pv_refile" data-attr:disabled="$_pv_refile" data-class:busy="$_pv_refile" data-on:click="@post('/library/preview/refile', {contentType: 'form', selector: '#lib-sel'}); document.getElementById('lib-preview').scrollIntoView({block: 'start'})">Re-file</button>
     <button type="button" data-indicator="_pv_credit" data-attr:disabled="$_pv_credit" data-class:busy="$_pv_credit" data-on:click="@post('/library/preview/credit', {contentType: 'form', selector: '#lib-sel'}); document.getElementById('lib-preview').scrollIntoView({block: 'start'})">Credit artists</button>
     <button type="button" data-indicator="_pv_enrich" data-attr:disabled="$_pv_enrich" data-class:busy="$_pv_enrich" data-on:click="@post('/library/preview/enrich', {contentType: 'form', selector: '#lib-sel'}); document.getElementById('lib-preview').scrollIntoView({block: 'start'})">Enrich</button>
-    <button type="button" data-indicator="_pv_reimport" data-attr:disabled="$_pv_reimport" data-class:busy="$_pv_reimport" data-on:click="@post('/library/preview/reimport', {contentType: 'form', selector: '#lib-sel'}); document.getElementById('lib-preview').scrollIntoView({block: 'start'})">Re-import</button>
+    <button type="button" data-indicator="_pv_reimport" data-attr:disabled="$_pv_reimport" data-class:busy="$_pv_reimport" data-on:click="@post('/library/preview/reimport', {contentType: 'form', selector: '#lib-sel'}); document.getElementById('lib-preview').scrollIntoView({block: 'start'})">Re-tag</button>
     <button type="button" data-show="$_spares > 0" data-indicator="_pv_bin" data-attr:disabled="$_pv_bin" data-class:busy="$_pv_bin" data-on:click="@post('/library/preview/bin', {contentType: 'form', selector: '#lib-sel'}); document.getElementById('lib-preview').scrollIntoView({block: 'start'})">Bin spares</button>
   </div>
 </form>

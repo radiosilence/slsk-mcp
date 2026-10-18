@@ -1,0 +1,6 @@
+<li class="settled {% if r.ok %}moved{% else %}left{% endif %}">
+  <span class="path">{{ self.rel(r.path) }}</span>
+  <span class="pill">{% if r.ok %}done{% else %}failed{% endif %}</span>
+  <span class="meta">{{ r.detail }}</span>
+  {% for p in r.problems %}<span class="error">{{ p }}</span>{% endfor %}
+</li>
