@@ -54,7 +54,7 @@ impl Thread {
             Kind::Room => "room",
             Kind::Private => "pm",
         };
-        super::place_url("/chat", &[("kind", kind), ("name", &self.name)])
+        super::chat_href(kind, &self.name)
     }
 
     fn from_fields(form: &[(String, String)]) -> Option<Self> {
@@ -318,6 +318,7 @@ async fn view(State(s): State<UiState>, Query(q): Query<Poll>) -> Response {
     if !q.poll {
         html.push('\n');
         html.push_str(&room_list_html(&s.app));
+        html.push_str("\n<div id=\"flash\"></div>");
     }
     html.push('\n');
     html.push_str(&count_html(&s.app).await);

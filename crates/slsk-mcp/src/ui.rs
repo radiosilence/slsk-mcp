@@ -324,6 +324,16 @@ async fn page(
     render_page(&s, tab, &uri).await
 }
 
+/// A user's shares at a folder (the top when `key` is empty).
+fn browse_href(username: &str, key: &str) -> String {
+    place_url("/browse", &[("username", username), ("key", key)])
+}
+
+/// A conversation: `kind` is `room` or `pm`.
+fn chat_href(kind: &str, name: &str) -> String {
+    place_url("/chat", &[("kind", kind), ("name", name)])
+}
+
 /// An address with its query, as the page keeps it.
 fn place_url(path: &str, params: &[(&str, &str)]) -> String {
     let query: String = url::form_urlencoded::Serializer::new(String::new())
