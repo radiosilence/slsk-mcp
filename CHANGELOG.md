@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.1
+
+### Added
+
+- **Library manager.** An album opens in detail with its files and tags; it can be re-tagged in place from a MusicBrainz release (picked or pasted) or edited by hand, each previewed field by field, old and new, with the move it causes. The list is no longer paged.
+
+### Changed
+
+- **Every list shows everything.** Jobs, downloads, uploads, search results, chat rooms and conversations, browse folders and triage examples are no longer cut off at a fixed number of rows.
+
+### Fixed
+
+- **Library fixes.** A re-imported album keeps its import date; binning skips a spare the bin already holds rather than stopping; the selection clears when the list is redrawn; a failed background run no longer blocks the next; "imported today" counts from local midnight; `reimportAlbums` previews the release it was given.
+
+### Internal
+
+- **The GitHub release is published with `RELEASE_TOKEN` only.** The fallback to the workflow token is gone now that the secret is set; a missing token fails the job by name, as in the other repositories.
+
 ## 0.3.0
 
 ### Added
