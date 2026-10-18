@@ -3,10 +3,8 @@
   <p class="note">{{ total }} albums{% if total > albums.len() %}, first {{ albums.len() }} shown{% endif %}.</p>
   {% if total > 0 && !q.is_empty() %}
   <form id="enrich-q"><input type="hidden" name="q" value="{{ q }}"></form>
-  <form id="credit-q"><input type="hidden" name="q" value="{{ q }}"><input type="hidden" name="only" value="credits"></form>
   <div class="actions">
     <button data-indicator="_en_all" data-attr:disabled="$_en_all" data-class:busy="$_en_all" data-on:click="confirm('Add gain, genres and lyrics to every album found? This rewrites those tags and takes a few seconds per album.') && @post('/library/enrich', {contentType: 'form', selector: '#enrich-q'})">Enrich all {{ total }}</button>
-    <button class="quiet" data-indicator="_cr_all" data-attr:disabled="$_cr_all" data-class:busy="$_cr_all" data-on:click="confirm('Credit each artist on the collaborations among the albums found? This adds artist tags to files that lack them and changes nothing else.') && @post('/library/enrich', {contentType: 'form', selector: '#credit-q'})">Credit artists</button>
   </div>
   {% endif %}
   <ul class="rows">

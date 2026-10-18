@@ -372,28 +372,19 @@ impl Library {
         let known = self.known_artists().await?;
         let mut out = Vec::new();
         for a in self.read(query).await? {
-            out.extend(self.credit_album(&a.dir, &known).await?);
-        }
-        self.changed();
-        Ok(out)
-    }
-
-    /// [`Self::credit`] for the album in `dir`, against artists already
-    /// listed: `None` when it had nothing to change.
-    pub async fn credit_album(
-        &self,
-        dir: &Path,
-        known: &sift::credits::Known,
-    ) -> anyhow::Result<Option<CreditedAlbum>> {
-        let c = self.tagger.credit(dir, known).await?;
-        Ok(
-            (c.files > 0 || !c.problems.is_empty()).then(|| CreditedAlbum {
-                path: dir.to_string_lossy().into_owned(),
+            let c = self.tagger.credit(&a.dir, &known).await?;
+            if c.files == 0 && c.problems.is_empty() {
+                continue;
+            }
+            out.push(CreditedAlbum {
+                path: a.dir.to_string_lossy().into_owned(),
                 files: c.files,
                 artists: c.artists,
                 problems: c.problems,
-            }),
-        )
+            });
+        }
+        self.changed();
+        Ok(out)
     }
 
     /// Albums not where the current path rules put them. With `apply`, each
