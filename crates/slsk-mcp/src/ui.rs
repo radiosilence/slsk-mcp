@@ -910,6 +910,28 @@ impl ResultsView {
     fn key(&self, f: &Folder) -> String {
         URL_SAFE_NO_PAD.encode(f.remote_path.as_bytes())
     }
+    /// Stable across regroups, so an open preview stays with its folder.
+    fn id(&self, f: &Folder) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::hash::DefaultHasher::new();
+        (&f.username, f.remote_path.as_bytes()).hash(&mut h);
+        h.finish()
+    }
+    fn crumbs(&self, f: &Folder) -> Vec<browse::Child> {
+        browse::crumbs(f.remote_path.as_bytes())
+    }
+    /// A file's path below the result's folder, which keeps a disc
+    /// subfolder's name when discs are grouped into one result.
+    fn within(&self, f: &Folder, file: &crate::folders::File) -> String {
+        let full = file.remote.as_bytes();
+        let rest = full
+            .strip_prefix(f.remote_path.as_bytes())
+            .and_then(|r| r.strip_prefix(b"\\"))
+            .unwrap_or(full);
+        RawStr(rest.to_vec().into())
+            .to_string_lossy()
+            .replace('\\', "/")
+    }
     fn size(&self, b: &u64) -> String {
         human(*b)
     }

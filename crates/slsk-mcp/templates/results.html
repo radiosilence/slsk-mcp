@@ -1,10 +1,12 @@
 <div id="results" class="results">
   <p class="note">{% if searching %}Searching “{{ query }}”… {% endif %}{{ responses }} peers answered, {{ folders.len() }} folders.</p>
   {% for f in folders %}
-  <article class="folder{% if f.lossless %} lossless{% endif %}">
+  {% let n = loop.index %}
+  <article id="r-{{ self.id(f) }}" class="folder{% if f.lossless %} lossless{% endif %}">
     <form id="dl-{{ loop.index }}"><input type="hidden" name="username" value="{{ f.username }}"><input type="hidden" name="key" value="{{ self.key(f) }}"><input type="hidden" name="title" value="{{ query }}"></form>
+    <form id="who-{{ loop.index }}"><input type="hidden" name="username" value="{{ f.username }}"></form>
     <div class="row">
-      <span class="path" title="{{ f.path }}">{{ f.path }}</span>
+      <nav class="path crumbs" title="Browse {{ f.username }} from here">{% for c in self.crumbs(f) %}{% if !loop.first %}<span class="meta">/</span>{% endif %}<button type="button" class="link" name="key" value="{{ c.key }}" data-indicator="_browsing" data-attr:disabled="$_browsing" data-on:click="$tab = 'browse'; @post('/browse', {contentType: 'form', selector: '#who-{{ n }}'})">{{ c.name }}</button>{% else %}<button type="button" class="link" data-indicator="_browsing" data-attr:disabled="$_browsing" data-on:click="$tab = 'browse'; @post('/browse', {contentType: 'form', selector: '#who-{{ n }}'})">top</button>{% endfor %}</nav>
       <span class="grow"></span>
       <button class="primary" data-indicator="_dl_{{ loop.index }}" data-attr:disabled="$_dl_{{ loop.index }}" data-class:busy="$_dl_{{ loop.index }}" data-on:click="@post('/download', {contentType: 'form', selector: '#dl-{{ loop.index }}'})">Download</button>
     </div>
@@ -12,6 +14,12 @@
       <button type="button" class="link" data-on:click="$tab = 'browse'; @post('/browse', {contentType: 'form', selector: '#dl-{{ loop.index }}'})">{{ f.username }}</button> · {{ f.audio_files }} tracks · {{ self.quality(f) }} · {{ self.size(f.total_size) }} ·
       {% if f.free_slot %}<span class="ok">free slot</span>{% else %}queue {{ f.queue_length }}{% endif %} · {{ self.size(f.speed as u64) }}/s
     </div>
+    <details class="peek" data-ignore-morph>
+      <summary>{{ f.files.len() }} files</summary>
+      <ul class="rows files">
+      {% for x in f.files %}<li><span class="name">{{ self.within(f, x) }}</span><span class="meta">{{ self.size(x.size) }}</span></li>{% endfor %}
+      </ul>
+    </details>
   </article>
   {% endfor %}
 </div>

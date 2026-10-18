@@ -62,9 +62,9 @@ fn key(raw: &[u8]) -> String {
     URL_SAFE_NO_PAD.encode(raw)
 }
 
-struct Child {
-    key: String,
-    name: String,
+pub(super) struct Child {
+    pub(super) key: String,
+    pub(super) name: String,
     /// Files in it and every folder under it.
     files: usize,
 }
@@ -108,7 +108,7 @@ fn level<'a>(dirs: &'a [Directory], at: &[u8]) -> (Vec<Child>, Option<&'a Direct
 }
 
 /// Each folder from the top down to `at`, for going back up.
-fn crumbs(at: &[u8]) -> Vec<Child> {
+pub(super) fn crumbs(at: &[u8]) -> Vec<Child> {
     let mut out = Vec::new();
     if at.is_empty() {
         return out;

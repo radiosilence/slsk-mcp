@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.69
+
+- **A search result's path is a set of links into that peer's shares.** Each folder in it opens Browse there, so a sibling release or the artist's other albums are one click away. Peers send Windows-style paths; they are shown with `/`.
+- **A search result lists its files under a toggle**, from what the peer sent with the result, so it opens instantly without fetching the peer's whole share list. A search only returns files whose paths matched, so a folder can hold more than it shows.
+
 ## 0.1.68
 
 - **A hidden track before track 1 is imported when the rip leaves it unnumbered.** MusicBrainz gives a pregap an estimated length that rips rarely share, and sift judged the track by it, so an untagged track 00 was left behind even when the release was chosen by hand, and a release missing the hidden track outscored the complete CD. sift 0.5.1 matches a pregap by title and position.
