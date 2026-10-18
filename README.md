@@ -135,6 +135,14 @@ Each import is followed by what beets' `replaygain`, `lastgenre` and `lyrics`
 plugins add: loudness normalisation for players, genres from MusicBrainz, and
 synced lyrics from LRCLIB. `enrichLibrary` backfills albums imported before.
 
+A collaboration is tagged with each of its artists (`ARTISTS`,
+`ALBUMARTISTS` and every MusicBrainz artist id, as Picard writes them) while
+`artist` keeps the credit as it reads, so players can list "A × B" under both
+A and B. `creditArtists(query)` adds those tags to albums filed before: from
+the album's MusicBrainz release, or, for an album filed by its own tags, by
+splitting the credit only where every part is an artist the library already
+holds. Separators alone would split bands such as "Earth, Wind & Fire".
+
 ## Running it
 
 It is a long-running daemon: it holds one Soulseek login, shares the library

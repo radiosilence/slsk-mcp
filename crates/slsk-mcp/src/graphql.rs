@@ -1056,8 +1056,28 @@ impl Mutation {
         Ok(app(ctx).library.duplicates(&query, true).await?)
     }
 
-    /// Add ReplayGain, MusicBrainz genres (where an album has none) and
-    /// lyrics to matching albums, as every new import gets. Writes only
+    /// Credit each artist on a collaboration (`ARTISTS`, `ALBUMARTISTS` and
+    /// their MusicBrainz ids) on matching albums whose files name them only
+    /// in one string, as every new import gets: from the album's
+    /// MusicBrainz release, or, without one, by splitting the credit only
+    /// where every part is an artist the library already holds. `artist`
+    /// and `albumartist` are left as they read; files already credited are
+    /// skipped, so it is safe to repeat. Lists only albums it changed or
+    /// could not. A query is required, as for `enrichLibrary`; each album
+    /// with a release costs one MusicBrainz request.
+    async fn credit_artists(
+        &self,
+        ctx: &Context<'_>,
+        query: Vec<String>,
+    ) -> Result<Vec<crate::library::CreditedAlbum>> {
+        if query.is_empty() {
+            return Err(Error::new("give a query; [\"\"] means the whole library"));
+        }
+        Ok(app(ctx).library.credit(&query).await?)
+    }
+
+    /// Add ReplayGain, MusicBrainz genres (where an album has none), lyrics
+    /// and each artist's credit to matching albums, as every new import gets. Writes only
     /// those tags, but across everything the query matches: a query is
     /// required, and a large one takes a long time.
     async fn enrich_library(

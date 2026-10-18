@@ -408,6 +408,7 @@ async fn enrich(State(s): State<UiState>, body: Bytes) -> Response {
                     gain_db: None,
                     genres: Vec::new(),
                     lyrics: 0,
+                    artists: Vec::new(),
                     problems: vec![format!("{e:#}")],
                 }),
             }

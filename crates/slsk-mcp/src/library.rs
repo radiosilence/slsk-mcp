@@ -103,6 +103,17 @@ pub struct EnrichedAlbum {
     pub genres: Vec<String>,
     /// Tracks given lyrics.
     pub lyrics: usize,
+    /// Artists credited one by one where the files named them only together.
+    pub artists: Vec<String>,
+    pub problems: Vec<String>,
+}
+
+#[derive(SimpleObject)]
+pub struct CreditedAlbum {
+    pub path: String,
+    /// Files given artist credits.
+    pub files: usize,
+    pub artists: Vec<String>,
     pub problems: Vec<String>,
 }
 
@@ -325,19 +336,51 @@ impl Library {
         Ok(out)
     }
 
-    /// Add gain, genres and lyrics to matching albums, as every new import
-    /// gets. Rewrites tags (only those fields) across what the query
-    /// matches, so it is for a deliberate backfill.
+    /// Every artist the library holds an album by: what a collaboration's
+    /// credit is split against.
+    pub async fn known_artists(&self) -> anyhow::Result<sift::credits::Known> {
+        let albums = self.read(&[]).await?;
+        Ok(sift::credits::Known::from_albums(&albums))
+    }
+
+    /// Add gain, genres, lyrics and each artist's credit to matching
+    /// albums, as every new import gets. Rewrites tags (only those fields)
+    /// across what the query matches, so it is for a deliberate backfill.
     pub async fn enrich(&self, query: &[String]) -> anyhow::Result<Vec<EnrichedAlbum>> {
+        let known = self.known_artists().await?;
         let mut out = Vec::new();
         for a in self.read(query).await? {
-            let e = self.tagger.enrich(&a.dir).await?;
+            let e = self.tagger.enrich(&a.dir, &known).await?;
             out.push(EnrichedAlbum {
                 path: a.dir.to_string_lossy().into_owned(),
                 gain_db: e.gain_db,
                 genres: e.genres,
                 lyrics: e.lyrics,
+                artists: e.artists,
                 problems: e.problems,
+            });
+        }
+        self.changed();
+        Ok(out)
+    }
+
+    /// Credit each artist on matching albums whose files name them only in
+    /// one string: from their MusicBrainz release, or by splitting the
+    /// credit where every part is an artist the library holds. Files that
+    /// already carry the credits are left alone, so it can run again.
+    pub async fn credit(&self, query: &[String]) -> anyhow::Result<Vec<CreditedAlbum>> {
+        let known = self.known_artists().await?;
+        let mut out = Vec::new();
+        for a in self.read(query).await? {
+            let c = self.tagger.credit(&a.dir, &known).await?;
+            if c.files == 0 && c.problems.is_empty() {
+                continue;
+            }
+            out.push(CreditedAlbum {
+                path: a.dir.to_string_lossy().into_owned(),
+                files: c.files,
+                artists: c.artists,
+                problems: c.problems,
             });
         }
         self.changed();

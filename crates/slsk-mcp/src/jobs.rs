@@ -884,12 +884,17 @@ impl Jobs {
                     self.library.clone(),
                 );
                 tokio::spawn(async move {
-                    match tagger.enrich(&path).await {
+                    let known = library.known_artists().await.unwrap_or_else(|e| {
+                        tracing::warn!(error = %e, "could not list the library's artists");
+                        Default::default()
+                    });
+                    match tagger.enrich(&path, &known).await {
                         Ok(e) => tracing::info!(
                             album = %path.display(),
                             gain_db = ?e.gain_db,
                             genres = ?e.genres,
                             lyrics = e.lyrics,
+                            artists = ?e.artists,
                             problems = ?e.problems,
                             "enriched"
                         ),
