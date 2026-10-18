@@ -5,7 +5,7 @@
     {% if !f.changes.is_empty() %}
     <table class="changes">
     {% for c in f.changes %}
-      <tr><th>{{ c.field }}</th><td class="from">{% if let Some(o) = c.old %}{{ o }}{% else %}<span class="none">none</span>{% endif %}</td><td class="to">{% if let Some(n) = c.new %}{{ n }}{% else %}<span class="none">removed</span>{% endif %}</td></tr>
+      <tr><th>{{ self.label(c.field) }}</th><td class="from">{% if let Some(o) = c.old %}{{ o }}{% else %}<span class="none">none</span>{% endif %}</td><td class="to">{% if let Some(n) = c.new %}{{ n }}{% else %}<span class="none">removed</span>{% endif %}</td></tr>
     {% endfor %}
     </table>
     {% endif %}

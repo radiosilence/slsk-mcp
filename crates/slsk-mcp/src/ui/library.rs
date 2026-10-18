@@ -383,6 +383,12 @@ fn unselected() -> axum::response::sse::Event {
     super::signals(r#"{"_sel": 0, "_spares": 0}"#)
 }
 
+/// Which album is open in detail, for every form that acts on the page to
+/// send: the list is not redrawn when one opens or closes.
+fn opened(path: &str) -> axum::response::sse::Event {
+    super::signals(&serde_json::json!({ "_libalbum": path }).to_string())
+}
+
 /// The list the address describes.
 async fn view(State(s): State<UiState>, Query(q): Query<Vec<(String, String)>>) -> Response {
     let filter = Filter::from_fields(&q);
@@ -393,6 +399,7 @@ async fn view(State(s): State<UiState>, Query(q): Query<Vec<(String, String)>>) 
         if !filter.album.is_empty() {
             yield Ok(patch(&album_html(&s, &filter).await));
         }
+        yield Ok(opened(&filter.album));
         yield Ok(super::place("library", &filter.url()));
     })
     .into_response()
@@ -405,6 +412,7 @@ async fn find(State(s): State<UiState>, body: Bytes) -> Response {
         unselected(),
         patch(r#"<div id="lib-preview"></div>"#),
         patch(r#"<div id="lib-album"></div>"#),
+        opened(""),
         super::place(
             "library",
             &Filter {
@@ -546,6 +554,7 @@ async fn album(State(s): State<UiState>, Query(q): Query<Vec<(String, String)>>)
     super::many(vec![
         patch(&album_html(&s, &filter).await),
         patch(r#"<div id="lib-preview"></div>"#),
+        opened(&filter.album),
         super::place("library", &filter.url()),
     ])
 }
@@ -759,30 +768,37 @@ async fn selection(s: &UiState, form: &[(String, String)]) -> anyhow::Result<(Fi
 #[derive(Default)]
 struct Ask {
     release: Option<String>,
-    edits: Option<TagEdits>,
+    /// The tags typed, and the files as they were read to compare them.
+    edits: Option<(TagEdits, Vec<sift::meta::Track>)>,
 }
 
 /// A MusicBrainz release id from what was pasted: the id, or a link to the
-/// release. Discogs ids (`discogs:123`) pass through.
+/// release or any of its pages. Links to anything else on MusicBrainz are
+/// refused. Discogs ids (`discogs:123`) pass through.
 fn release_id(s: &str) -> Option<String> {
-    let s = s.trim().trim_end_matches('/');
-    let id = s.rsplit('/').next().unwrap_or(s);
-    let id = id.split(['?', '#']).next().unwrap_or(id);
-    let uuid = id.len() == 36
-        && id.chars().enumerate().all(|(i, c)| {
-            if [8, 13, 18, 23].contains(&i) {
-                c == '-'
-            } else {
-                c.is_ascii_hexdigit()
-            }
-        });
-    if uuid {
-        Some(id.to_ascii_lowercase())
-    } else if s.starts_with("discogs:") {
-        Some(s.to_string())
-    } else {
-        None
+    let s = s.trim();
+    if s.starts_with("discogs:") {
+        return Some(s.to_string());
     }
+    let uuid = |id: &str| {
+        id.len() == 36
+            && id.chars().enumerate().all(|(i, c)| {
+                if [8, 13, 18, 23].contains(&i) {
+                    c == '-'
+                } else {
+                    c.is_ascii_hexdigit()
+                }
+            })
+    };
+    let id = if s.contains('/') {
+        let path = s.split(['?', '#']).next().unwrap_or(s);
+        let mut segments = path.split('/');
+        segments.find(|seg| *seg == "release")?;
+        segments.next()?
+    } else {
+        s
+    };
+    uuid(id).then(|| id.to_ascii_lowercase())
 }
 
 /// One album in a preview: what applying would do to it.
@@ -820,6 +836,9 @@ enum Body {
         files: Vec<FileChanges>,
         missing: Vec<String>,
         untouched: Vec<String>,
+        /// Every file's front cover is replaced.
+        cover: bool,
+        companions: Vec<Companion>,
     },
     Edit {
         files: Vec<FileChanges>,
@@ -830,6 +849,14 @@ enum Body {
         keep: String,
         reason: String,
     },
+}
+
+/// A file beside the tracks that follows the album to its new directory,
+/// or stays because something is already there.
+struct Companion {
+    file: String,
+    to: String,
+    stays: bool,
 }
 
 /// One file in a re-tag or an edit: the fields that change, and where it
@@ -931,6 +958,41 @@ impl PlannedView<'_> {
     }
     fn moving(&self, files: &[FileChanges]) -> bool {
         files.iter().any(|f| f.to.is_some())
+    }
+    fn label<'b>(&self, field: &'b str) -> &'b str {
+        field_label(field)
+    }
+}
+
+/// A tag field in a list of changes, by the name the album's tag table
+/// and the edit form give it.
+fn field_label(field: &str) -> &str {
+    match field {
+        "title" => "title",
+        "artist" => "artist",
+        "artists" => "artists",
+        "album" => "album",
+        "albumartist" => "album artist",
+        "albumartists" => "album artists",
+        "track" => "track",
+        "tracktotal" => "tracks",
+        "disc" => "disc",
+        "disctotal" => "discs",
+        "date" | "year" => "date",
+        "original_date" => "original date",
+        "genre" => "genre",
+        "label" => "label",
+        "catalognum" => "catalogue number",
+        "country" => "country",
+        "media" => "media",
+        "comp" => "compilation",
+        "mb_albumid" => "MusicBrainz release",
+        "mb_releasegroupid" => "MusicBrainz release group",
+        "mb_trackid" => "MusicBrainz recording",
+        "mb_releasetrackid" => "MusicBrainz track",
+        "mb_artistids" => "MusicBrainz artists",
+        "mb_albumartistids" => "MusicBrainz album artists",
+        other => other,
     }
 }
 
@@ -1047,7 +1109,7 @@ async fn plan_one(
                     return Ok(());
                 };
                 let plan = library.retag_plan(&path, &release).await?;
-                let changes = plan.files.iter().filter(|f| !f.changes.is_empty() || f.path != f.to).count();
+                let changes = plan.files.iter().filter(|f| !f.changes.is_empty() || f.to.as_ref().is_some_and(|to| *to != f.path)).count();
                 p.applicable = plan.refused.is_none() && changes > 0;
                 p.ticked = p.applicable && review.is_none();
                 p.note = match (&plan.refused, review, changes) {
@@ -1063,7 +1125,10 @@ async fn plan_one(
                     files: plan
                         .files
                         .into_iter()
-                        .map(|f| FileChanges::of(&root, &f.path, &f.to, f.changes))
+                        .map(|f| {
+                            let to = f.to.as_deref().unwrap_or(&f.path);
+                            FileChanges::of(&root, &f.path, to, f.changes)
+                        })
                         .collect(),
                     missing: c
                         .missing
@@ -1075,14 +1140,24 @@ async fn plan_one(
                         .iter()
                         .map(|f| f.file_name().unwrap_or_default().to_string_lossy().into_owned())
                         .collect(),
+                    cover: plan.cover,
+                    companions: plan
+                        .companions
+                        .iter()
+                        .map(|c| Companion {
+                            file: c.from.file_name().unwrap_or_default().to_string_lossy().into_owned(),
+                            to: rel(&root, &c.to.to_string_lossy()).to_string(),
+                            stays: c.stays,
+                        })
+                        .collect(),
                 };
             }
             Action::Edit => {
-                let Some(edits) = &ask.edits else {
+                let Some((edits, tracks)) = &ask.edits else {
                     p.note = Some("No tags typed.".into());
                     return Ok(());
                 };
-                let plan = library.edit_plan(&path, edits).await?;
+                let plan = library.edit_plan(&path, tracks, edits).await?;
                 let moves: HashMap<_, _> = match &plan.refile {
                     Preview::Moves(m) => m.iter().cloned().collect(),
                     _ => HashMap::new(),
@@ -1228,6 +1303,9 @@ const ALBUM_FIELDS: &[(&str, &str)] = &[
 /// Fields the edit form offers on each file.
 const TRACK_FIELDS: &[&str] = &["disc", "track", "title", "artist"];
 
+/// Of those, the ones that hold a number.
+const NUMBERS: &[&str] = &["disc", "track"];
+
 /// What every file has for `field`, and whether they disagree.
 fn consensus(tracks: &[sift::meta::Track], field: &str) -> (Option<String>, bool) {
     let mut values = tracks.iter().map(|t| t.field(field));
@@ -1239,8 +1317,9 @@ fn consensus(tracks: &[sift::meta::Track], field: &str) -> (Option<String>, bool
 /// The edits the form asks for against the files as they are now: only
 /// fields typed differently from what the files have. An album-wide field
 /// the files disagree on and left blank is left alone; blanking one they
-/// agree on clears it.
-fn edits_from(tracks: &[sift::meta::Track], form: &[(String, String)]) -> TagEdits {
+/// agree on clears it. A number typed as anything but digits is refused,
+/// rather than written as no number at all.
+fn edits_from(tracks: &[sift::meta::Track], form: &[(String, String)]) -> anyhow::Result<TagEdits> {
     let raw = |k: &str| {
         form.iter()
             .find(|(n, _)| n == k)
@@ -1272,6 +1351,12 @@ fn edits_from(tracks: &[sift::meta::Track], form: &[(String, String)]) -> TagEdi
                 continue;
             };
             if typed != t.field(field).unwrap_or_default().trim() {
+                if NUMBERS.contains(field) && !typed.is_empty() && typed.parse::<u32>().is_err() {
+                    anyhow::bail!(
+                        "{field} for {} must be a number, not {typed:?}",
+                        t.path.file_name().unwrap_or_default().to_string_lossy()
+                    );
+                }
                 changes.push((field.to_string(), (!typed.is_empty()).then_some(typed)));
             }
         }
@@ -1300,7 +1385,7 @@ fn edits_from(tracks: &[sift::meta::Track], form: &[(String, String)]) -> TagEdi
             None => edits.tracks.push((t.path.clone(), clear)),
         }
     }
-    edits
+    Ok(edits)
 }
 
 /// What the form chose for a single album: a release (picked or pasted)
@@ -1335,7 +1420,7 @@ async fn ask(
             let tracks = s.app.library.tracks(one()?).await?;
             Ok(Ask {
                 release: None,
-                edits: Some(edits_from(&tracks, form)),
+                edits: Some((edits_from(&tracks, form)?, tracks)),
             })
         }
         _ => Ok(Ask::default()),
@@ -1355,6 +1440,8 @@ fn escape(s: &str) -> String {
 /// started it, and the page follows it.
 #[derive(Default)]
 pub(super) struct LibraryRun {
+    /// Counts runs, so a page following one knows when another starts.
+    id: u64,
     action: Option<Action>,
     total: usize,
     done: usize,
@@ -1373,49 +1460,122 @@ struct Outcome {
     problems: Vec<String>,
 }
 
-#[derive(Template)]
-#[template(path = "library_run.html")]
-struct RunView<'a> {
-    run: &'a LibraryRun,
-    root: String,
-}
-
-impl RunView<'_> {
-    fn rel<'a>(&self, p: &'a str) -> &'a str {
-        rel(&self.root, p)
-    }
-    fn recent(&self) -> impl Iterator<Item = &Outcome> {
-        self.run.results.iter().rev()
-    }
+impl LibraryRun {
     fn verb(&self) -> &'static str {
-        match self.run.action {
-            Some(a) if self.run.running => a.doing(),
+        match self.action {
+            Some(a) if self.running => a.doing(),
             Some(a) => a.done(),
             None => "",
         }
     }
     fn failed(&self) -> usize {
-        self.run.results.iter().filter(|r| !r.ok).count()
+        self.results.iter().filter(|r| !r.ok).count()
     }
 }
 
-/// What the run panel shows, cheaply: it changes whenever the panel does.
-pub(super) fn run_stamp(s: &UiState) -> (bool, usize, usize, Option<String>, bool) {
+#[derive(Template)]
+#[template(path = "library_run.html")]
+struct RunView<'a> {
+    run: &'a LibraryRun,
+    root: &'a str,
+}
+
+impl RunView<'_> {
+    fn rel<'a>(&self, p: &'a str) -> &'a str {
+        rel(self.root, p)
+    }
+}
+
+#[derive(Template)]
+#[template(path = "library_run_head.html")]
+struct RunHead<'a> {
+    run: &'a LibraryRun,
+    root: &'a str,
+}
+
+impl RunHead<'_> {
+    fn rel<'a>(&self, p: &'a str) -> &'a str {
+        rel(self.root, p)
+    }
+}
+
+#[derive(Template)]
+#[template(path = "library_run_row.html")]
+struct RunRow<'a> {
+    r: &'a Outcome,
+    root: &'a str,
+}
+
+impl RunRow<'_> {
+    fn rel<'a>(&self, p: &'a str) -> &'a str {
+        rel(self.root, p)
+    }
+}
+
+/// What a page's stream last sent of the run panel.
+#[derive(Default)]
+pub(super) struct RunSent {
+    stamp: Option<(u64, bool, usize, usize, Option<String>, bool)>,
+    rows: usize,
+}
+
+/// The run panel's changes since `sent`: the whole panel when a run
+/// starts or ends, and while it runs, its head and the albums done since.
+pub(super) fn run_events(s: &UiState, sent: &mut RunSent) -> Vec<axum::response::sse::Event> {
     let run = s.run.lock();
-    (
+    let stamp = (
+        run.id,
         run.running,
         run.done,
         run.total,
         run.current.clone(),
         run.error.is_some(),
-    )
+    );
+    if sent.stamp.as_ref() == Some(&stamp) {
+        return Vec::new();
+    }
+    let root = s.app.library.root().to_string_lossy().into_owned();
+    let following = run.running
+        && sent.rows <= run.results.len()
+        && sent
+            .stamp
+            .as_ref()
+            .is_some_and(|(id, running, ..)| *id == run.id && *running);
+    let events = if following {
+        let head = RunHead {
+            run: &run,
+            root: &root,
+        };
+        let mut events = vec![patch(&head.render().unwrap_or_default())];
+        let new: String = run.results[sent.rows..]
+            .iter()
+            .rev()
+            .map(|r| RunRow { r, root: &root }.render().unwrap_or_default())
+            .collect();
+        if !new.is_empty() {
+            events.push(super::prepend("#lib-run-rows", &new));
+        }
+        events
+    } else {
+        vec![patch(
+            &RunView {
+                run: &run,
+                root: &root,
+            }
+            .render()
+            .unwrap_or_default(),
+        )]
+    };
+    sent.stamp = Some(stamp);
+    sent.rows = run.results.len();
+    events
 }
 
 pub(super) fn run_html(s: &UiState) -> String {
     let run = s.run.lock();
     RunView {
         run: &run,
-        root: s.app.library.root().to_string_lossy().into_owned(),
+        root: &s.app.library.root().to_string_lossy(),
     }
     .render()
     .unwrap_or_default()
@@ -1453,6 +1613,7 @@ async fn apply(State(s): State<UiState>, Path(action): Path<String>, body: Bytes
             ));
         }
         *run = LibraryRun {
+            id: run.id + 1,
             action: Some(action),
             total: paths.len(),
             running: true,
@@ -1484,18 +1645,29 @@ async fn apply(State(s): State<UiState>, Path(action): Path<String>, body: Bytes
         yield Ok(patch(r#"<div id="lib-preview"></div>"#));
         let _ = rx.await;
         yield Ok(patch(&run_html(&s)));
-        // The album open in detail is drawn again where it now is.
+        // The album open in detail is drawn again where it now is, or
+        // closed when it has left the library (binned).
         let mut filter = filter;
-        if !filter.album.is_empty() {
+        let was_open = !filter.album.is_empty();
+        if was_open {
             let moved = s.run.lock().results.iter().find(|r| r.path == filter.album).and_then(|r| r.to.clone());
             if let Some(to) = moved {
                 filter.album = to;
             }
+            let gone = rows(&s, &by_path([filter.album.as_str()])).await.is_ok_and(|r| r.is_empty());
+            if gone {
+                filter.album.clear();
+            }
         }
         yield Ok(patch(&list_html(&s, &filter).await));
         yield Ok(unselected());
-        if !filter.album.is_empty() {
-            yield Ok(patch(&album_html(&s, &filter).await));
+        if was_open {
+            yield Ok(patch(&if filter.album.is_empty() {
+                r#"<div id="lib-album"></div>"#.to_string()
+            } else {
+                album_html(&s, &filter).await
+            }));
+            yield Ok(opened(&filter.album));
             yield Ok(super::place("library", &filter.url()));
         }
         let (done, failed) = {
@@ -1610,13 +1782,12 @@ async fn run(
                         .and_then(|e| serde_json::from_str(e).ok())
                         .ok_or_else(|| anyhow::anyhow!("no edits given"))?;
                     let m = library.edit(path, &edits).await?;
-                    let files = edits.album.len() + edits.tracks.len();
                     match (m.to, m.refused) {
                         (Some(to), _) if to != *path => {
                             (format!("→ {}", rel(&root, &to)), Vec::new(), Some(to))
                         }
                         (_, Some(why)) => (
-                            format!("{files} edits; left where it is"),
+                            "tags written; left where it is".into(),
                             vec![why.replace(&format!("{root}/"), "")],
                             None,
                         ),
@@ -1839,7 +2010,8 @@ mod tests {
                 ("t1-file", "/m/a/2.flac"),
                 ("t1-title", "Two (Live)"),
             ]),
-        );
+        )
+        .unwrap();
         assert_eq!(
             edits.album,
             [("album".to_string(), Some("Monster".to_string()))]
@@ -1851,7 +2023,7 @@ mod tests {
                 vec![("title".to_string(), Some("Two (Live)".to_string()))]
             )]
         );
-        let cleared = edits_from(&tracks, &form(&[("a-album", "")]));
+        let cleared = edits_from(&tracks, &form(&[("a-album", "")])).unwrap();
         assert_eq!(cleared.album, [("album".to_string(), None)]);
 
         let mut credited = tracks[0].clone();
@@ -1864,7 +2036,8 @@ mod tests {
                 ("t0-artist", "A & B"),
                 ("t0-title", " One "),
             ]),
-        );
+        )
+        .unwrap();
         assert_eq!(
             renamed.tracks[0].1,
             [
@@ -1891,7 +2064,44 @@ mod tests {
             .as_deref(),
             Some(id)
         );
+        assert_eq!(
+            release_id(&format!("https://musicbrainz.org/release/{id}/cover-art")).as_deref(),
+            Some(id)
+        );
+        assert_eq!(
+            release_id(&format!("https://musicbrainz.org/release-group/{id}")),
+            None
+        );
+        assert_eq!(
+            release_id(&format!("https://musicbrainz.org/recording/{id}")),
+            None
+        );
         assert_eq!(release_id("discogs:123").as_deref(), Some("discogs:123"));
         assert_eq!(release_id("monster"), None);
+    }
+
+    #[test]
+    fn a_number_typed_as_letters_is_refused() {
+        let tracks = [sift::meta::Track {
+            track: Some(1),
+            ..track("/m/a/1.flac", "One", "Monstre", None)
+        }];
+        let typed = |n: &str| {
+            edits_from(
+                &tracks,
+                &form(&[("t0-file", "/m/a/1.flac"), ("t0-track", n)]),
+            )
+        };
+        assert!(typed("A1").is_err());
+        assert!(typed("1/2").is_err());
+        assert_eq!(
+            typed("2").unwrap().tracks[0].1,
+            [("track".to_string(), Some("2".to_string()))]
+        );
+        assert_eq!(
+            typed("").unwrap().tracks[0].1,
+            [("track".to_string(), None)],
+            "a number left blank is cleared"
+        );
     }
 }

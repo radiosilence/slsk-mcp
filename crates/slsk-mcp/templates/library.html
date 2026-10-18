@@ -3,11 +3,7 @@
 {% if total == 0 %}<p class="note">No albums match.</p>{% else %}
 <form id="lib-sel" data-signals="{_sel: 0, _spares: 0}"
   data-on:change="evt.target.name == 'all' ? el.querySelectorAll('input[name=path]').forEach(c => c.checked = evt.target.checked) : (evt.target.checked || (el.querySelector('input[name=all]').checked = false)); $_sel = el.querySelector('input[name=all]').checked ? {{ total }} : el.querySelectorAll('input[name=path]:checked').length; $_spares = el.querySelector('input[name=all]').checked ? {{ spares }} : el.querySelectorAll('input[name=path][data-spare]:checked').length">
-  <input type="hidden" name="q" value="{{ filter.q }}">
-  <input type="hidden" name="since" value="{{ filter.since }}">
-  <input type="hidden" name="from" value="{{ filter.from }}">
-  <input type="hidden" name="show" value="{{ filter.show }}">
-  <input type="hidden" name="album" value="{{ filter.album }}">
+  {% include "library_filter.html" %}
   <div class="lib-head">
     <label class="toggle"><input type="checkbox" name="all" value="1"> Select all {{ total }}</label>
     <span class="note">{{ total }} album{% if total != 1 %}s{% endif %}, newest import first</span>

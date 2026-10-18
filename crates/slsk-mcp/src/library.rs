@@ -654,34 +654,29 @@ impl Library {
         Ok(self.tagger.retag_plan(Path::new(dir), release_id).await?)
     }
 
-    /// What `edits` would change in each file of the album at `dir`, and
-    /// where the edited tags would file it. Changes nothing.
-    pub async fn edit_plan(&self, dir: &str, edits: &TagEdits) -> anyhow::Result<EditPlan> {
+    /// What `edits` would change in each of `tracks`, the files of the
+    /// album at `dir` as just read, and where the edited tags would file
+    /// it. Changes nothing.
+    pub async fn edit_plan(
+        &self,
+        dir: &str,
+        tracks: &[sift::meta::Track],
+        edits: &TagEdits,
+    ) -> anyhow::Result<EditPlan> {
         check_editable(edits)?;
-        let mut files = Vec::new();
-        for t in self.tracks(dir).await? {
-            let changes = edits.for_file(&t.path);
-            let mut edited = t.clone();
-            edited.apply(&changes);
-            let mut fields: Vec<&'static str> = Vec::new();
-            for (f, _) in &changes {
-                if let Some(f) = sift::meta::EDITABLE.iter().find(|e| *e == f)
-                    && !fields.contains(f)
-                {
-                    fields.push(f);
-                }
-            }
-            let diff: Vec<sift::meta::TagChange> = fields
-                .into_iter()
-                .map(|field| sift::meta::TagChange {
-                    field,
-                    old: t.field(field),
-                    new: edited.field(field),
-                })
-                .filter(|c| c.old != c.new)
-                .collect();
-            files.push((t.path, diff));
-        }
+        let edited: Vec<sift::meta::Track> = tracks
+            .iter()
+            .map(|t| {
+                let mut e = t.clone();
+                e.apply(&edits.for_file(&t.path));
+                e
+            })
+            .collect();
+        let files = tracks
+            .iter()
+            .zip(&edited)
+            .map(|(t, e)| (t.path.clone(), sift::meta::diff(t, e)))
+            .collect();
         let Some(mut album) = self
             .read(&[format!("path:={dir}")])
             .await?
@@ -690,9 +685,15 @@ impl Library {
         else {
             anyhow::bail!("{dir} is no longer in the library");
         };
+        // The move is planned from the tags just read, edited, rather than
+        // the index's copy of them.
         for item in &mut album.items {
-            let changes = edits.for_file(&item.track.path);
-            item.track.apply(&changes);
+            if let Some(e) = edited.iter().find(|e| e.path == item.track.path) {
+                item.track = e.clone();
+            } else {
+                let changes = edits.for_file(&item.track.path);
+                item.track.apply(&changes);
+            }
         }
         let refile = match tokio::task::block_in_place(|| manage::plan_move(&self.cfg, &album)) {
             Plan::InPlace => Preview::InPlace,
