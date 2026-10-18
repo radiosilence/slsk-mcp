@@ -1,0 +1,1 @@
+- **Every list shows everything.** Jobs, downloads, uploads, search results, chat rooms and conversations, browse folders and triage examples are no longer cut off at a fixed number of rows.
