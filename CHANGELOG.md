@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.68
+
+- **A hidden track before track 1 is imported when the rip leaves it unnumbered.** MusicBrainz gives a pregap an estimated length that rips rarely share, and sift judged the track by it, so an untagged track 00 was left behind even when the release was chosen by hand, and a release missing the hidden track outscored the complete CD. sift 0.5.1 matches a pregap by title and position.
+
 ## 0.1.67
 
 - **A CD's hidden track before track 1 is imported as track 0.** MusicBrainz lists it as the disc's pregap, apart from its tracks, and the tagger used to read only the tracks, so the rip's track 00 matched nothing and was deleted with the leftover download. Fixed in sift 0.5, which this release moves to.
