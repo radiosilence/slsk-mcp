@@ -388,10 +388,6 @@ async fn enrich(State(s): State<UiState>, body: Bytes) -> Response {
             q.split_whitespace().map(String::from).collect(),
             q.to_string(),
         )
-    } else if credit && super::field(&form, "all").is_some() {
-        // Crediting skips files already credited and reads no audio, so the
-        // whole library is a reasonable thing to ask for here.
-        (Vec::new(), "the whole library".to_string())
     } else {
         return failed(&anyhow::anyhow!(
             "Say which albums; the whole library is enriched over the API, deliberately."
