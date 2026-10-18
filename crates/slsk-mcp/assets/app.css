@@ -193,5 +193,6 @@ details.album[open] > summary .path { color: var(--text); }
 .rows > li.moved .pill { background: #1c3a2d; color: var(--accent); }
 .rows > li.left .pill { background: #3b3220; color: var(--warn); }
 .folder .crumbs { margin: 0; gap: 2px 4px; }
+.folder .crumbs button { flex: none; }
 details.peek > summary { cursor: pointer; color: var(--dim); font-size: 13px; margin-top: 4px; }
 details.peek .files { margin: 6px 0 0; }
