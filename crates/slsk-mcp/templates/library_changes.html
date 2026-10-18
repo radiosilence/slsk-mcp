@@ -1,0 +1,14 @@
+<ul class="rows tight filechanges">
+{% for f in files %}
+  <li>
+    <div class="row"><span class="path">{{ f.file }}</span>{% if let Some(to) = f.to %}<span class="path to">→ {{ to }}</span>{% endif %}{% if f.changes.is_empty() %}<span class="meta">tags unchanged</span>{% endif %}</div>
+    {% if !f.changes.is_empty() %}
+    <table class="changes">
+    {% for c in f.changes %}
+      <tr><th>{{ c.field }}</th><td class="from">{% if let Some(o) = c.old %}{{ o }}{% else %}<span class="none">none</span>{% endif %}</td><td class="to">{% if let Some(n) = c.new %}{{ n }}{% else %}<span class="none">removed</span>{% endif %}</td></tr>
+    {% endfor %}
+    </table>
+    {% endif %}
+  </li>
+{% endfor %}
+</ul>

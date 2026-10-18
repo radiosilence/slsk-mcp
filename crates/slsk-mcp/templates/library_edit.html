@@ -1,0 +1,29 @@
+<form id="lib-edit" class="edit">
+  <input type="hidden" name="path" value="{{ path }}">
+  <input type="hidden" name="q" value="{{ filter.q }}">
+  <input type="hidden" name="since" value="{{ filter.since }}">
+  <input type="hidden" name="from" value="{{ filter.from }}">
+  <input type="hidden" name="show" value="{{ filter.show }}">
+  <input type="hidden" name="album" value="{{ filter.album }}">
+  <p class="note">Change what needs changing; the preview lists each field as it is and as it would be. A field the files disagree on is left alone unless typed.</p>
+  <div class="edit-grid">
+  {% for (field, label) in self.fields() %}
+    <label>{{ label }}<input name="a-{{ field }}" value="{{ self.now(field) }}"{% if self.varies(field) %} placeholder="(differs between files)"{% endif %} autocomplete="off"></label>
+  {% endfor %}
+  </div>
+  <table class="edit-tracks">
+    <tr><th>Disc</th><th>Track</th><th>Title</th><th>Artist</th></tr>
+  {% for t in tracks %}
+    <tr>
+      <td><input type="hidden" name="t{{ loop.index0 }}-file" value="{{ self.file(t) }}"><input name="t{{ loop.index0 }}-disc" value="{{ self.value(t, "disc") }}" inputmode="numeric" aria-label="Disc"></td>
+      <td><input name="t{{ loop.index0 }}-track" value="{{ self.value(t, "track") }}" inputmode="numeric" aria-label="Track"></td>
+      <td><input name="t{{ loop.index0 }}-title" value="{{ self.value(t, "title") }}" aria-label="Title"></td>
+      <td><input name="t{{ loop.index0 }}-artist" value="{{ self.value(t, "artist") }}" aria-label="Artist"></td>
+    </tr>
+  {% endfor %}
+  </table>
+  <div class="actions">
+    <button type="button" data-indicator="_pv_edit" data-attr:disabled="$_pv_edit" data-class:busy="$_pv_edit" data-on:click="@post('/library/preview/edit', {contentType: 'form', selector: '#lib-edit'})">Preview edit</button>
+    <button type="button" class="quiet" data-on:click="document.getElementById('lib-edit').replaceChildren()">Cancel</button>
+  </div>
+</form>

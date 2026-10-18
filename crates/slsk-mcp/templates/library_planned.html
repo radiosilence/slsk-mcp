@@ -9,7 +9,8 @@
       {% when Body::Refile with { change, into, moves } %}{% if let Some(d) = into %}→ {{ d }} · {% endif %}{{ moves.len() }} file{% if moves.len() != 1 %}s{% endif %}{% if !change.is_empty() %} · {{ change }}{% endif %}
       {% when Body::Credit with (credits) %}{{ credits.len() }} file{% if credits.len() != 1 %}s{% endif %} credited
       {% when Body::Enrich with { credits, genres, lyrics } %}{% if genres.is_empty() %}no new genres{% else %}{{ genres.join(", ") }}{% endif %} · lyrics for {{ lyrics.len() }}{% if !credits.is_empty() %} · credits for {{ credits.len() }}{% endif %} · gain measured on apply
-      {% when Body::Reimport with (c) %}{{ c.release.artist }} — {{ c.release.title }}{% if let Some(d) = c.release.date %} ({{ d }}){% endif %} · distance {{ c.release.distance }}{% if !c.missing.is_empty() %} · {{ c.missing.len() }} missing{% endif %}{% if !c.extra.is_empty() %} · {{ c.extra.len() }} extra{% endif %}
+      {% when Body::Reimport with { release, files, missing, untouched } %}{{ release.artist }} — {{ release.title }}{% if let Some(d) = release.date %} ({{ d }}){% endif %} · distance {{ release.distance }} · {{ self.changed(files) }} of {{ files.len() }} files change{% if self.moving(files) %} · moves{% endif %}{% if !missing.is_empty() %} · {{ missing.len() }} missing{% endif %}
+      {% when Body::Edit with { files, into } %}{{ self.changed(files) }} of {{ files.len() }} files change{% if let Some(d) = into %} · → {{ d }}{% endif %}
       {% when Body::Bin with { to, keep, reason } %}→ {{ to }}
       {% endmatch %}
       </span>
@@ -38,15 +39,14 @@
     {% endif %}
     {% if !credits.is_empty() %}<p class="meta">Artist credits:</p>{% include "library_credits.html" %}{% endif %}
     <p class="meta">ReplayGain: measured on apply.</p>
-    {% when Body::Reimport with (c) %}
-    <p class="meta">{% if c.release.id.starts_with("discogs:") %}{{ c.release.id }}{% else %}<a href="https://musicbrainz.org/release/{{ c.release.id }}" target="_blank" rel="noopener">MusicBrainz release</a>{% endif %}{% if let Some(m) = c.release.media %} · {{ m }}{% endif %}{% if let Some(co) = c.release.country %} · {{ co }}{% endif %}</p>
-    <ul class="rows tight pairs">
-    {% for pr in c.pairs %}
-      <li><span class="path">{{ pr.position }}. {{ pr.title }}</span><span class="meta{% if !self.close(pr.title_distance) %} warn{% endif %}">{% if let Some(t) = pr.file_title %}{% if t.as_str() != pr.title.as_str() %}was “{{ t }}”{% else %}title matches{% endif %}{% else %}{{ pr.file }}{% endif %}</span><span class="meta">{{ self.secs(pr.length_delta_secs) }}</span></li>
-    {% endfor %}
-    </ul>
-    {% if !c.missing.is_empty() %}<p class="why warn">No file for: {% for m in c.missing %}{{ m.disc }}-{{ m.position }} {{ m.title }}{% if !loop.last %}, {% endif %}{% endfor %}</p>{% endif %}
-    {% if !c.extra.is_empty() %}<p class="why warn">Not on the release: {{ c.extra.join(", ") }}</p>{% endif %}
+    {% when Body::Reimport with { release, files, missing, untouched } %}
+    <p class="meta">{% if release.id.starts_with("discogs:") %}{{ release.id }}{% else %}<a href="https://musicbrainz.org/release/{{ release.id }}" target="_blank" rel="noopener">MusicBrainz release</a>{% endif %}{% if let Some(m) = release.media %} · {{ m }}{% endif %}{% if let Some(co) = release.country %} · {{ co }}{% endif %} · {{ release.tracks }} tracks</p>
+    {% include "library_changes.html" %}
+    {% if !missing.is_empty() %}<p class="why warn">No file for: {{ missing.join(", ") }}</p>{% endif %}
+    {% if !untouched.is_empty() %}<p class="why warn">Matched to no track, left as they are: {{ untouched.join(", ") }}</p>{% endif %}
+    {% when Body::Edit with { files, into } %}
+    {% if let Some(d) = into %}<p class="meta">Re-filed into <span class="path">{{ d }}</span></p>{% endif %}
+    {% include "library_changes.html" %}
     {% when Body::Bin with { to, keep, reason } %}
     <p class="meta">Spare: {{ reason }}. The copy kept is <span class="path">{{ self.rel(keep) }}</span>.</p>
     {% endmatch %}

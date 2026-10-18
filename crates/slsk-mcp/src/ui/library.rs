@@ -18,12 +18,15 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 
 use super::{UiState, failed, fields, flash_ok, patch, sse};
-use crate::library::{AlbumMove, CreditWrite, LibraryAlbum, Overview, Preview};
+use crate::library::{AlbumMove, CreditWrite, LibraryAlbum, Overview, Preview, TagEdits};
 
 pub(super) fn routes() -> Router<UiState> {
     Router::new()
         .route("/library", get(view))
         .route("/library/find", post(find))
+        .route("/library/album", get(album))
+        .route("/library/album/releases", get(releases))
+        .route("/library/album/edit", get(edit_form))
         .route("/library/preview/{action}", post(preview))
         .route("/library/apply/{action}", post(apply))
 }
@@ -140,11 +143,9 @@ struct Filter {
     from: String,
     /// Empty for every album, `dups` or `moves`.
     show: String,
-    page: usize,
+    /// The album open in detail, by path; it does not narrow the list.
+    album: String,
 }
-
-/// Albums listed at once; the rest are a page away.
-const PAGE: usize = 100;
 
 impl Filter {
     fn from_fields(f: &[(String, String)]) -> Self {
@@ -154,12 +155,12 @@ impl Filter {
             since: get("since"),
             from: get("from"),
             show: get("show"),
-            page: get("page").parse().unwrap_or(0),
+            album: get("album"),
         }
     }
 
-    /// The earliest import time the filter admits, in seconds.
-    /// "Today" and a date start at midnight where `now` is.
+    /// The earliest import time the filter admits, in seconds. Days,
+    /// weeks (from Monday) and months start at midnight where `now` is.
     fn since_secs<Tz: chrono::TimeZone>(&self, now: chrono::DateTime<Tz>) -> Option<i64> {
         let tz = now.timezone();
         let day = |d: chrono::NaiveDate| {
@@ -169,8 +170,15 @@ impl Filter {
         };
         match self.since.as_str() {
             "today" => day(now.date_naive()),
-            "week" => Some((now.clone() - chrono::Duration::days(7)).timestamp()),
-            "month" => Some((now.clone() - chrono::Duration::days(30)).timestamp()),
+            "week" => {
+                use chrono::Datelike;
+                let today = now.date_naive();
+                day(today - chrono::Duration::days(today.weekday().num_days_from_monday().into()))
+            }
+            "month" => {
+                use chrono::Datelike;
+                day(now.date_naive().with_day(1)?)
+            }
             "date" => chrono::NaiveDate::parse_from_str(&self.from, "%Y-%m-%d")
                 .ok()
                 .and_then(day),
@@ -190,33 +198,36 @@ impl Filter {
     }
 
     fn url(&self) -> String {
-        let page = if self.page > 0 {
-            self.page.to_string()
-        } else {
-            String::new()
-        };
+        super::place_url("/library", &self.params())
+    }
+
+    /// The filter as address parameters, the open album included.
+    fn params(&self) -> Vec<(&str, &str)> {
         let from = if self.since == "date" {
             self.from.as_str()
         } else {
             ""
         };
-        super::place_url(
-            "/library",
-            &[
-                ("q", &self.q),
-                ("since", &self.since),
-                ("from", from),
-                ("show", &self.show),
-                ("page", &page),
-            ],
-        )
+        vec![
+            ("q", &self.q),
+            ("since", &self.since),
+            ("from", from),
+            ("show", &self.show),
+            ("album", &self.album),
+        ]
     }
 
-    fn at_page(&self, page: usize) -> Self {
-        Self {
-            page,
+    /// The same list with `path` open in detail, and the address that
+    /// draws just that album.
+    fn opening(&self, path: &str) -> (String, String) {
+        let open = Self {
+            album: path.to_string(),
             ..self.clone()
-        }
+        };
+        (
+            open.url(),
+            super::place_url("/library/album", &open.params()),
+        )
     }
 }
 
@@ -284,8 +295,21 @@ impl Row {
 
 /// The albums the filter admits, newest import first, with their marks.
 async fn listing(s: &UiState, filter: &Filter) -> anyhow::Result<Vec<Row>> {
+    Ok(rows(s, &filter.terms())
+        .await?
+        .into_iter()
+        .filter(|r| match filter.show.as_str() {
+            "dups" => r.marks.as_ref().is_some_and(|m| m.dup.is_some()),
+            "moves" => r.refile().is_some(),
+            _ => true,
+        })
+        .collect())
+}
+
+/// The albums `terms` matches, with their marks.
+async fn rows(s: &UiState, terms: &[String]) -> anyhow::Result<Vec<Row>> {
     let library = &s.app.library;
-    let albums = library.albums(&filter.terms()).await?;
+    let albums = library.albums(terms).await?;
     let overview = library.overview().await?;
     let marks = marks(&overview);
     Ok(albums
@@ -293,11 +317,6 @@ async fn listing(s: &UiState, filter: &Filter) -> anyhow::Result<Vec<Row>> {
         .map(|album| Row {
             marks: marks.get(&album.path).cloned(),
             album,
-        })
-        .filter(|r| match filter.show.as_str() {
-            "dups" => r.marks.as_ref().is_some_and(|m| m.dup.is_some()),
-            "moves" => r.refile().is_some(),
-            _ => true,
         })
         .collect())
 }
@@ -311,8 +330,6 @@ struct LibraryView {
     total: usize,
     /// Spare copies among everything the filter admits.
     spares: usize,
-    newer: Option<String>,
-    older: Option<String>,
     error: Option<String>,
 }
 
@@ -323,11 +340,8 @@ impl LibraryView {
     fn imported(&self, a: &LibraryAlbum) -> String {
         imported(a.added)
     }
-    fn first(&self) -> usize {
-        self.filter.page * PAGE + 1
-    }
-    fn last(&self) -> usize {
-        self.filter.page * PAGE + self.rows.len()
+    fn opening(&self, path: &str) -> (String, String) {
+        self.filter.opening(path)
     }
 }
 
@@ -342,13 +356,9 @@ async fn list_html(s: &UiState, filter: &Filter) -> String {
         Ok(rows) => {
             let total = rows.len();
             let spares = rows.iter().filter(|r| r.spare().is_some()).count();
-            let page = filter.page.min(total.saturating_sub(1) / PAGE);
-            let filter = filter.at_page(page);
             LibraryView {
-                newer: (page > 0).then(|| filter.at_page(page - 1).url()),
-                older: (total > (page + 1) * PAGE).then(|| filter.at_page(page + 1).url()),
-                rows: rows.into_iter().skip(page * PAGE).take(PAGE).collect(),
-                filter,
+                rows,
+                filter: filter.clone(),
                 total,
                 spares,
                 root,
@@ -361,8 +371,6 @@ async fn list_html(s: &UiState, filter: &Filter) -> String {
             rows: Vec::new(),
             total: 0,
             spares: 0,
-            newer: None,
-            older: None,
             error: Some(format!("{e:#}")),
         },
     };
@@ -382,6 +390,9 @@ async fn view(State(s): State<UiState>, Query(q): Query<Vec<(String, String)>>) 
         yield Ok(patch(r#"<div id="library"><p class="note">Reading the library…</p></div>"#));
         yield Ok(patch(&list_html(&s, &filter).await));
         yield Ok(unselected());
+        if !filter.album.is_empty() {
+            yield Ok(patch(&album_html(&s, &filter).await));
+        }
         yield Ok(super::place("library", &filter.url()));
     })
     .into_response()
@@ -393,8 +404,220 @@ async fn find(State(s): State<UiState>, body: Bytes) -> Response {
         patch(&list_html(&s, &filter).await),
         unselected(),
         patch(r#"<div id="lib-preview"></div>"#),
+        patch(r#"<div id="lib-album"></div>"#),
+        super::place(
+            "library",
+            &Filter {
+                album: String::new(),
+                ..filter
+            }
+            .url(),
+        ),
+    ])
+}
+
+#[derive(Template)]
+#[template(path = "library_album.html")]
+struct AlbumView<'a> {
+    root: &'a str,
+    filter: &'a Filter,
+    row: &'a Row,
+    tracks: Vec<sift::meta::Track>,
+}
+
+impl AlbumView<'_> {
+    fn rel<'b>(&self, p: &'b str) -> &'b str {
+        rel(self.root, p)
+    }
+    fn title(&self) -> String {
+        title_of(&self.row.album)
+    }
+    /// The address with no album open.
+    fn closed(&self) -> String {
+        Filter {
+            album: String::new(),
+            ..self.filter.clone()
+        }
+        .url()
+    }
+    fn file(&self, t: &sift::meta::Track) -> String {
+        t.path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned()
+    }
+    fn length(&self, t: &sift::meta::Track) -> String {
+        let s = t.duration.as_secs();
+        format!("{}:{:02}", s / 60, s % 60)
+    }
+    /// Every tag the file carries that sift reads, as a person names it.
+    fn tags(&self, t: &sift::meta::Track) -> Vec<(&'static str, String)> {
+        let list = |v: &[String]| v.join("; ");
+        let num = |n: Option<u32>| n.map(|n| n.to_string()).unwrap_or_default();
+        let o = |v: &Option<String>| v.clone().unwrap_or_default();
+        [
+            ("title", o(&t.title)),
+            ("artist", o(&t.artist)),
+            ("artists", list(&t.artists)),
+            ("album", o(&t.album)),
+            ("album artist", o(&t.album_artist)),
+            ("album artists", list(&t.album_artists)),
+            ("track", num(t.track)),
+            ("tracks", num(t.track_total)),
+            ("disc", num(t.disc)),
+            ("discs", num(t.disc_total)),
+            ("date", o(&t.date)),
+            ("original date", o(&t.original_date)),
+            ("genre", o(&t.genre)),
+            ("label", o(&t.label)),
+            ("catalogue number", o(&t.catalog_number)),
+            ("country", o(&t.country)),
+            ("media", o(&t.media)),
+            (
+                "compilation",
+                if t.compilation {
+                    "yes".into()
+                } else {
+                    String::new()
+                },
+            ),
+            ("MusicBrainz release", o(&t.mb_album_id)),
+            ("MusicBrainz release group", o(&t.mb_release_group_id)),
+            ("MusicBrainz recording", o(&t.mb_recording_id)),
+            ("MusicBrainz track", o(&t.mb_track_id)),
+            ("MusicBrainz artists", list(&t.mb_artist_ids)),
+            ("MusicBrainz album artists", list(&t.mb_album_artist_ids)),
+            (
+                "audio",
+                [
+                    t.format.clone(),
+                    t.bit_depth.map(|b| format!("{b}-bit")).unwrap_or_default(),
+                    t.sample_rate
+                        .map(|r| format!("{:.1} kHz", r as f64 / 1000.0))
+                        .unwrap_or_default(),
+                    t.bitrate.map(|b| format!("{b} kbps")).unwrap_or_default(),
+                ]
+                .into_iter()
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+                .join(" · "),
+            ),
+        ]
+        .into_iter()
+        .filter(|(_, v)| !v.is_empty())
+        .collect()
+    }
+}
+
+/// The album `filter.album` names, open: its files and their tags, where
+/// the rules file it, and what can be done to it.
+async fn album_html(s: &UiState, filter: &Filter) -> String {
+    let root = s.app.library.root().to_string_lossy().into_owned();
+    let result = async {
+        let row = rows(s, &by_path([filter.album.as_str()]))
+            .await?
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("No longer in the library."))?;
+        let tracks = s.app.library.tracks(&row.album.path).await?;
+        anyhow::Ok((row, tracks))
+    }
+    .await;
+    match result {
+        Ok((row, tracks)) => AlbumView {
+            root: &root,
+            filter,
+            row: &row,
+            tracks,
+        }
+        .render()
+        .unwrap_or_default(),
+        Err(e) => format!(
+            r#"<div id="lib-album" class="job"><p class="error">{}</p></div>"#,
+            escape(&format!("{e:#}"))
+        ),
+    }
+}
+
+/// One album open in detail, above the list.
+async fn album(State(s): State<UiState>, Query(q): Query<Vec<(String, String)>>) -> Response {
+    let filter = Filter::from_fields(&q);
+    super::many(vec![
+        patch(&album_html(&s, &filter).await),
+        patch(r#"<div id="lib-preview"></div>"#),
         super::place("library", &filter.url()),
     ])
+}
+
+#[derive(Template)]
+#[template(path = "library_releases.html")]
+struct ReleasesView<'a> {
+    path: &'a str,
+    filter: &'a Filter,
+    candidates: Vec<sift::Candidate>,
+    review: Option<String>,
+    error: Option<String>,
+}
+
+/// The releases MusicBrainz has for an album's files, closest first, to
+/// re-tag it from; or one pasted.
+async fn releases(State(s): State<UiState>, Query(q): Query<Vec<(String, String)>>) -> Response {
+    let filter = Filter::from_fields(&q);
+    let path = super::field(&q, "path").unwrap_or_default().to_string();
+    sse(async_stream::stream! {
+        yield Ok(patch(r#"<div id="lib-retag"><p class="note">Asking MusicBrainz for releases that fit these files…</p></div>"#));
+        let view = match s.app.library.rematch(&path).await {
+            Ok(r) => ReleasesView { path: &path, filter: &filter, candidates: r.candidates, review: r.review, error: None },
+            Err(e) => ReleasesView { path: &path, filter: &filter, candidates: Vec::new(), review: None, error: Some(format!("{e:#}")) },
+        };
+        yield Ok(patch(&view.render().unwrap_or_default()));
+    })
+    .into_response()
+}
+
+#[derive(Template)]
+#[template(path = "library_edit.html")]
+struct EditView<'a> {
+    path: &'a str,
+    filter: &'a Filter,
+    tracks: Vec<sift::meta::Track>,
+}
+
+impl EditView<'_> {
+    fn fields(&self) -> &'static [(&'static str, &'static str)] {
+        ALBUM_FIELDS
+    }
+    fn now(&self, field: &str) -> String {
+        consensus(&self.tracks, field).0.unwrap_or_default()
+    }
+    fn varies(&self, field: &str) -> bool {
+        consensus(&self.tracks, field).1
+    }
+    fn value(&self, t: &sift::meta::Track, field: &str) -> String {
+        t.field(field).unwrap_or_default()
+    }
+    fn file(&self, t: &sift::meta::Track) -> String {
+        t.path.to_string_lossy().into_owned()
+    }
+}
+
+/// The album's tags as a form: album-wide fields, then each file's own.
+async fn edit_form(State(s): State<UiState>, Query(q): Query<Vec<(String, String)>>) -> Response {
+    let filter = Filter::from_fields(&q);
+    let path = super::field(&q, "path").unwrap_or_default().to_string();
+    match s.app.library.tracks(&path).await {
+        Ok(tracks) => super::one(
+            EditView {
+                path: &path,
+                filter: &filter,
+                tracks,
+            }
+            .render()
+            .unwrap_or_default(),
+        ),
+        Err(e) => failed(&e),
+    }
 }
 
 /// What can be done to the albums ticked in the list.
@@ -405,6 +628,8 @@ pub(super) enum Action {
     Enrich,
     Reimport,
     Bin,
+    /// Tags typed by hand, on one album.
+    Edit,
 }
 
 impl Action {
@@ -415,6 +640,7 @@ impl Action {
             "enrich" => Self::Enrich,
             "reimport" => Self::Reimport,
             "bin" => Self::Bin,
+            "edit" => Self::Edit,
             _ => return None,
         })
     }
@@ -426,6 +652,7 @@ impl Action {
             Self::Enrich => "enrich",
             Self::Reimport => "reimport",
             Self::Bin => "bin",
+            Self::Edit => "edit",
         }
     }
 
@@ -434,8 +661,9 @@ impl Action {
             Self::Refile => "Re-file",
             Self::Credit => "Credit artists",
             Self::Enrich => "Enrich",
-            Self::Reimport => "Re-import",
+            Self::Reimport => "Re-tag",
             Self::Bin => "Bin spares",
+            Self::Edit => "Edit tags",
         }
     }
 
@@ -444,6 +672,7 @@ impl Action {
         match self {
             Self::Credit => "Credit artists on",
             Self::Bin => "Bin",
+            Self::Edit => "Edit",
             _ => self.name(),
         }
     }
@@ -453,8 +682,9 @@ impl Action {
             Self::Refile => "Re-filing",
             Self::Credit => "Crediting artists on",
             Self::Enrich => "Enriching",
-            Self::Reimport => "Re-importing",
+            Self::Reimport => "Re-tagging",
             Self::Bin => "Binning",
+            Self::Edit => "Editing",
         }
     }
 
@@ -463,8 +693,9 @@ impl Action {
             Self::Refile => "Re-filed",
             Self::Credit => "Credited artists on",
             Self::Enrich => "Enriched",
-            Self::Reimport => "Re-imported",
+            Self::Reimport => "Re-tagged",
             Self::Bin => "Binned",
+            Self::Edit => "Edited",
         }
     }
 
@@ -481,7 +712,10 @@ impl Action {
                 "Genres, lyrics and artist credits as listed. ReplayGain is measured from the audio as it is applied, so it is not shown here."
             }
             Self::Reimport => {
-                "Each album is matched against MusicBrainz again, retagged from the release shown, and re-filed if its new tags put it elsewhere. Albums the tagger would not apply on its own are left unticked."
+                "Each album is retagged in place from the MusicBrainz release shown, every field listed as it is and as it would be, and re-filed if its new tags put it elsewhere. Nothing is downloaded. Albums the tagger would not match on its own are left unticked."
+            }
+            Self::Edit => {
+                "The fields typed, as each file has them and as they would be, and where the new tags file the album."
             }
             Self::Bin => {
                 "Spare copies move to the bin beside the library, out of sight of the shares and the player. Nothing is deleted. Kept copies in the selection stay."
@@ -489,30 +723,66 @@ impl Action {
         }
     }
 
-    /// How many albums one preview works out. Re-file and bin are worked
-    /// out locally; the others ask MusicBrainz and LRCLIB, seconds an album.
-    fn cap(self) -> usize {
+    /// How many albums one preview works out, for the actions that ask
+    /// MusicBrainz or LRCLIB, seconds an album. The rest are local and
+    /// preview every album selected.
+    fn cap(self) -> Option<usize> {
         match self {
-            Self::Refile | Self::Bin => 500,
-            Self::Credit | Self::Enrich | Self::Reimport => 50,
+            Self::Refile | Self::Bin | Self::Edit => None,
+            Self::Credit | Self::Enrich | Self::Reimport => Some(50),
         }
     }
 }
 
-/// The albums ticked in the list, or with `all`, every album the filter
-/// admits, in list order.
+/// The albums ticked in the list (or the one open in detail), or with
+/// `all`, every album the filter admits, in list order.
 async fn selection(s: &UiState, form: &[(String, String)]) -> anyhow::Result<(Filter, Vec<Row>)> {
     let filter = Filter::from_fields(form);
-    let mut rows = listing(s, &filter).await?;
-    if super::field(form, "all").is_none() {
-        let ticked: std::collections::HashSet<&str> = form
-            .iter()
-            .filter(|(k, _)| k == "path")
-            .map(|(_, v)| v.as_str())
-            .collect();
-        rows.retain(|r| ticked.contains(r.album.path.as_str()));
+    if super::field(form, "all").is_some() {
+        return Ok((filter.clone(), listing(s, &filter).await?));
     }
-    Ok((filter, rows))
+    let ticked: Vec<&str> = form
+        .iter()
+        .filter(|(k, v)| k == "path" && !v.is_empty())
+        .map(|(_, v)| v.as_str())
+        .collect();
+    if ticked.is_empty() {
+        return Ok((filter, Vec::new()));
+    }
+    let mut terms = by_path(ticked);
+    terms.extend(["added-", "albumartist+", "album+"].map(String::from));
+    Ok((filter, rows(s, &terms).await?))
+}
+
+/// What the person chose for a single album beyond ticking it: the
+/// release to re-tag from, or the tags they typed.
+#[derive(Default)]
+struct Ask {
+    release: Option<String>,
+    edits: Option<TagEdits>,
+}
+
+/// A MusicBrainz release id from what was pasted: the id, or a link to the
+/// release. Discogs ids (`discogs:123`) pass through.
+fn release_id(s: &str) -> Option<String> {
+    let s = s.trim().trim_end_matches('/');
+    let id = s.rsplit('/').next().unwrap_or(s);
+    let id = id.split(['?', '#']).next().unwrap_or(id);
+    let uuid = id.len() == 36
+        && id.chars().enumerate().all(|(i, c)| {
+            if [8, 13, 18, 23].contains(&i) {
+                c == '-'
+            } else {
+                c.is_ascii_hexdigit()
+            }
+        });
+    if uuid {
+        Some(id.to_ascii_lowercase())
+    } else if s.starts_with("discogs:") {
+        Some(s.to_string())
+    } else {
+        None
+    }
 }
 
 /// One album in a preview: what applying would do to it.
@@ -545,12 +815,56 @@ enum Body {
         genres: Vec<String>,
         lyrics: Vec<Lyric>,
     },
-    Reimport(Box<sift::Comparison>),
+    Reimport {
+        release: sift::Candidate,
+        files: Vec<FileChanges>,
+        missing: Vec<String>,
+        untouched: Vec<String>,
+    },
+    Edit {
+        files: Vec<FileChanges>,
+        into: Option<String>,
+    },
     Bin {
         to: String,
         keep: String,
         reason: String,
     },
+}
+
+/// One file in a re-tag or an edit: the fields that change, and where it
+/// goes when it moves.
+struct FileChanges {
+    file: String,
+    to: Option<String>,
+    changes: Vec<sift::meta::TagChange>,
+}
+
+impl FileChanges {
+    fn of(
+        root: &str,
+        from: &std::path::Path,
+        to: &std::path::Path,
+        changes: Vec<sift::meta::TagChange>,
+    ) -> Self {
+        let name = |p: &std::path::Path| {
+            p.file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned()
+        };
+        Self {
+            file: name(from),
+            to: (from != to).then(|| {
+                if from.parent() == to.parent() {
+                    name(to)
+                } else {
+                    rel(root, &to.to_string_lossy()).to_string()
+                }
+            }),
+            changes,
+        }
+    }
 }
 
 struct Lyric {
@@ -611,15 +925,12 @@ impl PlannedView<'_> {
     fn rel<'b>(&self, p: &'b str) -> &'b str {
         rel(self.root, p)
     }
-    fn secs(&self, d: &Option<f64>) -> String {
-        match *d {
-            Some(d) if d.abs() >= 1.0 => format!("{d:+.0}s"),
-            Some(_) => String::new(),
-            None => "length unknown".into(),
-        }
+    /// Files whose tags change.
+    fn changed(&self, files: &[FileChanges]) -> usize {
+        files.iter().filter(|f| !f.changes.is_empty()).count()
     }
-    fn close(&self, d: &f64) -> bool {
-        *d < 0.15
+    fn moving(&self, files: &[FileChanges]) -> bool {
+        files.iter().any(|f| f.to.is_some())
     }
 }
 
@@ -632,7 +943,13 @@ fn title_of(a: &LibraryAlbum) -> String {
 }
 
 /// Work out what `action` would do to one album, changing nothing.
-async fn plan_one(s: &UiState, action: Action, row: &Row, known: &sift::credits::Known) -> Planned {
+async fn plan_one(
+    s: &UiState,
+    action: Action,
+    row: &Row,
+    known: &sift::credits::Known,
+    ask: &Ask,
+) -> Planned {
     let library = &s.app.library;
     let root = library.root().to_string_lossy().into_owned();
     let path = row.album.path.clone();
@@ -716,19 +1033,86 @@ async fn plan_one(s: &UiState, action: Action, row: &Row, known: &sift::credits:
                 };
             }
             Action::Reimport => {
-                let r = library.rematch(&path).await?;
-                match r.best {
-                    Some(best) => {
-                        p.applicable = true;
-                        p.ticked = r.review.is_none();
-                        p.note = r
-                            .review
-                            .map(|why| format!("The tagger would not apply this on its own: {why}."));
-                        p.with = Some(best.release.id.clone());
-                        p.body = Body::Reimport(Box::new(best));
+                // The release the person chose, or the closest MusicBrainz
+                // has, with why the tagger would not take it on its own.
+                let (release, review) = match &ask.release {
+                    Some(id) => (Some(id.clone()), None),
+                    None => {
+                        let r = library.rematch(&path).await?;
+                        (r.best.map(|b| b.release.id), r.review)
                     }
-                    None => p.note = Some("No release found on MusicBrainz.".into()),
-                }
+                };
+                let Some(release) = release else {
+                    p.note = Some("No release found on MusicBrainz. Paste one from the album's page.".into());
+                    return Ok(());
+                };
+                let plan = library.retag_plan(&path, &release).await?;
+                let changes = plan.files.iter().filter(|f| !f.changes.is_empty() || f.path != f.to).count();
+                p.applicable = plan.refused.is_none() && changes > 0;
+                p.ticked = p.applicable && review.is_none();
+                p.note = match (&plan.refused, review, changes) {
+                    (Some(why), _, _) => Some(format!("Would be refused: {}", why.replace(&format!("{root}/"), ""))),
+                    (None, _, 0) => Some("The files already carry this release's tags, where it files them.".into()),
+                    (None, Some(why), _) => Some(format!("The tagger would not match this on its own: {why}.")),
+                    (None, None, _) => None,
+                };
+                p.with = Some(release);
+                let c = &plan.comparison;
+                p.body = Body::Reimport {
+                    release: c.release.clone(),
+                    files: plan
+                        .files
+                        .into_iter()
+                        .map(|f| FileChanges::of(&root, &f.path, &f.to, f.changes))
+                        .collect(),
+                    missing: c
+                        .missing
+                        .iter()
+                        .map(|m| format!("{}-{} {}", m.disc, m.position, m.title))
+                        .collect(),
+                    untouched: plan
+                        .untouched
+                        .iter()
+                        .map(|f| f.file_name().unwrap_or_default().to_string_lossy().into_owned())
+                        .collect(),
+                };
+            }
+            Action::Edit => {
+                let Some(edits) = &ask.edits else {
+                    p.note = Some("No tags typed.".into());
+                    return Ok(());
+                };
+                let plan = library.edit_plan(&path, edits).await?;
+                let moves: HashMap<_, _> = match &plan.refile {
+                    Preview::Moves(m) => m.iter().cloned().collect(),
+                    _ => HashMap::new(),
+                };
+                let files: Vec<FileChanges> = plan
+                    .files
+                    .into_iter()
+                    .map(|(f, changes)| {
+                        let to = moves.get(&f).cloned().unwrap_or_else(|| f.clone());
+                        FileChanges::of(&root, &f, &to, changes)
+                    })
+                    .collect();
+                p.applicable = files.iter().any(|f| !f.changes.is_empty());
+                p.ticked = p.applicable;
+                p.note = match &plan.refile {
+                    Preview::Refused(why) => Some(format!(
+                        "The tags change, but the album stays where it is: {}",
+                        why.replace(&format!("{root}/"), "")
+                    )),
+                    _ if !p.applicable => Some("Nothing typed differs from the files.".into()),
+                    _ => None,
+                };
+                p.with = serde_json::to_string(edits).ok();
+                let into = moves
+                    .values()
+                    .next()
+                    .and_then(|to| to.parent())
+                    .map(|d| rel(&root, &d.to_string_lossy()).to_string())
+                    .filter(|d| Some(d.as_str()) != std::path::Path::new(&path).strip_prefix(&root).ok().and_then(|p| p.to_str()));
+                p.body = Body::Edit { files, into };
             }
             Action::Bin => match row.marks.as_ref().and_then(|m| m.dup.as_ref()) {
                 Some(Dup {
@@ -778,9 +1162,13 @@ async fn preview(State(s): State<UiState>, Path(action): Path<String>, body: Byt
         return failed(&anyhow::anyhow!("nothing selected"));
     }
     let root = s.app.library.root().to_string_lossy().into_owned();
+    let ask = match ask(&s, action, &form, &rows).await {
+        Ok(a) => a,
+        Err(e) => return failed(&e),
+    };
     sse(async_stream::stream! {
         let selected = rows.len();
-        let shown = selected.min(action.cap());
+        let shown = action.cap().map_or(selected, |c| selected.min(c));
         let shell = PlanView { action, filter: &filter, selected, shown };
         yield Ok(patch(&shell.render().unwrap_or_default()));
         let known = if matches!(action, Action::Credit | Action::Enrich) {
@@ -801,7 +1189,7 @@ async fn preview(State(s): State<UiState>, Path(action): Path<String>, body: Byt
                 i + 1,
                 escape(&title_of(&row.album)),
             )));
-            let p = plan_one(&s, action, row, &known).await;
+            let p = plan_one(&s, action, row, &known, &ask).await;
             applicable += usize::from(p.applicable);
             let html = PlannedView { p: &p, root: &root }.render().unwrap_or_default();
             yield Ok(super::append("#pv-albums", &html));
@@ -824,6 +1212,113 @@ async fn preview(State(s): State<UiState>, Path(action): Path<String>, body: Byt
         )));
     })
     .into_response()
+}
+
+/// Album-wide fields the edit form offers, by beets name, with their labels.
+const ALBUM_FIELDS: &[(&str, &str)] = &[
+    ("album", "Album"),
+    ("albumartist", "Album artist"),
+    ("date", "Date"),
+    ("original_date", "Original date"),
+    ("genre", "Genre"),
+    ("label", "Label"),
+    ("catalognum", "Catalogue number"),
+];
+
+/// Fields the edit form offers on each file.
+const TRACK_FIELDS: &[&str] = &["disc", "track", "title", "artist"];
+
+/// What every file has for `field`, and whether they disagree.
+fn consensus(tracks: &[sift::meta::Track], field: &str) -> (Option<String>, bool) {
+    let mut values = tracks.iter().map(|t| t.field(field));
+    let first = values.next().flatten();
+    let varies = values.any(|v| v != first);
+    (if varies { None } else { first }, varies)
+}
+
+/// The edits the form asks for against the files as they are now: only
+/// fields typed differently from what the files have. An album-wide field
+/// the files disagree on and left blank is left alone; blanking one they
+/// agree on clears it.
+fn edits_from(tracks: &[sift::meta::Track], form: &[(String, String)]) -> TagEdits {
+    let raw = |k: &str| {
+        form.iter()
+            .find(|(n, _)| n == k)
+            .map(|(_, v)| v.trim().to_string())
+    };
+    let mut edits = TagEdits::default();
+    for (field, _) in ALBUM_FIELDS {
+        let Some(typed) = raw(&format!("a-{field}")) else {
+            continue;
+        };
+        let (now, varies) = consensus(tracks, field);
+        if (varies && typed.is_empty()) || (!varies && typed == now.unwrap_or_default()) {
+            continue;
+        }
+        edits
+            .album
+            .push((field.to_string(), (!typed.is_empty()).then_some(typed)));
+    }
+    for i in 0.. {
+        let Some(file) = raw(&format!("t{i}-file")) else {
+            break;
+        };
+        let Some(t) = tracks.iter().find(|t| t.path.to_string_lossy() == file) else {
+            continue;
+        };
+        let mut changes = Vec::new();
+        for field in TRACK_FIELDS {
+            let Some(typed) = raw(&format!("t{i}-{field}")) else {
+                continue;
+            };
+            if typed != t.field(field).unwrap_or_default() {
+                changes.push((field.to_string(), (!typed.is_empty()).then_some(typed)));
+            }
+        }
+        if !changes.is_empty() {
+            edits.tracks.push((t.path.clone(), changes));
+        }
+    }
+    edits
+}
+
+/// What the form chose for a single album: a release (picked or pasted)
+/// for a re-tag, or typed tags for an edit.
+async fn ask(
+    s: &UiState,
+    action: Action,
+    form: &[(String, String)],
+    rows: &[Row],
+) -> anyhow::Result<Ask> {
+    let one = || match rows {
+        [row] => Ok(row.album.path.as_str()),
+        _ => Err(anyhow::anyhow!("one album at a time")),
+    };
+    match action {
+        Action::Reimport => {
+            let release = match super::field(form, "pasted") {
+                Some(p) => Some(release_id(p).ok_or_else(|| {
+                    anyhow::anyhow!("{p:?} is not a MusicBrainz release id or link")
+                })?),
+                None => super::field(form, "release").map(str::to_string),
+            };
+            if release.is_some() {
+                one()?;
+            }
+            Ok(Ask {
+                release,
+                edits: None,
+            })
+        }
+        Action::Edit => {
+            let tracks = s.app.library.tracks(one()?).await?;
+            Ok(Ask {
+                release: None,
+                edits: Some(edits_from(&tracks, form)),
+            })
+        }
+        _ => Ok(Ask::default()),
+    }
 }
 
 fn escape(s: &str) -> String {
@@ -850,6 +1345,8 @@ pub(super) struct LibraryRun {
 
 struct Outcome {
     path: String,
+    /// Where the album is now, when the action moved it.
+    to: Option<String>,
     ok: bool,
     detail: String,
     problems: Vec<String>,
@@ -867,7 +1364,7 @@ impl RunView<'_> {
         rel(&self.root, p)
     }
     fn recent(&self) -> impl Iterator<Item = &Outcome> {
-        self.run.results.iter().rev().take(30)
+        self.run.results.iter().rev()
     }
     fn verb(&self) -> &'static str {
         match self.run.action {
@@ -954,8 +1451,20 @@ async fn apply(State(s): State<UiState>, Path(action): Path<String>, body: Bytes
         yield Ok(patch(r#"<div id="lib-preview"></div>"#));
         let _ = rx.await;
         yield Ok(patch(&run_html(&s)));
+        // The album open in detail is drawn again where it now is.
+        let mut filter = filter;
+        if !filter.album.is_empty() {
+            let moved = s.run.lock().results.iter().find(|r| r.path == filter.album).and_then(|r| r.to.clone());
+            if let Some(to) = moved {
+                filter.album = to;
+            }
+        }
         yield Ok(patch(&list_html(&s, &filter).await));
         yield Ok(unselected());
+        if !filter.album.is_empty() {
+            yield Ok(patch(&album_html(&s, &filter).await));
+            yield Ok(super::place("library", &filter.url()));
+        }
         let (done, failed) = {
             let run = s.run.lock();
             (run.done, run.results.iter().filter(|r| !r.ok).count())
@@ -997,6 +1506,7 @@ async fn run(
                         (None, Some(why)) => why.replace(&format!("{root}/"), ""),
                         (None, None) => "Already where the rules file it.".into(),
                     },
+                    to: m.to.clone().filter(|to| *to != m.from),
                     path: m.from,
                     problems: Vec::new(),
                 });
@@ -1011,15 +1521,17 @@ async fn run(
         state.lock().current = Some(path.clone());
         let attached = with.get(&key(path)).map(String::as_str);
         let query = by_path([path.as_str()]);
-        let outcome: anyhow::Result<(String, Vec<String>)> = async {
+        // What happened, problems on the way, and where the album went.
+        let outcome: anyhow::Result<(String, Vec<String>, Option<String>)> = async {
             Ok(match action {
                 Action::Refile => unreachable!("re-filed above"),
                 Action::Credit => match library.credit_with(&query, &known).await?.pop() {
                     Some(c) => (
                         format!("{} files: {}", c.files, c.artists.join(", ")),
                         c.problems,
+                        None,
                     ),
-                    None => ("nothing to credit".into(), Vec::new()),
+                    None => ("nothing to credit".into(), Vec::new(), None),
                 },
                 Action::Enrich => match library.enrich_with(&query, &known).await?.pop() {
                     Some(e) => {
@@ -1034,7 +1546,7 @@ async fn run(
                         if !e.artists.is_empty() {
                             parts.push(format!("credited {}", e.artists.join(", ")));
                         }
-                        (parts.join(" · "), e.problems)
+                        (parts.join(" · "), e.problems, None)
                     }
                     None => anyhow::bail!("no longer in the library"),
                 },
@@ -1048,9 +1560,34 @@ async fn run(
                         .map(|m| format!("{} — {}", m.artist, m.title))
                         .unwrap_or_default();
                     match (r.to, r.review) {
-                        (Some(to), _) => (format!("{release} → {}", rel(&root, &to)), r.problems),
+                        (Some(to), _) if to == *path => {
+                            (format!("{release}, retagged in place"), r.problems, None)
+                        }
+                        (Some(to), _) => (
+                            format!("{release} → {}", rel(&root, &to)),
+                            r.problems,
+                            Some(to),
+                        ),
                         (None, Some(why)) => anyhow::bail!("left for review: {why}"),
-                        (None, None) => (release, r.problems),
+                        (None, None) => (release, r.problems, None),
+                    }
+                }
+                Action::Edit => {
+                    let edits: TagEdits = attached
+                        .and_then(|e| serde_json::from_str(e).ok())
+                        .ok_or_else(|| anyhow::anyhow!("no edits given"))?;
+                    let m = library.edit(path, &edits).await?;
+                    let files = edits.album.len() + edits.tracks.len();
+                    match (m.to, m.refused) {
+                        (Some(to), _) if to != *path => {
+                            (format!("→ {}", rel(&root, &to)), Vec::new(), Some(to))
+                        }
+                        (_, Some(why)) => (
+                            format!("{files} edits; left where it is"),
+                            vec![why.replace(&format!("{root}/"), "")],
+                            None,
+                        ),
+                        _ => ("tags written in place".into(), Vec::new(), None),
                     }
                 }
                 Action::Bin => {
@@ -1066,7 +1603,7 @@ async fn run(
                         .find(|sp| sp.album.path == *path)
                         .and_then(|sp| sp.binned_to.clone())
                     {
-                        Some(to) => (format!("→ {to}"), Vec::new()),
+                        Some(to) => (format!("→ {to}"), Vec::new(), None),
                         None => anyhow::bail!("no longer a spare copy; left where it is"),
                     }
                 }
@@ -1074,14 +1611,16 @@ async fn run(
         }
         .await;
         record(match outcome {
-            Ok((detail, problems)) => Outcome {
+            Ok((detail, problems, to)) => Outcome {
                 path: path.clone(),
+                to,
                 ok: true,
                 detail,
                 problems,
             },
             Err(e) => Outcome {
                 path: path.clone(),
+                to: None,
                 ok: false,
                 detail: format!("{e:#}"),
                 problems: Vec::new(),
@@ -1162,6 +1701,7 @@ mod tests {
 
     #[test]
     fn an_import_date_becomes_a_lower_bound() {
+        // A Sunday afternoon.
         let now = chrono::DateTime::parse_from_rfc3339("2026-10-18T15:30:00Z")
             .unwrap()
             .to_utc();
@@ -1172,7 +1712,13 @@ mod tests {
         );
         assert_eq!(
             filter("week", "").since_secs(now),
-            Some(now.timestamp() - 7 * 86_400)
+            Some(1_791_763_200),
+            "Monday 12 October"
+        );
+        assert_eq!(
+            filter("month", "").since_secs(now),
+            Some(1_790_812_800),
+            "1 October"
         );
         assert_eq!(
             filter("date", "2026-09-01").since_secs(now),
@@ -1204,7 +1750,7 @@ mod tests {
             since: "date".into(),
             from: "2026-09-01".into(),
             show: "dups".into(),
-            page: 2,
+            album: "/m/Burial/(2007) Untrue".into(),
         };
         let url = f.url();
         let back: Vec<(String, String)> =
@@ -1223,5 +1769,76 @@ mod tests {
         });
         assert_eq!((l.lines, l.first.as_str()), (2, "First line"));
         assert_eq!(l.file, "01 x.flac");
+    }
+
+    fn track(path: &str, title: &str, album: &str, genre: Option<&str>) -> sift::meta::Track {
+        sift::meta::Track {
+            path: path.into(),
+            title: Some(title.into()),
+            album: Some(album.into()),
+            genre: genre.map(Into::into),
+            ..Default::default()
+        }
+    }
+
+    fn form(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn an_edit_is_only_what_was_typed_differently() {
+        let tracks = [
+            track("/m/a/1.flac", "One", "Monstre", Some("Rock")),
+            track("/m/a/2.flac", "Two", "Monstre", None),
+        ];
+        let edits = edits_from(
+            &tracks,
+            &form(&[
+                ("a-album", "Monster"),
+                // Differs between the files and left blank: untouched.
+                ("a-genre", ""),
+                ("a-label", ""),
+                ("t0-file", "/m/a/1.flac"),
+                ("t0-title", "One"),
+                ("t1-file", "/m/a/2.flac"),
+                ("t1-title", "Two (Live)"),
+            ]),
+        );
+        assert_eq!(
+            edits.album,
+            [("album".to_string(), Some("Monster".to_string()))]
+        );
+        assert_eq!(
+            edits.tracks,
+            [(
+                std::path::PathBuf::from("/m/a/2.flac"),
+                vec![("title".to_string(), Some("Two (Live)".to_string()))]
+            )]
+        );
+        let cleared = edits_from(&tracks, &form(&[("a-album", "")]));
+        assert_eq!(cleared.album, [("album".to_string(), None)]);
+    }
+
+    #[test]
+    fn a_release_is_its_id_or_a_link_to_it() {
+        let id = "4c3e0b3c-2f8a-4a4b-9d6e-2a1f3b5c7d9e";
+        assert_eq!(release_id(id).as_deref(), Some(id));
+        assert_eq!(
+            release_id(&format!("https://musicbrainz.org/release/{id}/")).as_deref(),
+            Some(id)
+        );
+        assert_eq!(
+            release_id(&format!(
+                "https://musicbrainz.org/release/{}?tab=x",
+                id.to_uppercase()
+            ))
+            .as_deref(),
+            Some(id)
+        );
+        assert_eq!(release_id("discogs:123").as_deref(), Some("discogs:123"));
+        assert_eq!(release_id("monster"), None);
     }
 }
