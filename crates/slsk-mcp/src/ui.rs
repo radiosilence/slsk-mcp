@@ -908,7 +908,6 @@ async fn stream(State(s): State<UiState>) -> impl IntoResponse {
         for _ in 0..20 {
             yield Ok(patch(&status_html(&app).await));
             yield Ok(patch(&jobs_html(&app).await));
-            yield Ok(patch(&transfers_html(&app)));
             yield Ok(patch(&uploads_html(&app).await));
             yield Ok(patch(&up_count_html(&app)));
             yield Ok(patch(&chat::count_html(&app).await));
