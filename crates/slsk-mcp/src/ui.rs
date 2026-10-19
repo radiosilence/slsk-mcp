@@ -300,7 +300,6 @@ fn percent(done: u64, total: u64) -> u64 {
 struct Page {
     status: String,
     jobs: String,
-    transfers: String,
     uploads: String,
     up_count: String,
     chat_count: String,
@@ -413,7 +412,6 @@ async fn render_page(
     let page = Page {
         status: status_html(&s.app).await,
         jobs: jobs_html(&s.app).await,
-        transfers: transfers_html(&s.app),
         uploads: uploads_html(&s.app).await,
         up_count: up_count_html(&s.app),
         chat_count: chat::count_html(&s.app).await,
@@ -749,18 +747,6 @@ impl TransfersView {
     fn short<'a>(&self, name: &'a str) -> &'a str {
         name.rsplit('\\').next().unwrap_or(name)
     }
-}
-
-fn transfers_html(app: &App) -> String {
-    let downloads = app.session.engine().map_or_else(Vec::new, |e| {
-        e.downloads()
-            .into_iter()
-            .filter(|t| !matches!(t.state, "completed" | "cancelled"))
-            .rev()
-            .map(Transfer::from)
-            .collect()
-    });
-    TransfersView { downloads }.render().unwrap_or_default()
 }
 
 #[derive(Template)]
