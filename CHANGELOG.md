@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.3
+
+### Fixed
+
+- Remove serverside generated transfer list, which was murdering browsers.
+
 ## 0.3.2
 
 ### Fixed
