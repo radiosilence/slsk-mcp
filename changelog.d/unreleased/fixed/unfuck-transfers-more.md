@@ -1,0 +1,1 @@
+- Remove serverside generated transfer list, which was murdering browsers.
