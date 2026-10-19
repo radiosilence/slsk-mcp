@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.2
+
+### Fixed
+
+- Removed transfer file list from homescreen as they were absolutely huge and also pointles.
+
 ## 0.3.1
 
 ### Added
