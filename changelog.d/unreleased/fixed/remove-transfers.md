@@ -1,0 +1,1 @@
+- Removed transfer file list from homescreen as they were absolutely huge and also pointles.
