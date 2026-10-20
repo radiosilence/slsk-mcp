@@ -900,8 +900,15 @@ pub(crate) async fn search(
 /// what the network already said.
 const SEARCH_REUSE: Duration = Duration::from_secs(600);
 
-/// What a search has heard so far, and whether it has stopped listening.
-pub(crate) type Heard = (Arc<Vec<SearchResponse>>, bool);
+/// What a search has heard so far.
+#[derive(Clone, Default)]
+pub(crate) struct Heard {
+    pub responses: Arc<Vec<SearchResponse>>,
+    /// It has stopped listening, or could not be sent.
+    pub done: bool,
+    /// Why it could not be sent.
+    pub error: Option<Arc<str>>,
+}
 
 /// The network's answers to `query`, from the last ten minutes if anything
 /// asked it, else from a new search listening `wait` seconds (1 to 30).
@@ -910,64 +917,94 @@ pub(crate) async fn responses(
     query: &str,
     wait: u64,
 ) -> anyhow::Result<Arc<Vec<SearchResponse>>> {
-    let mut heard = listen(engine, query, wait).await?;
-    let heard = heard.wait_for(|(_, done)| *done).await?;
-    Ok(heard.0.clone())
+    let mut heard = listen(engine, query, wait);
+    let heard = heard.wait_for(|h| h.done).await?;
+    match &heard.error {
+        Some(e) => Err(anyhow::anyhow!("{e}")),
+        None => Ok(heard.responses.clone()),
+    }
 }
 
 /// The answers to `query` as they arrive. A search of the same words from
-/// the last ten minutes, finished or still listening, is joined rather than
-/// sent again, so a page reopened mid-search spends nothing.
-pub(crate) async fn listen(
+/// the last ten minutes, finished, still listening or still waiting its
+/// turn, is joined rather than sent again, so a page reopened mid-search
+/// spends nothing.
+pub(crate) fn listen(
     engine: &slsk_engine::Engine,
     query: &str,
     wait: u64,
-) -> anyhow::Result<tokio::sync::watch::Receiver<Heard>> {
-    hear(query, wait, || async {
+) -> tokio::sync::watch::Receiver<Heard> {
+    let engine = engine.clone();
+    let words = query.to_string();
+    hear(query, wait, move || async move {
         engine.pace().await?;
-        Ok(engine.search(query)?)
+        Ok(engine.search(&words)?)
     })
-    .await
 }
 
-async fn hear<F, Fut>(
-    query: &str,
-    wait: u64,
-    start: F,
-) -> anyhow::Result<tokio::sync::watch::Receiver<Heard>>
+/// Registers the search before it is paced, under the same lock as the
+/// look-up, and paces and listens in a task of its own: two callers of the
+/// same words, or a caller that goes away while the search waits its turn,
+/// never send it twice.
+fn hear<F, Fut>(query: &str, wait: u64, start: F) -> tokio::sync::watch::Receiver<Heard>
 where
-    F: FnOnce() -> Fut,
-    Fut: std::future::Future<Output = anyhow::Result<tokio::sync::mpsc::Receiver<SearchResponse>>>,
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = anyhow::Result<tokio::sync::mpsc::Receiver<SearchResponse>>>
+        + Send,
 {
     use tokio::sync::watch;
     use tokio::time::Instant;
-    // When it started, how long it listens, and what it has heard.
+    // When it was asked for, how long it listens, and what it has heard.
     type Search = (Instant, u64, watch::Receiver<Heard>);
     static SEARCHES: std::sync::LazyLock<
         parking_lot::Mutex<std::collections::HashMap<String, Search>>,
     > = std::sync::LazyLock::new(Default::default);
+    // Answers stand in for ten minutes from when the listening ended.
+    let fresh =
+        |at: &Instant, listens: u64| at.elapsed() < SEARCH_REUSE + Duration::from_secs(listens);
     let key = query.trim().to_lowercase();
     let wait = wait.clamp(1, 30);
-    // A shorter listen hears fewer peers, so it stands in only for one as
-    // short or shorter.
-    if let Some((at, listens, heard)) = SEARCHES.lock().get(&key)
-        && at.elapsed() < SEARCH_REUSE
-        && *listens >= wait
-    {
-        return Ok(heard.clone());
-    }
-    let mut rx = start().await?;
-    let started = Instant::now();
-    let (tx, heard) = watch::channel((Arc::new(Vec::new()), false));
+    let (tx, heard) = watch::channel(Heard::default());
     {
         let mut searches = SEARCHES.lock();
-        searches.retain(|_, (at, ..)| at.elapsed() < SEARCH_REUSE);
-        searches.insert(key.clone(), (started, wait, heard.clone()));
+        // A shorter listen hears fewer peers, so it stands in only for one
+        // as short or shorter.
+        if let Some((at, listens, heard)) = searches.get(&key)
+            && fresh(at, *listens)
+            && *listens >= wait
+        {
+            return heard.clone();
+        }
+        searches.retain(|_, (at, listens, _)| fresh(at, *listens));
+        searches.insert(key.clone(), (Instant::now(), wait, heard.clone()));
     }
     // It listens to the end whoever is still watching: what it hears is
     // kept for the next page or caller that asks.
     tokio::spawn(async move {
-        let deadline = started + Duration::from_secs(wait);
+        let forget = || {
+            let mut searches = SEARCHES.lock();
+            if searches
+                .get(&key)
+                .is_some_and(|(_, _, h)| h.same_channel(&tx.subscribe()))
+            {
+                searches.remove(&key);
+            }
+        };
+        let mut rx = match start().await {
+            Ok(rx) => rx,
+            Err(e) => {
+                // Not kept: the next caller may find the budget or the
+                // connection back.
+                forget();
+                tx.send_replace(Heard {
+                    done: true,
+                    error: Some(format!("{e:#}").into()),
+                    ..Default::default()
+                });
+                return;
+            }
+        };
+        let deadline = Instant::now() + Duration::from_secs(wait);
         let mut responses = Vec::new();
         let mut open = true;
         loop {
@@ -981,26 +1018,24 @@ where
                 }
             }
             let done = !open || Instant::now() >= deadline;
+            // Silence is not kept: it is as likely a connection that had
+            // not settled as a network without the album.
+            if done && responses.is_empty() {
+                forget();
+            }
             if done || responses.len() > before {
-                tx.send_replace((Arc::new(responses.clone()), done));
+                tx.send_replace(Heard {
+                    responses: Arc::new(responses.clone()),
+                    done,
+                    error: None,
+                });
             }
             if done {
                 break;
             }
         }
-        // Silence is not kept: it is as likely a connection that had not
-        // settled as a network without the album.
-        if responses.is_empty() {
-            let mut searches = SEARCHES.lock();
-            if searches
-                .get(&key)
-                .is_some_and(|(_, _, h)| h.same_channel(&tx.subscribe()))
-            {
-                searches.remove(&key);
-            }
-        }
     });
-    Ok(heard)
+    heard
 }
 
 /// Search, pick the best relevant folder, keep four fallbacks, start a job.
@@ -1665,56 +1700,70 @@ mod tests {
         }
     }
 
-    /// A search that answers once, counting how often it is sent.
-    async fn search(
+    /// A search that waits its turn, then answers once, counting how often
+    /// it is sent.
+    fn search(
         query: &str,
         wait: u64,
-        sent: &AtomicUsize,
+        sent: &Arc<AtomicUsize>,
     ) -> tokio::sync::watch::Receiver<Heard> {
-        hear(query, wait, || async {
+        let sent = sent.clone();
+        hear(query, wait, move || async move {
+            tokio::time::sleep(Duration::from_secs(3)).await;
             sent.fetch_add(1, Ordering::SeqCst);
             let (tx, rx) = tokio::sync::mpsc::channel(1);
             tx.send(answer("peer")).await?;
             Ok(rx)
         })
-        .await
-        .unwrap()
+    }
+
+    async fn finished(heard: &mut tokio::sync::watch::Receiver<Heard>) -> Heard {
+        heard.wait_for(|h| h.done).await.unwrap().clone()
     }
 
     #[tokio::test(start_paused = true)]
     async fn the_same_words_join_the_earlier_search() {
-        let sent = AtomicUsize::new(0);
-        let mut first = search("Reuse Test", 2, &sent).await;
-        // Asked again while the first is still listening, as a page
-        // reopened mid-search does, then once it has finished.
-        let mut during = search(" reuse test", 2, &sent).await;
-        first.wait_for(|(_, done)| *done).await.unwrap();
-        let mut after = search("REUSE TEST", 2, &sent).await;
+        let sent = Arc::new(AtomicUsize::new(0));
+        let mut first = search("Reuse Test", 2, &sent);
+        // Asked again while the first waits its turn, as a page reopened
+        // mid-search does, from a caller that then goes away, and once it
+        // has finished.
+        let mut during = search(" reuse test", 2, &sent);
+        drop(search("reuse test", 2, &sent));
+        finished(&mut first).await;
+        let mut after = search("REUSE TEST", 2, &sent);
         assert_eq!(sent.load(Ordering::SeqCst), 1);
         for heard in [&mut during, &mut after] {
-            let heard = heard.wait_for(|(_, done)| *done).await.unwrap();
-            assert_eq!(heard.0.len(), 1);
+            assert_eq!(finished(heard).await.responses.len(), 1);
         }
         // A longer listen, or one after the reuse window, searches again.
-        search("reuse test", 5, &sent).await;
+        finished(&mut search("reuse test", 5, &sent)).await;
         assert_eq!(sent.load(Ordering::SeqCst), 2);
-        tokio::time::advance(SEARCH_REUSE).await;
-        search("reuse test", 5, &sent).await;
+        tokio::time::advance(SEARCH_REUSE + Duration::from_secs(5)).await;
+        finished(&mut search("reuse test", 5, &sent)).await;
         assert_eq!(sent.load(Ordering::SeqCst), 3);
     }
 
     #[tokio::test(start_paused = true)]
-    async fn silence_is_not_kept() {
-        let sent = AtomicUsize::new(0);
-        let quiet = || async {
-            sent.fetch_add(1, Ordering::SeqCst);
-            let (_tx, rx) = tokio::sync::mpsc::channel(1);
-            Ok(rx)
+    async fn silence_and_failures_are_not_kept() {
+        let sent = Arc::new(AtomicUsize::new(0));
+        let quiet = |sent: Arc<AtomicUsize>| {
+            move || async move {
+                sent.fetch_add(1, Ordering::SeqCst);
+                let (_tx, rx) = tokio::sync::mpsc::channel(1);
+                Ok(rx)
+            }
         };
-        let mut heard = hear("nobody has this", 1, quiet).await.unwrap();
-        heard.wait_for(|(_, done)| *done).await.unwrap();
-        tokio::task::yield_now().await;
-        hear("nobody has this", 1, quiet).await.unwrap();
+        finished(&mut hear("nobody has this", 1, quiet(sent.clone()))).await;
+        finished(&mut hear("nobody has this", 1, quiet(sent.clone()))).await;
         assert_eq!(sent.load(Ordering::SeqCst), 2);
+
+        let refused = finished(&mut hear("over budget", 1, || async {
+            anyhow::bail!("no searches left this hour")
+        }))
+        .await;
+        assert_eq!(refused.error.as_deref(), Some("no searches left this hour"));
+        finished(&mut hear("over budget", 1, quiet(sent.clone()))).await;
+        assert_eq!(sent.load(Ordering::SeqCst), 3);
     }
 }

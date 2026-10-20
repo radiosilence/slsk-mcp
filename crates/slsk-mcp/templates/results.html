@@ -20,5 +20,5 @@
     </details>
   </article>
   {% endfor %}
-  {% if more > 0 %}<button class="quiet" data-on:click="$_url = '{{ next }}'">Show more ({{ more }} hidden)</button>{% endif %}
+  {% if more > 0 %}<button class="quiet" data-on:click="$_url = '{{ next }}'; document.getElementById('search-feed').dispatchEvent(new Event('more'))">Show more ({{ more }} hidden)</button>{% endif %}
 </div>

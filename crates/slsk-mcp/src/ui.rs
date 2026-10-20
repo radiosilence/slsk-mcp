@@ -375,6 +375,13 @@ async fn pages(State(s): State<UiState>, request: Request, next: Next) -> Respon
         && !request.headers().contains_key("datastar-request")
         && let Some(&(tab, ..)) = PAGES.iter().find(|p| request.uri().path() == p.1)
     {
+        // Searches were once drawn on Albums, at `/?q=…`.
+        if tab == "albums"
+            && let Some(query) = request.uri().query()
+            && url::form_urlencoded::parse(query.as_bytes()).any(|(k, v)| k == "q" && !v.is_empty())
+        {
+            return axum::response::Redirect::to(&format!("/search?{query}")).into_response();
+        }
         return match render_page(&s, tab, request.uri()).await {
             Ok(html) => html.into_response(),
             Err(e) => e.into_response(),
@@ -1042,10 +1049,12 @@ struct SearchForm {
 struct SearchQuery {
     #[serde(default)]
     q: String,
+    /// Any value means lossless, as the page reads it.
     #[serde(default)]
-    lossless: bool,
+    lossless: String,
     /// How many folders are drawn.
-    shown: Option<usize>,
+    #[serde(default)]
+    shown: String,
 }
 
 /// Folders shown at first, and added by each "Show more", in search results.
@@ -1053,8 +1062,9 @@ struct SearchQuery {
 /// every second stops responding.
 const FOUND: usize = 100;
 
-/// How long the web UI's searches listen for peers.
-const LISTEN: u64 = 12;
+/// How long the web UI's searches listen for peers: as long as a grab, so
+/// either stands in for the other.
+const LISTEN: u64 = 10;
 
 #[derive(Template)]
 #[template(path = "results.html")]
@@ -1121,11 +1131,14 @@ async fn search(State(s): State<UiState>, Query(view): Query<SearchQuery>) -> Re
         return one(r#"<div id="results"></div>"#.into());
     }
     let filter = Filter {
-        lossless: view.lossless,
+        lossless: !view.lossless.is_empty(),
         ..Default::default()
     };
     let lossless = if filter.lossless { "true" } else { "" };
-    let found = view.shown.map_or(FOUND, |n| n.clamp(1, MOST as usize));
+    let found = view
+        .shown
+        .parse()
+        .map_or(FOUND, |n: usize| n.clamp(1, MOST as usize));
     let next = place_url(
         "/search",
         &[
@@ -1135,18 +1148,16 @@ async fn search(State(s): State<UiState>, Query(view): Query<SearchQuery>) -> Re
         ],
     );
     let events = async_stream::stream! {
-        let mut heard = match graphql::listen(&engine, &query, LISTEN).await {
-            Ok(heard) => heard,
-            Err(e) => {
+        let mut heard = graphql::listen(&engine, &query, LISTEN);
+        loop {
+            let crate::graphql::Heard { responses, done, error } = heard.borrow_and_update().clone();
+            if let Some(e) = error {
                 yield Ok(patch(&format!(
                     r#"<div id="results" class="note">{}</div>"#,
-                    askama_escape(&e.to_string())
+                    askama_escape(&e)
                 )));
-                return;
+                break;
             }
-        };
-        loop {
-            let (responses, done) = heard.borrow_and_update().clone();
             let mut folders = crate::folders::relevant(crate::folders::group(&responses, &filter), &query);
             let more = folders.len().saturating_sub(found);
             folders.truncate(found);
@@ -1172,7 +1183,7 @@ async fn grab(State(s): State<UiState>, axum::Form(form): axum::Form<SearchForm>
         lossless: true,
         ..Default::default()
     });
-    match graphql::grab(&s.app, form.q.trim(), 10, filter, false).await {
+    match graphql::grab(&s.app, form.q.trim(), LISTEN, filter, false).await {
         Ok(_) => done(&s.app, PAGE).await,
         Err(e) => one(format!(
             r#"<div id="flash" class="flash error">{}</div>"#,
