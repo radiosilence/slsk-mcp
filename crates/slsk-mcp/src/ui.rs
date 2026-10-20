@@ -1,7 +1,7 @@
 //! The web UI: server-rendered HTML patched over SSE by Datastar.
 //!
-//! One page. A stream pushes the status line, the jobs and the transfers
-//! once a second; searching streams its own results as peers answer. Every
+//! One page. A stream pushes the status line and the open tab's jobs or
+//! uploads once a second, each only when it changed; searching streams its own results as peers answer. Every
 //! route but sign-in, the probe and the static assets sits behind the
 //! session layer, which wraps the router whole so a route added later is
 //! protected by construction.
@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use askama::Template;
 use axum::Router;
-use axum::extract::{Path, Request, State};
+use axum::extract::{Path, Query, Request, State};
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -400,6 +400,8 @@ async fn render_page(
         "lossless": q.is_empty() || !param("lossless").is_empty(),
         "busy": false,
         "tab": tab,
+        "settled": PAGE,
+        "history": PAGE,
         "_url": url,
         "_at": { tab: url },
         "_libq": if tab == "library" { param("q") } else { String::new() },
@@ -409,10 +411,20 @@ async fn render_page(
         "_libalbum": if tab == "library" { param("album") } else { String::new() },
     })
     .to_string();
+    // Hidden tabs start empty: the stream fills the open one, and drawing
+    // the others first held up a page opened on a tab of its own.
     let page = Page {
         status: status_html(&s.app).await,
-        jobs: jobs_html(&s.app).await,
-        uploads: uploads_html(&s.app).await,
+        jobs: if tab == "albums" {
+            jobs_html(&s.app, PAGE).await
+        } else {
+            r#"<div id="jobs" class="jobs"></div>"#.into()
+        },
+        uploads: if tab == "uploads" {
+            uploads_html(&s.app, PAGE).await
+        } else {
+            r#"<div id="uploads" class="uploads"></div>"#.into()
+        },
         up_count: up_count_html(&s.app),
         chat_count: chat::count_html(&s.app).await,
         run: library::run_html(s),
@@ -476,6 +488,40 @@ async fn status_html(app: &App) -> String {
     view.render().unwrap_or_default()
 }
 
+/// Rows shown at first, and added by each "Show more", in the lists that
+/// grow without end: settled jobs and upload history. Rendering every row
+/// made the page heavy enough to crash phone browsers.
+const PAGE: i64 = 500;
+
+/// A job that landed or was cancelled, as its one line.
+struct Settled {
+    id: String,
+    /// What landed, as filed ("Artist — (Year) Album"), which is the
+    /// confirmation a person wants; the query that asked for it otherwise.
+    title: String,
+    cancelled: bool,
+}
+
+impl From<crate::db::Job> for Settled {
+    fn from(j: crate::db::Job) -> Self {
+        let title = match j.library_path.as_deref() {
+            None => j.title,
+            Some(path) => {
+                let mut parts = path.rsplit('/');
+                match (parts.next(), parts.next()) {
+                    (Some(album), Some(artist)) => format!("{artist} — {album}"),
+                    _ => path.to_string(),
+                }
+            }
+        };
+        Self {
+            id: j.id.to_string(),
+            title,
+            cancelled: j.status == "cancelled",
+        }
+    }
+}
+
 /// A suggested next step for a job, with the reason in a person's terms.
 struct Advice {
     /// The path under `/jobs/{id}/` that does it.
@@ -491,8 +537,10 @@ struct JobsView {
     attention: Vec<Job>,
     /// Downloading or importing.
     underway: Vec<Job>,
-    /// Imported, or cancelled by someone.
-    settled: Vec<Job>,
+    /// Imported, or cancelled by someone: the newest few hundred.
+    settled: Vec<Settled>,
+    /// Older settled jobs exist beyond those shown.
+    more: bool,
     /// Queue places by job id, for those waiting in a peer's queue.
     places: HashMap<String, u32>,
 }
@@ -534,19 +582,10 @@ impl JobsView {
     /// The signal that is true while a request from this job's card is in
     /// flight. Local (leading underscore), so it is never sent back.
     fn sig(&self, j: &Job) -> String {
-        format!("_busy_{}", j.id.as_str().replace('-', ""))
+        self.sig_of(j.id.as_str())
     }
-    /// What landed, as filed ("Artist — (Year) Album"), which is the
-    /// confirmation a person wants; the query that asked for it otherwise.
-    fn landed(&self, j: &Job) -> String {
-        let Some(path) = j.library_path.as_deref() else {
-            return j.title.clone();
-        };
-        let mut parts = path.rsplit('/');
-        match (parts.next(), parts.next()) {
-            (Some(album), Some(artist)) => format!("{artist} — {album}"),
-            _ => path.to_string(),
-        }
+    fn sig_of(&self, id: &str) -> String {
+        format!("_busy_{}", id.replace('-', ""))
     }
     fn label(&self, status: &str) -> &'static str {
         status_label(status)
@@ -687,17 +726,18 @@ impl JobsView {
     }
 }
 
-async fn jobs_html(app: &App) -> String {
-    let jobs = match crate::db::jobs(&app.db, None, i64::MAX).await {
-        Ok(rows) => graphql::job_views(app, rows).await.unwrap_or_else(|e| {
-            tracing::warn!(error = ?e, "could not show jobs");
-            Vec::new()
-        }),
-        Err(e) => {
-            tracing::warn!(error = %e, "could not list jobs");
-            Vec::new()
-        }
-    };
+/// Every job in hand, and the newest `settled` of those done with.
+async fn jobs_html(app: &App, settled: i64) -> String {
+    let (active, mut done) = crate::db::job_board(&app.db, settled + 1)
+        .await
+        .inspect_err(|e| tracing::warn!(error = %e, "could not list jobs"))
+        .unwrap_or_default();
+    let more = done.len() as i64 > settled;
+    done.truncate(settled.max(0) as usize);
+    let jobs = graphql::job_views(app, active).await.unwrap_or_else(|e| {
+        tracing::warn!(error = ?e, "could not show jobs");
+        Vec::new()
+    });
     let places = jobs
         .iter()
         .filter_map(|j| {
@@ -708,13 +748,13 @@ async fn jobs_html(app: &App) -> String {
     let mut view = JobsView {
         attention: Vec::new(),
         underway: Vec::new(),
-        settled: Vec::new(),
+        settled: done.into_iter().map(Settled::from).collect(),
+        more,
         places,
     };
     for j in jobs {
         match j.status.as_str() {
             "review" | "suspect" | "failed" => view.attention.push(j),
-            "imported" | "cancelled" => view.settled.push(j),
             _ => view.underway.push(j),
         }
     }
@@ -730,6 +770,8 @@ struct UploadsView {
     sent: usize,
     shared: usize,
     history: Vec<crate::db::UploadRow>,
+    /// Older history exists beyond that shown.
+    more: bool,
     /// Completed uploads today and this week: (files, bytes).
     today: (i64, i64),
     week: (i64, i64),
@@ -799,8 +841,9 @@ fn up_count_html(app: &App) -> String {
 }
 
 /// Who is taking what from us, grouped by person: those receiving now
-/// first, then those waiting in the queue.
-async fn uploads_html(app: &App) -> String {
+/// first, then those waiting in the queue; then the newest `shown` of
+/// those finished.
+async fn uploads_html(app: &App, shown: i64) -> String {
     let mut peers: Vec<Peer> = Vec::new();
     let (mut sending, mut queued, mut sent, mut shared) = (0, 0, 0, 0);
     if let Some(e) = app.session.engine() {
@@ -842,10 +885,12 @@ async fn uploads_html(app: &App) -> String {
         .and_hms_opt(0, 0, 0)
         .map(|t| t.and_utc())
         .unwrap_or(now);
-    let history = crate::db::recent_uploads(&app.db, i64::MAX)
+    let mut history = crate::db::recent_uploads(&app.db, shown + 1)
         .await
         .inspect_err(|e| tracing::warn!(error = %e, "could not read upload history"))
         .unwrap_or_default();
+    let more = history.len() as i64 > shown;
+    history.truncate(shown.max(0) as usize);
     let today = crate::db::upload_totals(&app.db, midnight)
         .await
         .unwrap_or_default();
@@ -859,6 +904,7 @@ async fn uploads_html(app: &App) -> String {
         sent,
         shared,
         history,
+        more,
         today,
         week,
     }
@@ -866,23 +912,72 @@ async fn uploads_html(app: &App) -> String {
     .unwrap_or_default()
 }
 
-/// Re-render the live parts once a second. The stream ends itself after a
-/// while and the page reopens it on an interval: a stream can die without
-/// either end noticing (a suspended phone, a replaced pod), and reopening on
-/// a timer is what bounds how long a page can sit showing stale state.
-async fn stream(State(s): State<UiState>) -> impl IntoResponse {
+/// What the page has open, from the signals Datastar sends with the
+/// stream's request.
+#[derive(serde::Deserialize)]
+#[serde(default)]
+struct Shown {
+    tab: String,
+    settled: i64,
+    history: i64,
+}
+
+impl Default for Shown {
+    fn default() -> Self {
+        Self {
+            tab: "albums".into(),
+            settled: PAGE,
+            history: PAGE,
+        }
+    }
+}
+
+/// Re-render the live parts once a second, sending each only when it
+/// changed, and the jobs and uploads only while their tab is open: morphing
+/// thousands of unchanged rows every second is what made the page crawl.
+/// The page reopens the stream when the tab or the rows shown change.
+///
+/// The stream ends itself after a while and the page reopens it on an
+/// interval: a stream can die without either end noticing (a suspended
+/// phone, a replaced pod), and reopening on a timer is what bounds how long
+/// a page can sit showing stale state.
+async fn stream(
+    State(s): State<UiState>,
+    Query(q): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
     let app = s.app.clone();
+    let shown: Shown = q
+        .get("datastar")
+        .and_then(|j| serde_json::from_str(j).ok())
+        .unwrap_or_default();
     let events = async_stream::stream! {
         // The library run is sent when it moves, and while it runs only
         // its head and the albums done since: it lists every album, which
         // in a large run is long.
         let mut run_sent = library::RunSent::default();
+        let mut sent: [String; 5] = Default::default();
         for _ in 0..20 {
-            yield Ok(patch(&status_html(&app).await));
-            yield Ok(patch(&jobs_html(&app).await));
-            yield Ok(patch(&uploads_html(&app).await));
-            yield Ok(patch(&up_count_html(&app)));
-            yield Ok(patch(&chat::count_html(&app).await));
+            let parts = [
+                status_html(&app).await,
+                if shown.tab == "albums" {
+                    jobs_html(&app, shown.settled).await
+                } else {
+                    String::new()
+                },
+                if shown.tab == "uploads" {
+                    uploads_html(&app, shown.history).await
+                } else {
+                    String::new()
+                },
+                up_count_html(&app),
+                chat::count_html(&app).await,
+            ];
+            for (html, last) in parts.into_iter().zip(&mut sent) {
+                if !html.is_empty() && html != *last {
+                    yield Ok(patch(&html));
+                    *last = html;
+                }
+            }
             for e in library::run_events(&s, &mut run_sent) {
                 yield Ok(e);
             }
@@ -1015,7 +1110,7 @@ async fn grab(State(s): State<UiState>, axum::Form(form): axum::Form<SearchForm>
         ..Default::default()
     });
     match graphql::grab(&s.app, form.q.trim(), 10, filter, false).await {
-        Ok(_) => one(jobs_html(&s.app).await),
+        Ok(_) => done(),
         Err(e) => one(format!(
             r#"<div id="flash" class="flash error">{}</div>"#,
             askama_escape(&e.message)
@@ -1053,11 +1148,7 @@ async fn download(
         .from_folder(&folder, form.title, Vec::new())
         .await
     {
-        Ok(job) => one(format!(
-            "{}\n{}",
-            jobs_html(&s.app).await,
-            flash_ok(&format!("Downloading {}", job.title))
-        )),
+        Ok(job) => one(flash_ok(&format!("Downloading {}", job.title))),
         Err(e) => one(format!(
             r#"<div id="flash" class="flash error">{}</div>"#,
             askama_escape(&format!("{e:#}"))
@@ -1092,18 +1183,16 @@ async fn job_action(
         _ => return StatusCode::NOT_FOUND.into_response(),
     };
     match result {
-        Ok(()) => done(&s.app).await,
+        Ok(()) => done(),
         Err(e) => failed(&e),
     }
 }
 
-/// The job list as it now stands, and any earlier error cleared: the change
-/// on the card is the confirmation.
-async fn done(app: &App) -> Response {
-    one(format!(
-        "{}\n<div id=\"flash\"></div>",
-        jobs_html(app).await
-    ))
+/// Any earlier error cleared: the change on the card, which the stream
+/// draws within a second, is the confirmation. The stream alone draws the
+/// job list, so it keeps the rows the page asked to see.
+fn done() -> Response {
+    one("<div id=\"flash\"></div>".into())
 }
 
 fn failed(e: &anyhow::Error) -> Response {
@@ -1115,7 +1204,7 @@ async fn resolve(State(s): State<UiState>, Path((id, release)): Path<(Uuid, Stri
         return StatusCode::BAD_REQUEST.into_response();
     }
     match s.app.jobs.import_soon(id, false, Some(release)).await {
-        Ok(()) => done(&s.app).await,
+        Ok(()) => done(),
         Err(e) => failed(&e),
     }
 }
@@ -1145,7 +1234,7 @@ async fn resolve_pasted(
         .import_soon(id, false, Some(release.to_string()))
         .await
     {
-        Ok(()) => done(&s.app).await,
+        Ok(()) => done(),
         Err(e) => failed(&e),
     }
 }
@@ -1179,16 +1268,12 @@ async fn cancel_upload(
     if let (Some(e), Some(name)) = (s.app.session.engine(), f.filename) {
         e.cancel_upload(&f.username, &RawStr::from(name));
     }
-    one(uploads_html(&s.app).await)
+    one("<div id=\"flash\"></div>".into())
 }
 
 async fn ban(State(s): State<UiState>, axum::Form(f): axum::Form<UserFileForm>) -> Response {
     match graphql::set_ban(&s.app, &f.username, true).await {
-        Ok(_) => one(format!(
-            "{}\n{}",
-            uploads_html(&s.app).await,
-            flash_ok(&format!("Banned {}", f.username))
-        )),
+        Ok(_) => one(flash_ok(&format!("Banned {}", f.username))),
         Err(e) => one(flash_err(&e.message)),
     }
 }

@@ -22,7 +22,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use slsk_engine::slsk_proto::RawStr;
 use slsk_engine::slsk_proto::peer::Directory;
 
-use super::{UiState, failed, fields, flash_ok, human, jobs_html, one, patch, sse};
+use super::{UiState, failed, fields, flash_ok, human, one, patch, sse};
 
 pub(super) fn routes() -> Router<UiState> {
     Router::new()
@@ -340,11 +340,7 @@ async fn download_files(State(s): State<UiState>, body: Bytes) -> Response {
         .unwrap_or_default()
         .to_string();
     match s.app.jobs.from_files(username, files, title).await {
-        Ok(job) => one(format!(
-            "{}\n{}",
-            jobs_html(&s.app).await,
-            flash_ok(&format!("Downloading {}", job.title))
-        )),
+        Ok(job) => one(flash_ok(&format!("Downloading {}", job.title))),
         Err(e) => failed(&e),
     }
 }
@@ -434,7 +430,7 @@ async fn download_tree(State(s): State<UiState>, body: Bytes) -> Response {
         [one_title] => format!("Downloading {one_title}"),
         _ => format!("Downloading {count} albums"),
     };
-    one(format!("{}\n{}", jobs_html(&s.app).await, flash_ok(&msg)))
+    one(flash_ok(&msg))
 }
 
 #[cfg(test)]
