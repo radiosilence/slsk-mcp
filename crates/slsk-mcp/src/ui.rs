@@ -424,52 +424,57 @@ async fn render_page(
     tab: &'static str,
     uri: &http::Uri,
 ) -> Result<Html<String>, crate::error::AppError> {
+    /// The page's view as its address describes it; one that does not
+    /// parse draws the page's default view.
+    fn query<T: serde::de::DeserializeOwned + Default>(uri: &http::Uri) -> T {
+        axum_extra::extract::Query::try_from_uri(uri).map_or_else(|_| T::default(), |q| q.0)
+    }
     let url = uri.path_and_query().map_or("/", |p| p.as_str()).to_string();
-    let params: Vec<(String, String)> =
-        url::form_urlencoded::parse(uri.query().unwrap_or("").as_bytes())
-            .into_owned()
-            .collect();
-    let param = |k: &str| field(&params, k).unwrap_or_default().to_string();
-    let q = param("q");
-    let lossless = q.is_empty() || !param("lossless").is_empty();
-    let lib = |k: &str| {
-        if tab == "library" {
-            param(k)
-        } else {
-            String::new()
-        }
+    let search: SearchQuery = match tab {
+        "albums" | "search" => query(uri),
+        _ => SearchQuery::default(),
+    };
+    let lossless = search.q.is_empty() || !search.lossless.is_empty();
+    let filter: library::Filter = match tab {
+        "library" => query(uri),
+        _ => library::Filter::default(),
     };
     let signals = serde_json::json!({
-        "q": if tab == "albums" || tab == "search" { q.as_str() } else { "" },
+        "q": search.q,
         "lossless": lossless,
         "busy": false,
         "jobs": PAGE,
         "history": PAGE,
         "_url": url,
-        "_libq": lib("q"),
-        "_libsince": lib("since"),
-        "_libfrom": lib("from"),
-        "_libshow": lib("show"),
-        "_libalbum": lib("album"),
+        "_libq": filter.q,
+        "_libsince": filter.since,
+        "_libfrom": filter.from,
+        "_libshow": filter.show,
+        "_libalbum": filter.album,
     })
     .to_string();
     let body = match tab {
         "albums" => AlbumsPage {
-            q,
+            q: search.q,
             lossless,
             jobs: jobs_html(&s.app, PAGE).await,
         }
         .render()
         .unwrap_or_default(),
-        "search" => SearchPage { q, lossless }.render().unwrap_or_default(),
+        "search" => SearchPage {
+            q: search.q,
+            lossless,
+        }
+        .render()
+        .unwrap_or_default(),
         "uploads" => uploads_html(&s.app, PAGE).await,
         "wishlist" => wishlist::page(&s.app).await,
-        "library" => library::page(s, &q),
-        "browse" => browse::page(s, &param("username")),
-        "chat" => chat::page(&s.app, &params).await,
+        "library" => library::page(s, &filter),
+        "browse" => browse::page(s, &query::<browse::BrowseQuery>(uri).username),
+        "chat" => chat::page(&s.app, &query(uri)).await,
         "bans" => admin::bans_page(&s.app).await,
         "settings" => admin::settings_page(&s.app).await,
-        _ => admin::triage_page(&s.app, &params).await,
+        _ => admin::triage_page(&s.app, &query(uri)).await,
     };
     let page = Page {
         status: status_html(&s.app).await,
@@ -966,6 +971,15 @@ async fn uploads_html(app: &App, shown: i64) -> String {
     .unwrap_or_default()
 }
 
+/// The stream's request: the page it serves, as `PAGES` names it, and the
+/// page's signals as Datastar sends them.
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+struct StreamQuery {
+    page: String,
+    datastar: String,
+}
+
 /// How many rows of the long lists the page shows, from the signals
 /// Datastar sends with the stream's request.
 #[derive(serde::Deserialize)]
@@ -995,14 +1009,10 @@ impl Default for Shown {
 /// a page can sit showing stale state.
 async fn stream(
     State(s): State<UiState>,
-    Query(q): Query<HashMap<String, String>>,
+    Query(StreamQuery { page, datastar }): Query<StreamQuery>,
 ) -> impl IntoResponse {
     let app = s.app.clone();
-    let page = q.get("page").cloned().unwrap_or_default();
-    let shown: Shown = q
-        .get("datastar")
-        .and_then(|j| serde_json::from_str(j).ok())
-        .unwrap_or_default();
+    let shown: Shown = serde_json::from_str(&datastar).unwrap_or_default();
     let events = async_stream::stream! {
         // The library run is sent when it moves, and while it runs only
         // its head and the albums done since: it lists every album, which
@@ -1045,7 +1055,7 @@ struct SearchForm {
 }
 
 /// A search's view, all of it in the address.
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, Default)]
 struct SearchQuery {
     #[serde(default)]
     q: String,

@@ -513,9 +513,9 @@ pub(super) fn page(s: &UiState, username: &str) -> String {
 /// A tree's place as the address names it: see [`Place`]. `fresh` asks the
 /// peer for their shares again rather than using the cached listing.
 #[derive(serde::Deserialize, Default)]
-struct BrowseQuery {
+pub(super) struct BrowseQuery {
     #[serde(default)]
-    username: String,
+    pub(super) username: String,
     #[serde(default)]
     key: String,
     #[serde(default)]

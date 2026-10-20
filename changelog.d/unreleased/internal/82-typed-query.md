@@ -1,0 +1,1 @@
+- **Typed query parameters in the web UI.** Every page and fragment reads its address into a deserialized struct rather than picking fields out of raw pairs, so each page has one definition of the view state its URL carries.
