@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.0
+
+### Added
+
+- **Browsing shares works like Finder's list view.** Folders expand in place to any depth and the expanded set is kept in the address, every folder and file has its own download button, and this client's own shares can be browsed the same way.
+
+### Changed
+
+- **The web UI is styled with Tailwind v4.** Its stylesheet is compiled from utilities in the templates and design tokens named as in koan's web UI, so the two share one vocabulary. The look is unchanged apart from links underlining only on hover.
+
+### Fixed
+
+- **Web UI search has its own address and reuses cached searches.** Search moved to `/search?q=…`, where reloading, coming back or showing more joins a search of the same words from the last ten minutes instead of spending another; results are drawn a hundred folders at a time, and links to a user's shares open in a new tab.
+- **Web UI assets are versioned.** The stylesheet and Datastar are linked by a hash of their contents and cached for good, so after an upgrade a browser fetches the new build's copies instead of reusing stale ones.
+
+### Internal
+
+- **Typed query parameters in the web UI.** Every page and fragment reads its address into a deserialized struct rather than picking fields out of raw pairs, so each page has one definition of the view state its URL carries.
+
 ## 0.4.1
 
 ### Changed
