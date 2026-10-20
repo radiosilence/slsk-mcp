@@ -256,7 +256,8 @@ server's answer, never a guess. Anything that changes the library or reaches
 other people (binning, re-filing, enriching, banning, sending a message) asks
 first; library changes show exactly what they will do before they do it.
 
-Search has its own address, keyed by the query (`/search?q=…`), and shares
+Search has its own address, holding the query, the lossless filter and how
+many results are shown (`/search?q=…&shown=200`), and shares
 the server's ten-minute reuse of identical searches with MCP: reloading it,
 coming back to it or showing more joins the search already running or
 answered rather than spending another from the hourly budget. Results are

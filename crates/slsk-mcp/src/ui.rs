@@ -438,7 +438,6 @@ async fn render_page(
         "busy": false,
         "jobs": PAGE,
         "history": PAGE,
-        "found": FOUND,
         "_url": url,
         "_libq": lib("q"),
         "_libsince": lib("since"),
@@ -1053,6 +1052,8 @@ struct ResultsView {
     folders: Vec<Folder>,
     /// Folders found beyond those shown.
     more: usize,
+    /// The address that shows another page of them.
+    next: String,
     searching: bool,
     responses: usize,
 }
@@ -1097,7 +1098,7 @@ impl ResultsView {
 }
 
 /// The results for the address's query, regrouped as peers answer, at most
-/// once a second. The search is shared with any of the same words from the
+/// once a second, the first `shown` of them. The search is shared with any of the same words from the
 /// last ten minutes, so reopening or reloading the page, or showing more,
 /// sends nothing to the network.
 async fn search(State(s): State<UiState>, Query(q): Query<HashMap<String, String>>) -> Response {
@@ -1112,11 +1113,19 @@ async fn search(State(s): State<UiState>, Query(q): Query<HashMap<String, String
         lossless: q.get("lossless").is_some_and(|v| !v.is_empty()),
         ..Default::default()
     };
+    let lossless = if filter.lossless { "true" } else { "" };
     let found = q
-        .get("datastar")
-        .and_then(|j| serde_json::from_str::<serde_json::Value>(j).ok())
-        .and_then(|v| v.get("found")?.as_u64())
-        .map_or(FOUND, |n| (n as usize).clamp(1, MOST as usize));
+        .get("shown")
+        .and_then(|n| n.parse::<usize>().ok())
+        .map_or(FOUND, |n| n.clamp(1, MOST as usize));
+    let next = place_url(
+        "/search",
+        &[
+            ("q", &query),
+            ("lossless", lossless),
+            ("shown", &(found + FOUND).to_string()),
+        ],
+    );
     let events = async_stream::stream! {
         let mut heard = match graphql::listen(&engine, &query, LISTEN).await {
             Ok(heard) => heard,
@@ -1133,7 +1142,7 @@ async fn search(State(s): State<UiState>, Query(q): Query<HashMap<String, String
             let mut folders = crate::folders::relevant(crate::folders::group(&responses, &filter), &query);
             let more = folders.len().saturating_sub(found);
             folders.truncate(found);
-            let view = ResultsView { query: query.clone(), folders, more, searching: !done, responses: responses.len() };
+            let view = ResultsView { query: query.clone(), folders, more, next: next.clone(), searching: !done, responses: responses.len() };
             yield Ok(patch(&view.render().unwrap_or_default()));
             if done || heard.changed().await.is_err() {
                 break;
