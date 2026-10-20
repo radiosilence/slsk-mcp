@@ -1,9 +1,9 @@
-<li id="pv-{{ p.key }}" class="planned{% if !p.applicable %} skipped{% endif %}">
-  {% if p.applicable %}<input type="checkbox" name="path" value="{{ p.path }}" aria-label="Apply to {{ p.title }}"{% if p.ticked %} checked{% endif %}>{% if let Some(w) = p.with %}<input type="hidden" name="with-{{ p.key }}" value="{{ w }}">{% endif %}{% endif %}
-  <details class="album">
-    <summary>
-      <span class="title">{{ p.title }}</span>
-      <span class="meta">
+<li id="pv-{{ p.key }}" class="items-start!">
+  {% if p.applicable %}<input class="mx-0.5 mt-0.5 size-[18px] flex-none" type="checkbox" name="path" value="{{ p.path }}" aria-label="Apply to {{ p.title }}"{% if p.ticked %} checked{% endif %}>{% if let Some(w) = p.with %}<input type="hidden" name="with-{{ p.key }}" value="{{ w }}">{% endif %}{% endif %}
+  <details class="min-w-0 flex-1{% if !p.applicable %} pl-6{% endif %}">
+    <summary class="flex cursor-pointer list-none flex-wrap gap-x-2.5 gap-y-0.5 [&::-webkit-details-marker]:hidden">
+      <span class="min-w-0 flex-[1_1_60%] wrap-anywhere{% if !p.applicable %} text-muted{% endif %}">{{ p.title }}</span>
+      <span class="text-meta text-muted wrap-anywhere">
       {% match p.body %}
       {% when Body::Nothing %}nothing to do
       {% when Body::Refile with { change, into, moves } %}{% if let Some(d) = into %}→ {{ d }} · {% endif %}{{ moves.len() }} file{% if moves.len() != 1 %}s{% endif %}{% if !change.is_empty() %} · {{ change }}{% endif %}
@@ -15,50 +15,50 @@
       {% endmatch %}
       </span>
     </summary>
-    <p class="meta path">{{ self.rel(p.path) }}</p>
+    <p class="text-fine text-muted wrap-anywhere">{{ self.rel(p.path) }}</p>
     {% match p.body %}
     {% when Body::Nothing %}
     {% when Body::Refile with { change, into, moves } %}
-    {% if let Some(d) = into %}<p class="meta">Into <span class="path">{{ d }}</span></p>{% endif %}
-    <ul class="rows tight moves">
+    {% if let Some(d) = into %}<p class="text-meta text-muted wrap-anywhere">Into <span class="min-w-0 flex-[1_1_60%] wrap-anywhere">{{ d }}</span></p>{% endif %}
+    <ul class="rows tight *:grid! *:grid-cols-[minmax(0,1fr)] *:gap-0!">
     {% for (from, to) in moves %}
-      <li>{% if from == to %}<span class="path">{{ from }}</span>{% else %}<span class="path from">{{ from }}</span><span class="path to">→ {{ to }}</span>{% endif %}</li>
+      <li>{% if from == to %}<span class="min-w-0 flex-[1_1_60%] wrap-anywhere">{{ from }}</span>{% else %}<span class="min-w-0 flex-[1_1_60%] wrap-anywhere text-muted line-through decoration-rule">{{ from }}</span><span class="min-w-0 flex-[1_1_60%] wrap-anywhere">→ {{ to }}</span>{% endif %}</li>
     {% endfor %}
     </ul>
     {% when Body::Credit with (credits) %}
     {% include "library_credits.html" %}
     {% when Body::Enrich with { credits, genres, lyrics } %}
-    <p class="meta">Genres: {% if genres.is_empty() %}none added (the album has some, or MusicBrainz has none){% else %}<strong>{{ genres.join("; ") }}</strong> on every track{% endif %}</p>
-    <p class="meta">Lyrics: {% if lyrics.is_empty() %}none found for tracks without them{% endif %}</p>
+    <p class="text-meta text-muted wrap-anywhere">Genres: {% if genres.is_empty() %}none added (the album has some, or MusicBrainz has none){% else %}<strong>{{ genres.join("; ") }}</strong> on every track{% endif %}</p>
+    <p class="text-meta text-muted wrap-anywhere">Lyrics: {% if lyrics.is_empty() %}none found for tracks without them{% endif %}</p>
     {% if !lyrics.is_empty() %}
     <ul class="rows tight">
     {% for l in lyrics %}
-      <li><span class="path">{{ l.file }}</span><span class="meta">{% if l.synced %}synced{% else %}plain{% endif %}, {{ l.lines }} lines{% if !l.first.is_empty() %}: “{{ l.first }}”{% endif %}</span></li>
+      <li><span class="min-w-0 flex-[1_1_60%] wrap-anywhere">{{ l.file }}</span><span class="text-meta text-muted wrap-anywhere">{% if l.synced %}synced{% else %}plain{% endif %}, {{ l.lines }} lines{% if !l.first.is_empty() %}: “{{ l.first }}”{% endif %}</span></li>
     {% endfor %}
     </ul>
     {% endif %}
-    {% if !credits.is_empty() %}<p class="meta">Artist credits:</p>{% include "library_credits.html" %}{% endif %}
-    <p class="meta">ReplayGain: measured on apply.</p>
+    {% if !credits.is_empty() %}<p class="text-meta text-muted wrap-anywhere">Artist credits:</p>{% include "library_credits.html" %}{% endif %}
+    <p class="text-meta text-muted wrap-anywhere">ReplayGain: measured on apply.</p>
     {% when Body::Reimport with { release, files, missing, untouched, cover, companions } %}
-    <p class="meta">{% if release.id.starts_with("discogs:") %}{{ release.id }}{% else %}<a href="https://musicbrainz.org/release/{{ release.id }}" target="_blank" rel="noopener">MusicBrainz release</a>{% endif %}{% if let Some(m) = release.media %} · {{ m }}{% endif %}{% if let Some(co) = release.country %} · {{ co }}{% endif %} · {{ release.tracks }} tracks</p>
+    <p class="text-meta text-muted wrap-anywhere">{% if release.id.starts_with("discogs:") %}{{ release.id }}{% else %}<a href="https://musicbrainz.org/release/{{ release.id }}" target="_blank" rel="noopener">MusicBrainz release</a>{% endif %}{% if let Some(m) = release.media %} · {{ m }}{% endif %}{% if let Some(co) = release.country %} · {{ co }}{% endif %} · {{ release.tracks }} tracks</p>
     {% include "library_changes.html" %}
-    {% if !missing.is_empty() %}<p class="why warn">No file for: {{ missing.join(", ") }}</p>{% endif %}
-    {% if !untouched.is_empty() %}<p class="why warn">Matched to no track, left as they are: {{ untouched.join(", ") }}</p>{% endif %}
-    {% if cover %}<p class="meta">Cover: each file's front cover is replaced by the release's (or the album's own, when it has none).</p>{% endif %}
+    {% if !missing.is_empty() %}<p class="my-0.5 text-meta text-warn">No file for: {{ missing.join(", ") }}</p>{% endif %}
+    {% if !untouched.is_empty() %}<p class="my-0.5 text-meta text-warn">Matched to no track, left as they are: {{ untouched.join(", ") }}</p>{% endif %}
+    {% if cover %}<p class="text-meta text-muted wrap-anywhere">Cover: each file's front cover is replaced by the release's (or the album's own, when it has none).</p>{% endif %}
     {% if !companions.is_empty() %}
-    <p class="meta">Other files:</p>
-    <ul class="rows tight moves">
+    <p class="text-meta text-muted wrap-anywhere">Other files:</p>
+    <ul class="rows tight *:grid! *:grid-cols-[minmax(0,1fr)] *:gap-0!">
     {% for c in companions %}
-      <li><span class="path from">{{ c.file }}</span>{% if c.stays %}<span class="meta">stays: {{ c.to }} is taken</span>{% else %}<span class="path to">→ {{ c.to }}</span>{% endif %}</li>
+      <li><span class="min-w-0 flex-[1_1_60%] wrap-anywhere text-muted line-through decoration-rule">{{ c.file }}</span>{% if c.stays %}<span class="text-meta text-muted wrap-anywhere">stays: {{ c.to }} is taken</span>{% else %}<span class="min-w-0 flex-[1_1_60%] wrap-anywhere">→ {{ c.to }}</span>{% endif %}</li>
     {% endfor %}
     </ul>
     {% endif %}
     {% when Body::Edit with { files, into } %}
-    {% if let Some(d) = into %}<p class="meta">Re-filed into <span class="path">{{ d }}</span></p>{% endif %}
+    {% if let Some(d) = into %}<p class="text-meta text-muted wrap-anywhere">Re-filed into <span class="min-w-0 flex-[1_1_60%] wrap-anywhere">{{ d }}</span></p>{% endif %}
     {% include "library_changes.html" %}
     {% when Body::Bin with { to, keep, reason } %}
-    <p class="meta">Spare: {{ reason }}. The copy kept is <span class="path">{{ self.rel(keep) }}</span>.</p>
+    <p class="text-meta text-muted wrap-anywhere">Spare: {{ reason }}. The copy kept is <span class="min-w-0 flex-[1_1_60%] wrap-anywhere">{{ self.rel(keep) }}</span>.</p>
     {% endmatch %}
   </details>
-  {% if let Some(n) = p.note %}<p class="why{% if p.applicable %} warn{% endif %}">{{ n }}</p>{% endif %}
+  {% if let Some(n) = p.note %}<p class="my-0 ml-[30px] basis-full text-meta {% if p.applicable %}text-warn{% else %}text-muted{% endif %}">{{ n }}</p>{% endif %}
 </li>

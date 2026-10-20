@@ -1,13 +1,13 @@
-<div id="status" class="status {{ state }}">
+<div id="status" class="{{ state }} flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1.5">
   {% match username %}{% when Some with (u) %}<strong>{{ u }}</strong>{% when None %}{% endmatch %}
   <span class="pill">{{ state }}</span>
-  {% match detail %}{% when Some with (d) %}<span class="detail">{{ d }}</span>{% when None %}{% endmatch %}
+  {% match detail %}{% when Some with (d) %}<span class="basis-full text-meta text-muted">{{ d }}</span>{% when None %}{% endmatch %}
   {% if state == "displaced" || state == "disconnected" %}<button data-indicator="_reconnecting" data-attr:disabled="$_reconnecting" data-class:busy="$_reconnecting" data-on:click="@post('/reconnect')">Reconnect</button>{% endif %}
-  {% if state == "connected" %}<span class="stats">sharing {{ files }} files · ↑ {{ up }} · ↓ {{ down }} · {{ children }} children</span>{% endif %}
+  {% if state == "connected" %}<span class="basis-full text-meta text-muted">sharing {{ files }} files · ↑ {{ up }} · ↓ {{ down }} · {{ children }} children</span>{% endif %}
   {% if state == "no-account" || state == "rejected" %}
-  <form id="account" class="account" data-indicator="_signing_in" data-on:submit__prevent="@post('/account', {contentType: 'form', selector: '#account'})">
-    <input name="username" placeholder="Soulseek username" autocomplete="username">
-    <input name="password" type="password" placeholder="password" autocomplete="current-password">
+  <form id="account" class="flex w-full flex-wrap gap-1.5" data-indicator="_signing_in" data-on:submit__prevent="@post('/account', {contentType: 'form', selector: '#account'})">
+    <input class="flex-[1_1_160px]" name="username" placeholder="Soulseek username" autocomplete="username">
+    <input class="flex-[1_1_160px]" name="password" type="password" placeholder="password" autocomplete="current-password">
     <button type="submit" data-attr:disabled="$_signing_in" data-class:busy="$_signing_in">Sign in</button>
   </form>
   {% endif %}

@@ -1,10 +1,10 @@
-<section class="finder">
+<section class="min-w-0">
   {% include "finder.html" %}
   {% if q.is_empty() %}
-  <div id="results"><p class="note">Search the network for an album: artist and title words work best. Results from the same words in the last ten minutes are reused, so reopening a search costs nothing.</p></div>
+  <div id="results"><p class="text-meta text-muted">Search the network for an album: artist and title words work best. Results from the same words in the last ten minutes are reused, so reopening a search costs nothing.</p></div>
   {% else %}
   {# One request at a time draws the results for the address: showing more moves the address and reopens it, and the server answers from the search it already ran. #}
   <div id="search-feed" hidden data-init="@get($_url, {openWhenHidden: true})" data-on:more="@get($_url, {openWhenHidden: true})"></div>
-  <div id="results"><p class="note">Searching “{{ q }}”…</p></div>
+  <div id="results"><p class="text-meta text-muted">Searching “{{ q }}”…</p></div>
   {% endif %}
 </section>

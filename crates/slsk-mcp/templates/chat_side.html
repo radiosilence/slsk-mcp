@@ -1,39 +1,39 @@
 <div id="chat-side">
-{% match error %}{% when Some with (e) %}<p class="note">{{ e }}</p>{% when None %}
-  <h3 class="section">Rooms</h3>
-  {% if rooms.is_empty() %}<p class="note">In no rooms.</p>{% endif %}
+{% match error %}{% when Some with (e) %}<p class="text-meta text-muted">{{ e }}</p>{% when None %}
+  <h3>Rooms</h3>
+  {% if rooms.is_empty() %}<p class="text-meta text-muted">In no rooms.</p>{% endif %}
   <ul class="rows">
   {% for r in rooms %}
-    <li><a class="link" href="{{ crate::ui::chat_href("room", r.0) }}" data-indicator="_opening" data-on:click="evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || (evt.preventDefault(), $_opening || ($_msg = '', @get(el.getAttribute('href'))))">{{ r.0 }}</a><span class="meta">{{ r.1 }} in the room</span></li>
+    <li><a class="wrap-anywhere" href="{{ crate::ui::chat_href("room", r.0) }}" data-indicator="_opening" data-on:click="evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || (evt.preventDefault(), $_opening || ($_msg = '', @get(el.getAttribute('href'))))">{{ r.0 }}</a><span class="text-meta text-muted wrap-anywhere">{{ r.1 }} in the room</span></li>
   {% endfor %}
   </ul>
-  <h3 class="section">Messages</h3>
-  {% if conversations.is_empty() %}<p class="note">No private messages.</p>{% endif %}
+  <h3>Messages</h3>
+  {% if conversations.is_empty() %}<p class="text-meta text-muted">No private messages.</p>{% endif %}
   <ul class="rows">
   {% for c in conversations %}
-    <li{% if c.unread > 0 %} class="unread"{% endif %}>
-      <div class="row">
-        <a class="link" href="{{ crate::ui::chat_href("pm", c.username) }}" data-indicator="_opening" data-on:click="evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || (evt.preventDefault(), $_opening || ($_msg = '', @get(el.getAttribute('href'))))">{{ c.username }}</a>
-        {% if c.unread > 0 %}<span class="badge">{{ c.unread }}</span>{% endif %}
-        <span class="meta">{{ self.ago(c) }}</span>
+    <li>
+      <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5 basis-full">
+        <a class="wrap-anywhere{% if c.unread > 0 %} font-semibold{% endif %}" href="{{ crate::ui::chat_href("pm", c.username) }}" data-indicator="_opening" data-on:click="evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || (evt.preventDefault(), $_opening || ($_msg = '', @get(el.getAttribute('href'))))">{{ c.username }}</a>
+        {% if c.unread > 0 %}<span class="rounded-full bg-brand px-[7px] text-fine font-semibold text-bg">{{ c.unread }}</span>{% endif %}
+        <span class="text-meta text-muted wrap-anywhere">{{ self.ago(c) }}</span>
       </div>
-      <div class="meta clip">{% if c.ours %}you: {% endif %}{{ c.last }}</div>
+      <div class="min-w-0 basis-full truncate text-meta text-muted">{% if c.ours %}you: {% endif %}{{ c.last }}</div>
     </li>
   {% endfor %}
   </ul>
-  <h3 class="section">Buddies</h3>
-  {% if buddies.is_empty() %}<p class="note">No buddies.</p>{% endif %}
+  <h3>Buddies</h3>
+  {% if buddies.is_empty() %}<p class="text-meta text-muted">No buddies.</p>{% endif %}
   <ul class="rows">
   {% for b in buddies %}
-    <li data-class:busy="$_bud_{{ loop.index }}">
-      <div class="row">
-        <a class="link" href="{{ crate::ui::chat_href("pm", b.username) }}" data-indicator="_opening" data-on:click="evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || (evt.preventDefault(), $_opening || ($_msg = '', @get(el.getAttribute('href'))))">{{ b.username }}</a>
+    <li class="[&.busy]:opacity-70" data-class:busy="$_bud_{{ loop.index }}">
+      <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5 basis-full">
+        <a class="wrap-anywhere" href="{{ crate::ui::chat_href("pm", b.username) }}" data-indicator="_opening" data-on:click="evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || (evt.preventDefault(), $_opening || ($_msg = '', @get(el.getAttribute('href'))))">{{ b.username }}</a>
         <span class="pill {{ b.status }}">{{ b.status }}</span>
-        <span class="grow"></span>
+        <span class="flex-1 max-sm:hidden"></span>
         <a class="button quiet" href="{{ crate::ui::browse_href(b.username, "") }}">Browse</a>
         <button type="button" class="quiet" name="username" value="{{ b.username }}" data-indicator="_bud_{{ loop.index }}" data-attr:disabled="$_bud_{{ loop.index }}" data-class:busy="$_bud_{{ loop.index }}" data-on:click="@post('/chat/buddy/remove', {contentType: 'form', selector: '#act'})">Remove</button>
       </div>
-      {% if !b.note.is_empty() %}<div class="meta">{{ b.note }}</div>{% endif %}
+      {% if !b.note.is_empty() %}<div class="basis-full text-meta text-muted wrap-anywhere">{{ b.note }}</div>{% endif %}
     </li>
   {% endfor %}
   </ul>

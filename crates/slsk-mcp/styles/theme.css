@@ -1,0 +1,51 @@
+/*
+ * The design tokens. The names are koan's (site/src/theme.css in radiosilence/koan), so a utility means the same
+ * thing in both web UIs; the values are slsk-mcp's own. `warn` is the one token koan has no use for.
+ *
+ * The UI is dark only.
+ */
+:root {
+  color-scheme: dark;
+  --bg: #101214;
+  --surface: #181b1f;
+  --rule: #262a30;
+  --hover: #30353c;
+  --ink: #e6e6e6;
+  --strong: #ffffff;
+  --muted: #8b9099;
+  --brand: #7dd3a7;
+  --bad: #ef6b73;
+  --warn: #e6b450;
+}
+
+@theme {
+  --text-fine: 12px;
+  --text-meta: 13px;
+  --text-control: 14px;
+  --text-control--line-height: 1.45;
+  --text-body: 15px;
+  --text-body--line-height: 1.45;
+  /* iOS zooms into a focused field set smaller than this. */
+  --text-input: 16px;
+  --text-title-sm: 22px;
+  --text-title-sm--line-height: 1.2;
+  --text-title: 26px;
+  --text-title--line-height: 1.2;
+  --text-display: 34px;
+  --text-display--line-height: 1.1;
+  --container-form: 520px;
+  --container-panel: 560px;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-rule: var(--rule);
+  --color-hover: var(--hover);
+  --color-ink: var(--ink);
+  --color-strong: var(--strong);
+  --color-muted: var(--muted);
+  --color-brand: var(--brand);
+  --color-bad: var(--bad);
+  --color-warn: var(--warn);
+}

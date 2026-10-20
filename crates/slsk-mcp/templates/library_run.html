@@ -1,9 +1,9 @@
 <div id="lib-run">
 {% if run.action.is_some() %}
-<div class="job run">
+<div class="card">
   {% include "library_run_head.html" %}
-  <details class="peek"{% if run.running %} open{% endif %}>
-    <summary>Each album</summary>
+  <details{% if run.running %} open{% endif %}>
+    <summary class="mt-1 text-meta text-muted">Each album</summary>
     <ul id="lib-run-rows" class="rows">
     {% for r in run.results.iter().rev() %}{% include "library_run_row.html" %}{% endfor %}
     </ul>

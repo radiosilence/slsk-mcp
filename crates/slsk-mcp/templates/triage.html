@@ -1,15 +1,15 @@
 <div id="triage">
-  <div class="actions">
+  <div class="mt-2.5 flex flex-wrap items-center gap-2">
     {% for d in [7, 30, 90] %}<a class="button {% if *d == days %}primary{% else %}quiet{% endif %}" href="/triage?days={{ d }}" data-indicator="_tri_{{ d }}" data-class:busy="$_tri_{{ d }}" data-on:click="evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || (evt.preventDefault(), $_tri_{{ d }} || (@get(el.getAttribute('href'))))">{{ d }} days</a>{% endfor %}
   </div>
-{% match error %}{% when Some with (e) %}<p class="error">{{ e }}</p>{% when None %}
-  {% if causes.is_empty() %}<p class="note">Everything in the last {{ days }} days landed cleanly.</p>{% endif %}
+{% match error %}{% when Some with (e) %}<p class="text-meta text-bad wrap-anywhere">{{ e }}</p>{% when None %}
+  {% if causes.is_empty() %}<p class="text-meta text-muted">Everything in the last {{ days }} days landed cleanly.</p>{% endif %}
   {% for c in causes %}
-  <article class="job">
-    <div class="row"><strong class="title">{{ self.label(c.cause) }}</strong><span class="count">{{ c.count }}</span></div>
+  <article class="card">
+    <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5"><strong class="min-w-0 flex-auto wrap-anywhere">{{ self.label(c.cause) }}</strong><span class="text-ink">{{ c.count }}</span></div>
     <ul class="rows tight">
     {% for e in c.examples %}
-      <li><span class="name">{{ e.title }}</span><span class="meta">{{ self.ago(e.at) }} · {{ e.outcome }} · {{ e.version }}{% match e.detail %}{% when Some with (d) %} · {{ d }}{% when None %}{% endmatch %}</span></li>
+      <li><span class="min-w-0 flex-[1_1_60%] truncate">{{ e.title }}</span><span class="text-meta text-muted wrap-anywhere">{{ self.ago(e.at) }} · {{ e.outcome }} · {{ e.version }}{% match e.detail %}{% when Some with (d) %} · {{ d }}{% when None %}{% endmatch %}</span></li>
     {% endfor %}
     </ul>
   </article>

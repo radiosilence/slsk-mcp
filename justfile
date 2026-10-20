@@ -13,6 +13,11 @@ fast:
     git diff --quiet Cargo.lock || { echo 'Cargo.lock has uncommitted changes'; exit 1; }
     cargo fmt --all -- --check
 
+# Compile the web UI's stylesheet from crates/slsk-mcp/styles/. The output is committed because
+# the server embeds it; CI fails a build where it is stale.
+css:
+    tailwindcss --input crates/slsk-mcp/styles/app.css --output crates/slsk-mcp/assets/app.css
+
 # Format
 fmt:
     cargo fmt --all

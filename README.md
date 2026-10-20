@@ -347,3 +347,13 @@ cargo test --workspace
 The network tests run real engines against `slsk-testserver` over loopback.
 To run the service locally: a `SEAL_KEY`, and
 `UI_INSECURE_NO_AUTH=1 UI_ADDR=127.0.0.1:8080`.
+
+The web UI is styled with Tailwind v4 utilities in the templates and in the
+HTML the Rust code writes. `crates/slsk-mcp/styles/` holds the sources: the
+design tokens, named as in [koan](https://github.com/radiosilence/koan)'s web
+UI so the two share one vocabulary, plus element defaults and the few classes
+the server or Datastar toggles. `just css` compiles them with the tailwindcss
+CLI pinned in `mise.toml` into `crates/slsk-mcp/assets/app.css`, which is
+committed because the binary embeds it, so building needs no Node or
+Tailwind. Run it after changing a template's classes; CI fails when the
+compiled file is stale.
