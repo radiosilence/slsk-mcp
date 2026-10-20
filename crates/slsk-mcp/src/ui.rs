@@ -449,16 +449,17 @@ fn place(url: &str) -> Event {
     signals(&serde_json::json!({ "_url": url }).to_string())
 }
 
+/// The view an address describes; one that does not parse (a repeated key,
+/// a value of the wrong type) is the default view rather than an error.
+fn query<T: serde::de::DeserializeOwned + Default>(uri: &http::Uri) -> T {
+    axum_extra::extract::Query::try_from_uri(uri).map_or_else(|_| T::default(), |q| q.0)
+}
+
 async fn render_page(
     s: &UiState,
     tab: &'static str,
     uri: &http::Uri,
 ) -> Result<Html<String>, crate::error::AppError> {
-    /// The page's view as its address describes it; one that does not
-    /// parse draws the page's default view.
-    fn query<T: serde::de::DeserializeOwned + Default>(uri: &http::Uri) -> T {
-        axum_extra::extract::Query::try_from_uri(uri).map_or_else(|_| T::default(), |q| q.0)
-    }
     let url = uri.path_and_query().map_or("/", |p| p.as_str()).to_string();
     let search: SearchQuery = match tab {
         "albums" | "search" => query(uri),

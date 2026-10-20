@@ -19,7 +19,7 @@
     {% match p.body %}
     {% when Body::Nothing %}
     {% when Body::Refile with { change, into, moves } %}
-    {% if let Some(d) = into %}<p class="text-meta text-muted wrap-anywhere">Into <span class="min-w-0 flex-[1_1_60%] wrap-anywhere">{{ d }}</span></p>{% endif %}
+    {% if let Some(d) = into %}<p class="text-meta text-muted wrap-anywhere">Into <span class="wrap-anywhere">{{ d }}</span></p>{% endif %}
     <ul class="rows tight *:grid *:grid-cols-[minmax(0,1fr)] *:gap-0">
     {% for (from, to) in moves %}
       <li>{% if from == to %}<span class="min-w-0 flex-[1_1_60%] wrap-anywhere">{{ from }}</span>{% else %}<span class="min-w-0 flex-[1_1_60%] wrap-anywhere text-muted line-through decoration-rule">{{ from }}</span><span class="min-w-0 flex-[1_1_60%] wrap-anywhere">→ {{ to }}</span>{% endif %}</li>
@@ -54,10 +54,10 @@
     </ul>
     {% endif %}
     {% when Body::Edit with { files, into } %}
-    {% if let Some(d) = into %}<p class="text-meta text-muted wrap-anywhere">Re-filed into <span class="min-w-0 flex-[1_1_60%] wrap-anywhere">{{ d }}</span></p>{% endif %}
+    {% if let Some(d) = into %}<p class="text-meta text-muted wrap-anywhere">Re-filed into <span class="wrap-anywhere">{{ d }}</span></p>{% endif %}
     {% include "library_changes.html" %}
     {% when Body::Bin with { to, keep, reason } %}
-    <p class="text-meta text-muted wrap-anywhere">Spare: {{ reason }}. The copy kept is <span class="min-w-0 flex-[1_1_60%] wrap-anywhere">{{ self.rel(keep) }}</span>.</p>
+    <p class="text-meta text-muted wrap-anywhere">Spare: {{ reason }}. The copy kept is <span class="wrap-anywhere">{{ self.rel(keep) }}</span>.</p>
     {% endmatch %}
   </details>
   {% if let Some(n) = p.note %}<p class="my-0 ml-[30px] basis-full text-meta {% if p.applicable %}text-warn{% else %}text-muted{% endif %}">{{ n }}</p>{% endif %}

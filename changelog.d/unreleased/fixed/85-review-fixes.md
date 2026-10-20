@@ -1,0 +1,1 @@
+- **Web UI styles on older browsers.** The compiled stylesheet no longer relies on CSS nesting, which Safari before 16.5, Chrome before 112 and Firefox before 117 ignore; on those, status labels were unreadable. A library address with a repeated filter key now lists the default view instead of failing.
