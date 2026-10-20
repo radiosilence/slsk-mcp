@@ -199,7 +199,7 @@ jobs:
               || echo "::warning::could not list $status runs" >&2
           done | sort -u | while read -r id event sha; do
             if [ "$event" = push ]; then
-              files=$(gh api "repos/$GITHUB_REPOSITORY/commits/$sha" --jq '.files[].filename') || continue
+              files=$(gh api --paginate "repos/$GITHUB_REPOSITORY/commits/$sha" --jq '.files[].filename') || continue
               if grep -qx 'crates/slsk-mcp/Cargo.toml' <<< "$files"; then
                 continue
               fi
@@ -494,17 +494,15 @@ jobs:
       - env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tags=(-t "$IMAGE:sha-${GITHUB_SHA::7}")
-          current=$(docker buildx imagetools inspect "$IMAGE:main" \
-            --format '{{ index (index .Image "linux/amd64").Config.Labels "org.opencontainers.image.revision" }}' 2>/dev/null || true)
-          status=ahead
-          if [ -n "$current" ] && [ "$current" != "<no value>" ]; then
+          tags=(-t "$IMAGE:sha-${GITHUB_SHA::7}" -t "$IMAGE:main")
+          current=$(docker buildx imagetools inspect "$IMAGE:main" --format '{{json .Image}}' 2>/dev/null \
+            | jq -r '[.. | objects | .config.Labels?["org.opencontainers.image.revision"]? // empty][0] // empty' || true)
+          if [ -n "$current" ] && [ "$current" != "$GITHUB_SHA" ]; then
             status=$(gh api "repos/$GITHUB_REPOSITORY/compare/$current...$GITHUB_SHA" --jq .status)
-          fi
-          if [ "$status" = ahead ] || [ "$status" = identical ]; then
-            tags+=(-t "$IMAGE:main")
-          else
-            echo "::notice::main holds ${current::7}, which this commit does not descend from ($status); leaving it"
+            if [ "$status" != ahead ]; then
+              echo "::notice::main holds $current, which this commit does not descend from ($status); leaving it"
+              tags=(-t "$IMAGE:sha-${GITHUB_SHA::7}")
+            fi
           fi
           docker buildx imagetools create "${tags[@]}" "$IMAGE:$GITHUB_SHA"
 
