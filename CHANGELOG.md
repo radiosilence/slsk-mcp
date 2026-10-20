@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.1
+
+### Changed
+
+- **Every address is its own page.** The server draws each page whole around a shared layout instead of one page holding every tab, so a link or a reload costs one request and draws nothing for the other pages; the nav is plain links and the live stream updates only what the open page shows.
+
+### Fixed
+
+- **Jobs that need attention are capped too.** Failed, review and suspect jobs share the 500-row limit and "Show more" with settled ones, an index keeps listing them from reading every job ever made, and job buttons stay busy until their card is redrawn.
+
 ## 0.4.0
 
 ### Fixed
