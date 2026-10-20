@@ -896,9 +896,12 @@ pub(crate) async fn search(
 
 /// How long one search's answers stand in for another of the same words.
 /// Every search is relayed to thousands of peers; an agent rephrasing,
-/// retrying, or re-filtering within minutes gets what the network already
-/// said.
+/// retrying, or re-filtering within minutes, or a page opened again, gets
+/// what the network already said.
 const SEARCH_REUSE: Duration = Duration::from_secs(600);
+
+/// What a search has heard so far, and whether it has stopped listening.
+pub(crate) type Heard = (Arc<Vec<SearchResponse>>, bool);
 
 /// The network's answers to `query`, from the last ten minutes if anything
 /// asked it, else from a new search listening `wait` seconds (1 to 30).
@@ -907,37 +910,97 @@ pub(crate) async fn responses(
     query: &str,
     wait: u64,
 ) -> anyhow::Result<Arc<Vec<SearchResponse>>> {
-    // When, and how long it listened.
-    type Answers = (tokio::time::Instant, u64, Arc<Vec<SearchResponse>>);
-    static RECENT: std::sync::LazyLock<
-        parking_lot::Mutex<std::collections::HashMap<String, Answers>>,
+    let mut heard = listen(engine, query, wait).await?;
+    let heard = heard.wait_for(|(_, done)| *done).await?;
+    Ok(heard.0.clone())
+}
+
+/// The answers to `query` as they arrive. A search of the same words from
+/// the last ten minutes, finished or still listening, is joined rather than
+/// sent again, so a page reopened mid-search spends nothing.
+pub(crate) async fn listen(
+    engine: &slsk_engine::Engine,
+    query: &str,
+    wait: u64,
+) -> anyhow::Result<tokio::sync::watch::Receiver<Heard>> {
+    hear(query, wait, || async {
+        engine.pace().await?;
+        Ok(engine.search(query)?)
+    })
+    .await
+}
+
+async fn hear<F, Fut>(
+    query: &str,
+    wait: u64,
+    start: F,
+) -> anyhow::Result<tokio::sync::watch::Receiver<Heard>>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<tokio::sync::mpsc::Receiver<SearchResponse>>>,
+{
+    use tokio::sync::watch;
+    use tokio::time::Instant;
+    // When it started, how long it listens, and what it has heard.
+    type Search = (Instant, u64, watch::Receiver<Heard>);
+    static SEARCHES: std::sync::LazyLock<
+        parking_lot::Mutex<std::collections::HashMap<String, Search>>,
     > = std::sync::LazyLock::new(Default::default);
     let key = query.trim().to_lowercase();
     let wait = wait.clamp(1, 30);
-    // A shorter listen heard fewer peers, so it stands in only for one as
+    // A shorter listen hears fewer peers, so it stands in only for one as
     // short or shorter.
-    if let Some((at, listened, responses)) = RECENT.lock().get(&key)
+    if let Some((at, listens, heard)) = SEARCHES.lock().get(&key)
         && at.elapsed() < SEARCH_REUSE
-        && *listened >= wait
+        && *listens >= wait
     {
-        return Ok(responses.clone());
+        return Ok(heard.clone());
     }
-    engine.pace().await?;
-    let mut rx = engine.search(query)?;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(wait);
-    let mut responses = Vec::new();
-    while let Ok(Some(r)) = tokio::time::timeout_at(deadline, rx.recv()).await {
-        responses.push(r);
+    let mut rx = start().await?;
+    let started = Instant::now();
+    let (tx, heard) = watch::channel((Arc::new(Vec::new()), false));
+    {
+        let mut searches = SEARCHES.lock();
+        searches.retain(|_, (at, ..)| at.elapsed() < SEARCH_REUSE);
+        searches.insert(key.clone(), (started, wait, heard.clone()));
     }
-    let responses = Arc::new(responses);
-    // Silence is not kept: it is as likely a connection that had not
-    // settled as a network without the album.
-    if !responses.is_empty() {
-        let mut recent = RECENT.lock();
-        recent.retain(|_, (at, _, _)| at.elapsed() < SEARCH_REUSE);
-        recent.insert(key, (tokio::time::Instant::now(), wait, responses.clone()));
-    }
-    Ok(responses)
+    // It listens to the end whoever is still watching: what it hears is
+    // kept for the next page or caller that asks.
+    tokio::spawn(async move {
+        let deadline = started + Duration::from_secs(wait);
+        let mut responses = Vec::new();
+        let mut open = true;
+        loop {
+            let tick = (Instant::now() + Duration::from_secs(1)).min(deadline);
+            let before = responses.len();
+            while open {
+                match tokio::time::timeout_at(tick, rx.recv()).await {
+                    Ok(Some(r)) => responses.push(r),
+                    Ok(None) => open = false,
+                    Err(_) => break,
+                }
+            }
+            let done = !open || Instant::now() >= deadline;
+            if done || responses.len() > before {
+                tx.send_replace((Arc::new(responses.clone()), done));
+            }
+            if done {
+                break;
+            }
+        }
+        // Silence is not kept: it is as likely a connection that had not
+        // settled as a network without the album.
+        if responses.is_empty() {
+            let mut searches = SEARCHES.lock();
+            if searches
+                .get(&key)
+                .is_some_and(|(_, _, h)| h.same_channel(&tx.subscribe()))
+            {
+                searches.remove(&key);
+            }
+        }
+    });
+    Ok(heard)
 }
 
 /// Search, pick the best relevant folder, keep four fallbacks, start a job.
@@ -1583,4 +1646,75 @@ pub(crate) async fn set_ban(app: &App, username: &str, banned: bool) -> Result<b
     db::set_ban(&app.db, &account, username, banned).await?;
     engine.set_banned(db::bans(&app.db, &account).await?);
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn answer(username: &str) -> SearchResponse {
+        SearchResponse {
+            username: username.into(),
+            token: 1,
+            files: Vec::new(),
+            slot_free: true,
+            avg_speed: 0,
+            queue_length: 0,
+            private_files: Vec::new(),
+        }
+    }
+
+    /// A search that answers once, counting how often it is sent.
+    async fn search(
+        query: &str,
+        wait: u64,
+        sent: &AtomicUsize,
+    ) -> tokio::sync::watch::Receiver<Heard> {
+        hear(query, wait, || async {
+            sent.fetch_add(1, Ordering::SeqCst);
+            let (tx, rx) = tokio::sync::mpsc::channel(1);
+            tx.send(answer("peer")).await?;
+            Ok(rx)
+        })
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_same_words_join_the_earlier_search() {
+        let sent = AtomicUsize::new(0);
+        let mut first = search("reuse  Test", 2, &sent).await;
+        // Asked again while the first is still listening, as a page
+        // reopened mid-search does, then once it has finished.
+        let mut during = search(" reuse test", 2, &sent).await;
+        first.wait_for(|(_, done)| *done).await.unwrap();
+        let mut after = search("REUSE TEST", 2, &sent).await;
+        assert_eq!(sent.load(Ordering::SeqCst), 1);
+        for heard in [&mut during, &mut after] {
+            let heard = heard.wait_for(|(_, done)| *done).await.unwrap();
+            assert_eq!(heard.0.len(), 1);
+        }
+        // A longer listen, or one after the reuse window, searches again.
+        search("reuse test", 5, &sent).await;
+        assert_eq!(sent.load(Ordering::SeqCst), 2);
+        tokio::time::advance(SEARCH_REUSE).await;
+        search("reuse test", 5, &sent).await;
+        assert_eq!(sent.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn silence_is_not_kept() {
+        let sent = AtomicUsize::new(0);
+        let quiet = || async {
+            sent.fetch_add(1, Ordering::SeqCst);
+            let (_tx, rx) = tokio::sync::mpsc::channel(1);
+            Ok(rx)
+        };
+        let mut heard = hear("nobody has this", 1, quiet).await.unwrap();
+        heard.wait_for(|(_, done)| *done).await.unwrap();
+        tokio::task::yield_now().await;
+        hear("nobody has this", 1, quiet).await.unwrap();
+        assert_eq!(sent.load(Ordering::SeqCst), 2);
+    }
 }

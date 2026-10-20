@@ -68,7 +68,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/", get(StatusCode::NOT_FOUND))
         .route("/uploads", get(StatusCode::NOT_FOUND))
         .route("/stream", get(stream))
-        .route("/search", post(search))
+        .route("/search", get(search))
         .route("/grab", post(grab))
         .route("/download", post(download))
         .route("/jobs/{id}/{action}", post(job_action))
@@ -297,6 +297,7 @@ fn percent(done: u64, total: u64) -> u64 {
 
 /// The pages, in the order the nav lists them: name, address and label.
 const PAGES: &[(&str, &str, &str)] = &[
+    ("search", "/search", "Search"),
     ("albums", "/", "Albums"),
     ("uploads", "/uploads", "Uploads"),
     ("wishlist", "/wishlist", "Wishlist"),
@@ -357,6 +358,13 @@ struct AlbumsPage {
     q: String,
     lossless: bool,
     jobs: String,
+}
+
+#[derive(Template)]
+#[template(path = "pages/search.html")]
+struct SearchPage {
+    q: String,
+    lossless: bool,
 }
 
 /// A browser asking for a page's address gets the whole page. The same
@@ -425,11 +433,12 @@ async fn render_page(
         }
     };
     let signals = serde_json::json!({
-        "q": if tab == "albums" { q.as_str() } else { "" },
+        "q": if tab == "albums" || tab == "search" { q.as_str() } else { "" },
         "lossless": lossless,
         "busy": false,
         "jobs": PAGE,
         "history": PAGE,
+        "found": FOUND,
         "_url": url,
         "_libq": lib("q"),
         "_libsince": lib("since"),
@@ -446,6 +455,7 @@ async fn render_page(
         }
         .render()
         .unwrap_or_default(),
+        "search" => SearchPage { q, lossless }.render().unwrap_or_default(),
         "uploads" => uploads_html(&s.app, PAGE).await,
         "wishlist" => wishlist::page(&s.app).await,
         "library" => library::page(s, &q),
@@ -1028,11 +1038,21 @@ struct SearchForm {
     lossless: bool,
 }
 
+/// Folders shown at first, and added by each "Show more", in search results.
+/// A generic query is answered with thousands, and a page drawing them all
+/// every second stops responding.
+const FOUND: usize = 100;
+
+/// How long the web UI's searches listen for peers.
+const LISTEN: u64 = 12;
+
 #[derive(Template)]
 #[template(path = "results.html")]
 struct ResultsView {
     query: String,
     folders: Vec<Folder>,
+    /// Folders found beyond those shown.
+    more: usize,
     searching: bool,
     responses: usize,
 }
@@ -1076,31 +1096,30 @@ impl ResultsView {
     }
 }
 
-/// Stream results as peers answer, regrouped every second or so.
-async fn search(State(s): State<UiState>, axum::Form(form): axum::Form<SearchForm>) -> Response {
+/// The results for the address's query, regrouped as peers answer, at most
+/// once a second. The search is shared with any of the same words from the
+/// last ten minutes, so reopening or reloading the page, or showing more,
+/// sends nothing to the network.
+async fn search(State(s): State<UiState>, Query(q): Query<HashMap<String, String>>) -> Response {
     let Some(engine) = s.app.session.engine().cloned() else {
         return one(r#"<div id="results" class="note">Sign in to Soulseek first.</div>"#.into());
     };
-    let query = form.q.trim().to_string();
+    let query = q.get("q").map(|q| q.trim().to_string()).unwrap_or_default();
+    if query.is_empty() {
+        return one(r#"<div id="results"></div>"#.into());
+    }
     let filter = Filter {
-        lossless: form.lossless,
+        lossless: q.get("lossless").is_some_and(|v| !v.is_empty()),
         ..Default::default()
     };
-    let here = place(&place_url(
-        "/",
-        &[
-            ("q", &query),
-            ("lossless", if form.lossless { "1" } else { "" }),
-        ],
-    ));
-    let rx = match engine.pace().await {
-        Ok(()) => engine.search(&query),
-        Err(e) => Err(e),
-    };
+    let found = q
+        .get("datastar")
+        .and_then(|j| serde_json::from_str::<serde_json::Value>(j).ok())
+        .and_then(|v| v.get("found")?.as_u64())
+        .map_or(FOUND, |n| (n as usize).clamp(1, MOST as usize));
     let events = async_stream::stream! {
-        yield Ok(here);
-        let mut rx = match rx {
-            Ok(rx) => rx,
+        let mut heard = match graphql::listen(&engine, &query, LISTEN).await {
+            Ok(heard) => heard,
             Err(e) => {
                 yield Ok(patch(&format!(
                     r#"<div id="results" class="note">{}</div>"#,
@@ -1109,18 +1128,14 @@ async fn search(State(s): State<UiState>, axum::Form(form): axum::Form<SearchFor
                 return;
             }
         };
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(12);
-        let mut responses = Vec::new();
         loop {
-            let tick = tokio::time::Instant::now() + Duration::from_millis(1000);
-            while let Ok(Some(r)) = tokio::time::timeout_at(tick.min(deadline), rx.recv()).await {
-                responses.push(r);
-            }
-            let done = tokio::time::Instant::now() >= deadline;
-            let folders = crate::folders::relevant(crate::folders::group(&responses, &filter), &query);
-            let view = ResultsView { query: query.clone(), folders, searching: !done, responses: responses.len() };
+            let (responses, done) = heard.borrow_and_update().clone();
+            let mut folders = crate::folders::relevant(crate::folders::group(&responses, &filter), &query);
+            let more = folders.len().saturating_sub(found);
+            folders.truncate(found);
+            let view = ResultsView { query: query.clone(), folders, more, searching: !done, responses: responses.len() };
             yield Ok(patch(&view.render().unwrap_or_default()));
-            if done {
+            if done || heard.changed().await.is_err() {
                 break;
             }
         }

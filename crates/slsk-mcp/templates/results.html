@@ -1,15 +1,15 @@
 <div id="results" class="results">
-  <p class="note">{% if searching %}Searching “{{ query }}”… {% endif %}{{ responses }} peers answered, {{ folders.len() }} folders.</p>
+  <p class="note">{% if searching %}Searching “{{ query }}”… {% endif %}{{ responses }} peers answered, {{ folders.len() + more }} folders.</p>
   {% for f in folders %}
   <article id="r-{{ self.id(f) }}" class="folder{% if f.lossless %} lossless{% endif %}">
     <form id="dl-{{ loop.index }}"><input type="hidden" name="username" value="{{ f.username }}"><input type="hidden" name="key" value="{{ self.key(f) }}"><input type="hidden" name="title" value="{{ query }}"></form>
     <div class="row">
-      <nav class="path crumbs" title="Browse {{ f.username }} from here">{% for c in self.crumbs(f) %}{% if !loop.first %}<span class="meta">/</span>{% endif %}<a class="link" href="{{ crate::ui::browse_href(f.username, c.key) }}">{{ c.name }}</a>{% else %}<a class="link" href="{{ crate::ui::browse_href(f.username, "") }}">top</a>{% endfor %}</nav>
+      <nav class="path crumbs" title="Browse {{ f.username }} from here">{% for c in self.crumbs(f) %}{% if !loop.first %}<span class="meta">/</span>{% endif %}<a class="link" target="_blank" rel="noopener" href="{{ crate::ui::browse_href(f.username, c.key) }}">{{ c.name }}</a>{% else %}<a class="link" target="_blank" rel="noopener" href="{{ crate::ui::browse_href(f.username, "") }}">top</a>{% endfor %}</nav>
       <span class="grow"></span>
       <button class="primary" data-indicator="_dl_{{ loop.index }}" data-attr:disabled="$_dl_{{ loop.index }}" data-class:busy="$_dl_{{ loop.index }}" data-on:click="@post('/download', {contentType: 'form', selector: '#dl-{{ loop.index }}'})">Download</button>
     </div>
     <div class="meta">
-      <a class="link" href="{{ crate::ui::browse_href(f.username, self.key(f).as_str()) }}">{{ f.username }}</a> · {{ f.audio_files }} tracks · {{ self.quality(f) }} · {{ self.size(f.total_size) }} ·
+      <a class="link" target="_blank" rel="noopener" href="{{ crate::ui::browse_href(f.username, self.key(f).as_str()) }}">{{ f.username }}</a> · {{ f.audio_files }} tracks · {{ self.quality(f) }} · {{ self.size(f.total_size) }} ·
       {% if f.free_slot %}<span class="ok">free slot</span>{% else %}queue {{ f.queue_length }}{% endif %} · {{ self.size(f.speed as u64) }}/s
     </div>
     <details class="peek" data-ignore-morph>
@@ -20,4 +20,5 @@
     </details>
   </article>
   {% endfor %}
+  {% if more > 0 %}<button class="quiet" data-on:click="$found += {{ crate::ui::FOUND }}">Show more ({{ more }} hidden)</button>{% endif %}
 </div>

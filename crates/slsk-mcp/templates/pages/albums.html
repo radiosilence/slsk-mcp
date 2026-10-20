@@ -1,13 +1,4 @@
 <section class="finder">
-  <form id="finder" data-indicator="_searching" data-on:submit__prevent="@post('/search', {contentType: 'form', selector: '#finder'})"{% if !q.is_empty() %} data-init="@post('/search', {contentType: 'form', selector: '#finder'})"{% endif %}>
-    <input name="q" value="{{ q }}" data-bind:q placeholder="Artist album" autocomplete="off" autofocus>
-    <label class="toggle"><input type="checkbox" name="lossless" value="true"{% if lossless %} checked{% endif %} data-bind:lossless> lossless</label>
-    <button type="submit" data-attr:disabled="$_searching || $busy" data-class:busy="$_searching">Search</button>
-    <button type="button" class="primary" data-indicator:busy data-attr:disabled="$busy || $_searching || !$q" data-class:busy="$busy"
-      data-on:click="@post('/grab', {contentType: 'form', selector: '#finder'})">Grab best</button>
-    <button type="button" class="quiet" data-show="$q" data-attr:disabled="$_searching"
-      data-on:click="$q = ''; $_url = '/'; document.getElementById('results').replaceChildren()">Clear</button>
-  </form>
-  <div id="results"></div>
+  {% include "finder.html" %}
 </section>
 {{ jobs|safe }}
