@@ -424,7 +424,8 @@ pub(super) fn page(s: &UiState, filter: &Filter) -> String {
 }
 
 /// The list the address describes.
-async fn view(State(s): State<UiState>, Query(filter): Query<Filter>) -> Response {
+async fn view(State(s): State<UiState>, uri: http::Uri) -> Response {
+    let filter: Filter = super::query(&uri);
     sse(async_stream::stream! {
         yield Ok(patch(r#"<div id="library"><p class="text-meta text-muted">Reading the library…</p></div>"#));
         yield Ok(patch(&list_html(&s, &filter).await));
@@ -581,7 +582,8 @@ async fn album_html(s: &UiState, filter: &Filter) -> String {
 }
 
 /// One album open in detail, above the list.
-async fn album(State(s): State<UiState>, Query(filter): Query<Filter>) -> Response {
+async fn album(State(s): State<UiState>, uri: http::Uri) -> Response {
+    let filter: Filter = super::query(&uri);
     super::many(vec![
         patch(&album_html(&s, &filter).await),
         patch(r#"<div id="lib-preview"></div>"#),
