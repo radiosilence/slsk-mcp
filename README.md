@@ -290,6 +290,19 @@ each.
 The GraphQL mutations behind these take `preview: true` for the same answer
 without the change, so an assistant can show it first.
 
+Browsing shares, a peer's or this client's own (the library as peers see it,
+read from the share index rather than over the network), works like Finder's
+list view. The folder in the address is the open one; the folders in it
+expand in place, and the expanded set is in the address too, relative to the
+open folder (`open=Album&open=Album/CD1`), so a reload, a shared link or back
+and forward draw the same tree. Moving into a folder keeps what was expanded
+below it, and moving up leaves the way back down expanded. Every folder and
+file in the tree has its own download button; a folder downloads as one job
+per album. Each folder draws 500 rows at a time, with "Show more" adding a
+page that the address also records. A peer sends its whole share list at
+once, so it is fetched once, kept for ten minutes, and every step through it
+after that is local.
+
 ## Security notes
 
 - Every UI route except sign-in, the probe and static assets is behind the

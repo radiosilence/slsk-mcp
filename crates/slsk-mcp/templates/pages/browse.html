@@ -4,7 +4,7 @@
     <button type="submit" data-attr:disabled="$_browsing" data-class:busy="$_browsing">Browse</button>
   </form>
   {% if username.is_empty() %}
-  <div id="browse"><p class="note">Browse someone's shares: type their name, or tap a name in search results, uploads or chat.</p></div>
+  <div id="browse"><p class="note">Browse someone's shares: type their name, or tap a name in search results, uploads or chat.{% if let Some(me) = me %} Or browse <a class="link" href="{{ crate::ui::browse_href(me, "") }}">your own</a>.{% endif %}</p></div>
   {% else %}
   {# The peer takes a while to answer, so their shares follow the page. #}
   <div id="browse" data-init="@get(location.pathname + location.search)"><p class="note">Asking {{ username }} for their shares…</p></div>

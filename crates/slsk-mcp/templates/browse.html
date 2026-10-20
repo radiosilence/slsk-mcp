@@ -2,43 +2,30 @@
   <form id="browse-user"><input type="hidden" name="username" value="{{ username }}"></form>
 {% match error %}{% when Some with (e) %}<p class="note">{{ e }}</p>{% when None %}
   <div class="row">
-    <strong class="title">{{ username }}</strong>
+    <strong class="title">{% if mine %}Your shares{% else %}{{ username }}{% endif %}</strong>
   </div>
   <div class="actions">
-    <button type="button" class="quiet" name="key" value="{{ here_key }}" data-indicator="_browsing" data-attr:disabled="$_browsing" data-class:busy="$_browsing" data-on:click="@post('/browse?fresh=true', {contentType: 'form', selector: '#browse-user'})">Refresh</button>
-    <a class="button quiet" href="{{ crate::ui::chat_href("pm", username) }}">Message</a>
+    <button type="button" class="quiet" data-indicator="_browsing" data-attr:disabled="$_browsing" data-class:busy="$_browsing" data-on:click="@get('{{ refresh }}')">Refresh</button>
+    {% if !mine %}<a class="button quiet" href="{{ crate::ui::chat_href("pm", username) }}">Message</a>{% endif %}
   </div>
   <div class="meta">{{ folders }} folders{% match info %}{% when Some with (i) %} · {{ i.uploads }} uploads · queue {{ i.queue }} · {% if i.free %}<span class="ok">free slot</span>{% else %}no free slot{% endif %}{% when None %}{% endmatch %}</div>
   {% match info %}{% when Some with (i) %}{% if !i.description.is_empty() %}<details class="about"><summary>About</summary><p class="desc">{{ i.description }}</p></details>{% endif %}{% when None %}{% endmatch %}
   <nav class="crumbs">
-    <a class="link" href="{{ crate::ui::browse_href(username, "") }}" data-indicator="_browsing" data-on:click="evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || (evt.preventDefault(), $_browsing || (@get(el.getAttribute('href'))))">top</a>
-    {% for c in crumbs %}<span class="meta">/</span><a class="link" href="{{ crate::ui::browse_href(username, c.key) }}" data-indicator="_browsing" data-on:click="evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || (evt.preventDefault(), $_browsing || (@get(el.getAttribute('href'))))">{{ c.name }}</a>{% endfor %}
+    {% if let Some(up) = up %}<a class="link up" href="{{ up }}" title="Up to the folder above" data-indicator="_browsing" data-on:click="evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || (evt.preventDefault(), $_browsing || (@get(el.getAttribute('href'))))">↑ Up</a>{% endif %}
+    {% for c in crumbs %}{% if !loop.first %}<span class="meta">/</span>{% endif %}<a class="link" href="{{ c.href }}" data-indicator="_browsing" data-on:click="evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || (evt.preventDefault(), $_browsing || (@get(el.getAttribute('href'))))">{{ c.name }}</a>{% endfor %}
   </nav>
-  {% if tree_files > 0 %}
+  {% if !mine && tree_files > 0 %}
   <div class="actions">
-    <button type="button" class="primary" name="key" value="{{ here_key }}" data-indicator="_dl_here" data-attr:disabled="$_dl_here" data-class:busy="$_dl_here" data-on:click="{% if tree_files > 100 %}confirm('Download everything under this folder? It is more than 100 files, one job per album.') && {% endif %}@post('/browse/tree', {contentType: 'form', selector: '#browse-user'})">Download folder · {{ tree_files }} files</button>
+    {% if tree_files > 0 %}<button type="button" class="primary" name="key" value="{{ here_key }}" data-indicator="_dl_here" data-attr:disabled="$_dl_here" data-class:busy="$_dl_here" data-on:click="{% if tree_files > 100 %}confirm('Download everything under this folder? It is more than 100 files, one job per album.') && {% endif %}@post('/browse/tree', {contentType: 'form', selector: '#browse-user'})">Download folder · {{ tree_files }} files</button>{% endif %}
+    {% if has_files %}<form id="browse-files">
+      <input type="hidden" name="username" value="{{ username }}">
+      <input type="hidden" name="key" value="{{ here_key }}">
+      <button type="button" data-indicator="_dl_some" data-attr:disabled="$_dl_some" data-class:busy="$_dl_some" data-on:click="@post('/browse/files', {contentType: 'form', selector: '#browse-files'})">Download ticked</button>
+    </form>{% endif %}
   </div>
   {% endif %}
-  {% if !children.is_empty() %}
-  <ul class="rows dirs">
-  {% for c in children %}
-    <li><a class="link" href="{{ crate::ui::browse_href(username, c.key) }}" data-indicator="_browsing" data-on:click="evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || (evt.preventDefault(), $_browsing || (@get(el.getAttribute('href'))))">{{ c.name }}</a><span class="meta">{{ c.files }} files</span></li>
-  {% endfor %}
-  </ul>
-  {% endif %}
-  {% if !files.is_empty() %}
-  <form id="browse-files">
-    <input type="hidden" name="username" value="{{ username }}">
-    <input type="hidden" name="key" value="{{ here_key }}">
-    <div class="actions">
-      <button type="button" data-indicator="_dl_some" data-attr:disabled="$_dl_some" data-class:busy="$_dl_some" data-on:click="@post('/browse/files', {contentType: 'form', selector: '#browse-files'})">Download ticked</button>
-    </div>
-    <ul class="rows files">
-    {% for f in files %}
-      <li><label class="pick"><input type="checkbox" name="f" value="{{ f.key }}"><span class="name">{{ f.name }}</span></label><span class="meta">{{ f.quality }} · {{ self.size(f.size) }}</span></li>
-    {% endfor %}
-    </ul>
-  </form>
+  {% if rows.trim().is_empty() %}<p class="note">This folder is empty.</p>{% else %}
+  <ul class="tree">{{ rows|safe }}</ul>
   {% endif %}
 {% endmatch %}
 </div>

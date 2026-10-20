@@ -440,6 +440,11 @@ impl Engine {
             .send_server(ToServer::SharedFoldersFiles { dirs, files });
     }
 
+    /// This client's own shares, as a peer browsing them would see them.
+    pub fn own_shares(&self) -> Vec<Directory> {
+        self.0.shares.load().listing()
+    }
+
     pub fn share_counts(&self) -> (usize, usize) {
         let index = self.0.shares.load();
         (index.dir_count(), index.file_count())

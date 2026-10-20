@@ -103,6 +103,17 @@ impl ShareIndex {
             .collect()
     }
 
+    /// Every folder holding files, as a browse response lists them.
+    pub fn listing(&self) -> Vec<Directory> {
+        self.dirs
+            .iter()
+            .map(|(dir, ids)| Directory {
+                name: dir.clone(),
+                files: ids.iter().map(|&i| self.basename_entry(i)).collect(),
+            })
+            .collect()
+    }
+
     fn basename_entry(&self, id: u32) -> FileEntry {
         let f = &self.files[id as usize];
         let path = f.virtual_path.as_bytes();
@@ -220,15 +231,7 @@ impl ShareIndex {
             dirs,
             browse: Bytes::new(),
         };
-        let listing: Vec<Directory> = index
-            .dirs
-            .iter()
-            .map(|(dir, ids)| Directory {
-                name: dir.clone(),
-                files: ids.iter().map(|&i| index.basename_entry(i)).collect(),
-            })
-            .collect();
-        index.browse = shared_file_list_frame(&listing, &[]);
+        index.browse = shared_file_list_frame(&index.listing(), &[]);
         index
     }
 }
