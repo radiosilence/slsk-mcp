@@ -135,28 +135,45 @@ fn imported(secs: Option<i64>) -> String {
 }
 
 /// What the list shows: a search, an import date, and which albums.
-#[derive(Clone, Default, Debug, PartialEq)]
-struct Filter {
-    q: String,
+#[derive(Clone, Default, Debug, PartialEq, serde::Deserialize)]
+#[serde(default)]
+pub(super) struct Filter {
+    #[serde(deserialize_with = "trimmed")]
+    pub(super) q: String,
     /// `today`, `week`, `month`, or `date` with `from` (`YYYY-MM-DD`).
-    since: String,
-    from: String,
+    #[serde(deserialize_with = "trimmed")]
+    pub(super) since: String,
+    #[serde(deserialize_with = "trimmed")]
+    pub(super) from: String,
     /// Empty for every album, `dups` or `moves`.
-    show: String,
+    #[serde(deserialize_with = "trimmed")]
+    pub(super) show: String,
     /// The album open in detail, by path; it does not narrow the list.
-    album: String,
+    #[serde(deserialize_with = "trimmed")]
+    pub(super) album: String,
+}
+
+fn trimmed<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    let s = <String as serde::Deserialize>::deserialize(d)?;
+    Ok(s.trim().to_string())
+}
+
+/// The album an action works on, with the list it was opened from.
+#[derive(serde::Deserialize)]
+struct AlbumQuery {
+    #[serde(flatten)]
+    filter: Filter,
+    #[serde(default)]
+    path: String,
 }
 
 impl Filter {
+    /// The filter a posted form carries alongside its other fields.
     fn from_fields(f: &[(String, String)]) -> Self {
-        let get = |k| super::field(f, k).unwrap_or_default().trim().to_string();
-        Self {
-            q: get("q"),
-            since: get("since"),
-            from: get("from"),
-            show: get("show"),
-            album: get("album"),
-        }
+        use serde::Deserialize as _;
+        use serde::de::value::{Error, MapDeserializer};
+        let pairs = f.iter().map(|(k, v)| (k.as_str(), v.as_str()));
+        Self::deserialize(MapDeserializer::<_, Error>::new(pairs)).unwrap_or_default()
     }
 
     /// The earliest import time the filter admits, in seconds. Days,
@@ -397,9 +414,9 @@ struct Page {
 }
 
 /// The page around the list, which it fetches once drawn.
-pub(super) fn page(s: &UiState, q: &str) -> String {
+pub(super) fn page(s: &UiState, filter: &Filter) -> String {
     Page {
-        q: q.to_string(),
+        q: filter.q.clone(),
         run: run_html(s),
     }
     .render()
@@ -407,8 +424,7 @@ pub(super) fn page(s: &UiState, q: &str) -> String {
 }
 
 /// The list the address describes.
-async fn view(State(s): State<UiState>, Query(q): Query<Vec<(String, String)>>) -> Response {
-    let filter = Filter::from_fields(&q);
+async fn view(State(s): State<UiState>, Query(filter): Query<Filter>) -> Response {
     sse(async_stream::stream! {
         yield Ok(patch(r#"<div id="library"><p class="note">Reading the library…</p></div>"#));
         yield Ok(patch(&list_html(&s, &filter).await));
@@ -565,8 +581,7 @@ async fn album_html(s: &UiState, filter: &Filter) -> String {
 }
 
 /// One album open in detail, above the list.
-async fn album(State(s): State<UiState>, Query(q): Query<Vec<(String, String)>>) -> Response {
-    let filter = Filter::from_fields(&q);
+async fn album(State(s): State<UiState>, Query(filter): Query<Filter>) -> Response {
     super::many(vec![
         patch(&album_html(&s, &filter).await),
         patch(r#"<div id="lib-preview"></div>"#),
@@ -587,9 +602,10 @@ struct ReleasesView<'a> {
 
 /// The releases MusicBrainz has for an album's files, closest first, to
 /// re-tag it from; or one pasted.
-async fn releases(State(s): State<UiState>, Query(q): Query<Vec<(String, String)>>) -> Response {
-    let filter = Filter::from_fields(&q);
-    let path = super::field(&q, "path").unwrap_or_default().to_string();
+async fn releases(
+    State(s): State<UiState>,
+    Query(AlbumQuery { filter, path }): Query<AlbumQuery>,
+) -> Response {
     sse(async_stream::stream! {
         yield Ok(patch(r#"<div id="lib-retag"><p class="note">Asking MusicBrainz for releases that fit these files…</p></div>"#));
         let view = match s.app.library.rematch(&path).await {
@@ -628,9 +644,10 @@ impl EditView<'_> {
 }
 
 /// The album's tags as a form: album-wide fields, then each file's own.
-async fn edit_form(State(s): State<UiState>, Query(q): Query<Vec<(String, String)>>) -> Response {
-    let filter = Filter::from_fields(&q);
-    let path = super::field(&q, "path").unwrap_or_default().to_string();
+async fn edit_form(
+    State(s): State<UiState>,
+    Query(AlbumQuery { filter, path }): Query<AlbumQuery>,
+) -> Response {
     match s.app.library.tracks(&path).await {
         Ok(tracks) => super::one(
             EditView {
@@ -1973,11 +1990,21 @@ mod tests {
             album: "/m/Burial/(2007) Untrue".into(),
         };
         let url = f.url();
-        let back: Vec<(String, String)> =
-            url::form_urlencoded::parse(url.split_once('?').unwrap().1.as_bytes())
-                .into_owned()
-                .collect();
-        assert_eq!(Filter::from_fields(&back), f);
+        let Query(back) = Query::<Filter>::try_from_uri(&url.parse().unwrap()).unwrap();
+        assert_eq!(back, f);
+        let Query(AlbumQuery { filter, path }) =
+            Query::try_from_uri(&format!("{url}&path=%2Fm%2FX").parse().unwrap()).unwrap();
+        assert_eq!((filter, path.as_str()), (f, "/m/X"));
+    }
+
+    #[test]
+    fn a_form_carries_the_filter_beside_its_other_fields() {
+        let form: Vec<(String, String)> = [("path", "/a"), ("q", " burial "), ("path", "/b")]
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .into();
+        let f = Filter::from_fields(&form);
+        assert_eq!(f.q, "burial");
+        assert_eq!(f.album, "");
     }
 
     #[test]

@@ -289,8 +289,8 @@ impl TriageView {
     }
 }
 
-#[derive(serde::Deserialize)]
-struct Days {
+#[derive(serde::Deserialize, Default)]
+pub(super) struct Days {
     days: Option<i64>,
 }
 
@@ -300,10 +300,9 @@ struct TriagePage {
     triage: String,
 }
 
-pub(super) async fn triage_page(app: &App, q: &[(String, String)]) -> String {
-    let days = super::field(q, "days").and_then(|d| d.parse().ok());
+pub(super) async fn triage_page(app: &App, q: &Days) -> String {
     TriagePage {
-        triage: triage_html(app, days).await,
+        triage: triage_html(app, q.days).await,
     }
     .render()
     .unwrap_or_default()

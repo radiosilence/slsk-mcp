@@ -58,13 +58,19 @@ impl Thread {
     }
 
     fn from_fields(form: &[(String, String)]) -> Option<Self> {
-        let name = super::field(form, "name")?.to_string();
-        let kind = match super::field(form, "kind")? {
+        Self::of(super::field(form, "kind")?, super::field(form, "name")?)
+    }
+
+    fn of(kind: &str, name: &str) -> Option<Self> {
+        let kind = match kind {
             "room" => Kind::Room,
             "pm" => Kind::Private,
             _ => return None,
         };
-        Some(Self { kind, name })
+        (!name.is_empty()).then(|| Self {
+            kind,
+            name: name.to_string(),
+        })
     }
 }
 
@@ -304,8 +310,8 @@ struct Page {
 /// The conversation the address names, if any, and the lists. The thread
 /// is drawn first: drawing a private conversation marks it read, which the
 /// lists then reflect.
-pub(super) async fn page(app: &App, q: &[(String, String)]) -> String {
-    let thread = thread_html(app, Thread::from_fields(q).as_ref()).await;
+pub(super) async fn page(app: &App, q: &Poll) -> String {
+    let thread = thread_html(app, q.thread().as_ref()).await;
     Page {
         thread,
         side: side_html(app).await,
@@ -315,23 +321,27 @@ pub(super) async fn page(app: &App, q: &[(String, String)]) -> String {
     .unwrap_or_default()
 }
 
-#[derive(serde::Deserialize)]
-struct Poll {
-    #[serde(default)]
+/// A conversation as the address names it, and whether this is the open
+/// thread's poll.
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+pub(super) struct Poll {
     poll: bool,
-    kind: Option<String>,
-    name: Option<String>,
+    kind: String,
+    name: String,
+}
+
+impl Poll {
+    fn thread(&self) -> Option<Thread> {
+        Thread::of(&self.kind, &self.name)
+    }
 }
 
 /// The lists and the open conversation's lines. Opening the tab also
 /// refreshes the public room list, which polling leaves alone so that it
 /// stays open or closed as the person left it.
 async fn view(State(s): State<UiState>, Query(q): Query<Poll>) -> Response {
-    let form: Vec<(String, String)> = [("kind", q.kind), ("name", q.name)]
-        .into_iter()
-        .filter_map(|(k, v)| Some((k.to_string(), v?)))
-        .collect();
-    let thread = Thread::from_fields(&form);
+    let thread = q.thread();
     // The lines first: drawing a private conversation marks it read, which
     // the lists and the badge then reflect. A poll refreshes the lines of
     // the open thread; otherwise the thread is drawn whole, as when the
