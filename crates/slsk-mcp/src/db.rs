@@ -69,6 +69,12 @@ pub(crate) const JOBS: &str = "SELECT * FROM jobs ORDER BY created_at DESC LIMIT
 pub(crate) const JOBS_OF_STATUS: &str =
     "SELECT * FROM jobs WHERE status = ?1 ORDER BY created_at DESC LIMIT ?2";
 
+/// Jobs still in hand: everything but those that landed or were cancelled.
+pub(crate) const ACTIVE_JOBS: &str =
+    "SELECT * FROM jobs WHERE status NOT IN ('imported', 'cancelled') ORDER BY created_at DESC";
+/// Jobs that landed or were cancelled, newest first.
+pub(crate) const SETTLED_JOBS: &str = "SELECT * FROM jobs WHERE status IN ('imported', 'cancelled') ORDER BY created_at DESC LIMIT ?1";
+
 /// The current time as the schema stores it, for use inside SQL.
 macro_rules! now {
     () => {
@@ -474,6 +480,24 @@ pub async fn jobs(db: &Db, status: Option<&str>, limit: i64) -> Result<Vec<Job>>
             .prepare_cached(JOBS)?
             .query_map(params![limit], Job::from_row)?
             .collect(),
+    })
+    .await
+}
+
+/// Every job still in hand, and the newest `settled` of those that landed
+/// or were cancelled: the first are few and each wants attention, the
+/// second grow without end.
+pub async fn job_board(db: &Db, settled: i64) -> Result<(Vec<Job>, Vec<Job>)> {
+    db.run(move |c| {
+        let active = c
+            .prepare_cached(ACTIVE_JOBS)?
+            .query_map([], Job::from_row)?
+            .collect::<Result<_>>()?;
+        let settled = c
+            .prepare_cached(SETTLED_JOBS)?
+            .query_map(params![settled], Job::from_row)?
+            .collect::<Result<_>>()?;
+        Ok((active, settled))
     })
     .await
 }
@@ -1002,6 +1026,8 @@ mod tests {
         let hot = [
             JOBS,
             JOBS_OF_STATUS,
+            ACTIVE_JOBS,
+            SETTLED_JOBS,
             LIVE_GRAB,
             JOB_FILES,
             FILES_OF_JOBS,

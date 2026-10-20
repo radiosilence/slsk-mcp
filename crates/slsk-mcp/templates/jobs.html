@@ -133,14 +133,15 @@
   <h2>In your library</h2>
   <ul class="landed">
   {% for j in settled %}
-    <li id="job-{{ j.id.as_str() }}" class="{{ j.status }}" data-class:busy="${{ self.sig(j) }}">
-      <span class="title">{{ self.landed(j) }}</span>
-      {% if j.status == "cancelled" %}<span class="meta">cancelled</span>{% endif %}
-      {% if j.status == "cancelled" %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/retry')">Retry</button>{% endif %}
-      <button class="quiet" data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="{% if j.status == "cancelled" %}confirm('Remove this album and delete its downloaded files?') && {% endif %}@post('/jobs/{{ j.id.as_str() }}/remove')" title="Forget this entry; the album stays in the library">Clear</button>
+    <li id="job-{{ j.id }}"{% if j.cancelled %} class="cancelled"{% endif %} data-class:busy="${{ self.sig_of(j.id) }}">
+      <span class="title">{{ j.title }}</span>
+      {% if j.cancelled %}<span class="meta">cancelled</span>{% endif %}
+      {% if j.cancelled %}<button data-indicator="{{ self.sig_of(j.id) }}" data-attr:disabled="${{ self.sig_of(j.id) }}" data-on:click="@post('/jobs/{{ j.id }}/retry')">Retry</button>{% endif %}
+      <button class="quiet" data-indicator="{{ self.sig_of(j.id) }}" data-attr:disabled="${{ self.sig_of(j.id) }}" data-on:click="{% if j.cancelled %}confirm('Remove this album and delete its downloaded files?') && {% endif %}@post('/jobs/{{ j.id }}/remove')" title="Forget this entry; the album stays in the library">Clear</button>
     </li>
   {% endfor %}
   </ul>
+  {% if more %}<button class="quiet" data-on:click="$settled += {{ crate::ui::PAGE }}">Show more</button>{% endif %}
 </section>
 {% endif %}
 </div>
