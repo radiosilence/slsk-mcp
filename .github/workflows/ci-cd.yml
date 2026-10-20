@@ -98,7 +98,10 @@ jobs:
           # change), which runs everything. A push: it changes the version and
           # that version is not out yet; comparing with the latest release
           # alone would let a push landing while a release ran release it
-          # again. A manual run: whatever version is not out yet.
+          # again. A manual run: whatever version is not out yet. Only main
+          # releases. Only a 404 means the version is not out: any other
+          # error fails this job, since guessing either way releases twice or
+          # never.
           version=$(version_of < crates/slsk-mcp/Cargo.toml)
           bumped=false
           if [ "$(git show HEAD^1:crates/slsk-mcp/Cargo.toml 2>/dev/null | version_of)" != "$version" ]; then
@@ -110,9 +113,14 @@ jobs:
               release=$bumped
               ;;
             *)
-              if { [ "$EVENT" = workflow_dispatch ] || [ "$bumped" = true ]; } \
-                && ! gh release view "v$version" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
-                release=true
+              if [ "$GITHUB_REF" = refs/heads/main ] && { [ "$EVENT" = workflow_dispatch ] || [ "$bumped" = true ]; }; then
+                if ! answer=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/v$version" 2>&1); then
+                  if ! printf '%s' "$answer" | grep -q 'HTTP 404'; then
+                    echo "::error::could not tell whether v$version is released: $answer"
+                    exit 1
+                  fi
+                  release=true
+                fi
               fi
               ;;
           esac
@@ -151,13 +159,14 @@ jobs:
   # The arm64 runners are few. A release cancels this repository's pull
   # request runs, which are re-run from their page or by the next push, and
   # main's earlier non-release runs, which a newer one supersedes. A job of
-  # its own, so only it holds a token that can cancel runs.
+  # its own, so only it holds a token that can cancel runs. The release
+  # builds wait for it, so they queue on the runners it frees.
   make-room:
     name: Make room for the release
     runs-on: ubuntu-latest
     timeout-minutes: 5
     needs: changes
-    if: github.event_name != 'pull_request' && needs.changes.outputs.release == 'true'
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && needs.changes.outputs.release == 'true'
     permissions:
       actions: write
     steps:
@@ -322,8 +331,8 @@ jobs:
   linux-build:
     name: Build (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
-    needs: changes
-    if: needs.changes.outputs.docker == 'true'
+    needs: [changes, make-room]
+    if: ${{ !cancelled() && needs.changes.outputs.docker == 'true' && (needs.make-room.result == 'success' || needs.make-room.result == 'skipped') }}
     timeout-minutes: 45
     concurrency:
       group: linux-build-${{ matrix.arch }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
@@ -363,6 +372,8 @@ jobs:
         with:
           name: slsk-mcp-linux-${{ matrix.arch }}
           path: slsk-mcp-linux-${{ matrix.arch }}.tar.gz
+          # Long enough to re-run a failed publish weeks later.
+          retention-days: ${{ needs.changes.outputs.release == 'true' && 90 || 7 }}
 
   # The binaries above on `scratch`, for both architectures. Nothing runs in
   # the image's build, so neither architecture needs emulation. A pull request
@@ -415,7 +426,7 @@ jobs:
     name: Checks
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: [changes, test, lint, format, chart, changelog, css, version, linux-build, container]
+    needs: [changes, make-room, test, lint, format, chart, changelog, css, version, linux-build, container]
     if: always()
     steps:
       - env:
