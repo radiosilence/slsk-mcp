@@ -449,7 +449,7 @@ async fn render_page(
         "uploads" => uploads_html(&s.app, PAGE).await,
         "wishlist" => wishlist::page(&s.app).await,
         "library" => library::page(s, &q),
-        "browse" => browse::page(&param("username")),
+        "browse" => browse::page(s, &param("username")),
         "chat" => chat::page(&s.app, &params).await,
         "bans" => admin::bans_page(&s.app).await,
         "settings" => admin::settings_page(&s.app).await,
