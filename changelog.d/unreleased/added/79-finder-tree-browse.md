@@ -1,0 +1,1 @@
+- **Browsing shares works like Finder's list view.** Folders expand in place to any depth and the expanded set is kept in the address, every folder and file has its own download button, and this client's own shares can be browsed the same way.
