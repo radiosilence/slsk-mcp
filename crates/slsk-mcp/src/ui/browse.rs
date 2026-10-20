@@ -329,8 +329,7 @@ pub(super) enum Node {
 /// in the address are drawn with their own rows beneath them.
 #[derive(Template)]
 #[template(path = "browse_nodes.html")]
-struct Nodes<'a> {
-    username: &'a str,
+struct Nodes {
     nodes: Vec<Node>,
     /// The address with another page of them, when there is one.
     more: Option<String>,
@@ -343,7 +342,7 @@ struct Nodes<'a> {
     mine: bool,
 }
 
-impl Nodes<'_> {
+impl Nodes {
     fn size(&self, b: &u64) -> String {
         human(*b)
     }
@@ -392,7 +391,6 @@ fn tree(p: &Place, dirs: &[Directory], at: &[u8], mine: bool, left: &mut usize) 
         .collect();
     nodes.extend(files.take(shown.saturating_sub(folders)));
     Nodes {
-        username: &p.username,
         nodes,
         crowded: shown < paged.min(total),
         more: (shown == paged && total > paged).then(|| p.show_more(at)),
