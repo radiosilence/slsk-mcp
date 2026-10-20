@@ -32,7 +32,7 @@ pub(super) fn routes() -> Router<UiState> {
 pub(super) async fn count_html(app: &App) -> String {
     let n = app.social.unread().await.unwrap_or(0);
     let text = if n > 0 { n.to_string() } else { String::new() };
-    format!(r#"<span id="chat-count" class="count">{text}</span>"#)
+    format!(r#"<span id="chat-count" class="text-ink empty:hidden">{text}</span>"#)
 }
 
 #[derive(Clone, Copy, PartialEq)]

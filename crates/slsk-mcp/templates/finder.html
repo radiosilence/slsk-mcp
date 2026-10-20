@@ -1,7 +1,7 @@
-<form id="finder" action="/search">
-  <input name="q" value="{{ q }}" data-bind:q placeholder="Artist album" autocomplete="off" autofocus>
-  <label class="toggle"><input type="checkbox" name="lossless" value="true"{% if lossless %} checked{% endif %} data-bind:lossless> lossless</label>
-  <button type="submit" data-attr:disabled="$busy">Search</button>
-  <button type="button" class="primary" data-indicator:busy data-attr:disabled="$busy || !$q" data-class:busy="$busy"
+<form id="finder" class="flex flex-wrap gap-2" action="/search">
+  <input class="basis-full" name="q" value="{{ q }}" data-bind:q placeholder="Artist album" autocomplete="off" autofocus>
+  <label class="flex items-center gap-1.5 text-muted"><input type="checkbox" name="lossless" value="true"{% if lossless %} checked{% endif %} data-bind:lossless> lossless</label>
+  <button class="flex-auto" type="submit" data-attr:disabled="$busy">Search</button>
+  <button type="button" class="primary flex-auto" data-indicator:busy data-attr:disabled="$busy || !$q" data-class:busy="$busy"
     data-on:click="@post('/grab', {contentType: 'form', selector: '#finder'})">Grab best</button>
 </form>

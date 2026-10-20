@@ -426,7 +426,7 @@ pub(super) fn page(s: &UiState, filter: &Filter) -> String {
 /// The list the address describes.
 async fn view(State(s): State<UiState>, Query(filter): Query<Filter>) -> Response {
     sse(async_stream::stream! {
-        yield Ok(patch(r#"<div id="library"><p class="note">Reading the library…</p></div>"#));
+        yield Ok(patch(r#"<div id="library"><p class="text-meta text-muted">Reading the library…</p></div>"#));
         yield Ok(patch(&list_html(&s, &filter).await));
         yield Ok(unselected());
         if !filter.album.is_empty() {
@@ -574,7 +574,7 @@ async fn album_html(s: &UiState, filter: &Filter) -> String {
         .render()
         .unwrap_or_default(),
         Err(e) => format!(
-            r#"<div id="lib-album" class="job"><p class="error">{}</p></div>"#,
+            r#"<div id="lib-album" class="card"><p class="text-meta text-bad wrap-anywhere">{}</p></div>"#,
             escape(&format!("{e:#}"))
         ),
     }
@@ -607,7 +607,7 @@ async fn releases(
     Query(AlbumQuery { filter, path }): Query<AlbumQuery>,
 ) -> Response {
     sse(async_stream::stream! {
-        yield Ok(patch(r#"<div id="lib-retag"><p class="note">Asking MusicBrainz for releases that fit these files…</p></div>"#));
+        yield Ok(patch(r#"<div id="lib-retag"><p class="text-meta text-muted">Asking MusicBrainz for releases that fit these files…</p></div>"#));
         let view = match s.app.library.rematch(&path).await {
             Ok(r) => ReleasesView { path: &path, filter: &filter, candidates: r.candidates, review: r.review, error: None },
             Err(e) => ReleasesView { path: &path, filter: &filter, candidates: Vec::new(), review: None, error: Some(format!("{e:#}")) },
@@ -1293,7 +1293,7 @@ async fn preview(State(s): State<UiState>, Path(action): Path<String>, body: Byt
         let mut applicable = 0;
         for (i, row) in rows.iter().take(shown).enumerate() {
             yield Ok(patch(&format!(
-                r#"<p id="pv-progress" class="note">Working out {} of {shown}: {}</p>"#,
+                r#"<p id="pv-progress" class="text-meta text-muted">Working out {} of {shown}: {}</p>"#,
                 i + 1,
                 escape(&title_of(&row.album)),
             )));
@@ -1303,7 +1303,7 @@ async fn preview(State(s): State<UiState>, Path(action): Path<String>, body: Byt
             yield Ok(super::append("#pv-albums", &html));
         }
         yield Ok(patch(&format!(
-            r#"<p id="pv-progress" class="note">{applicable} of {shown} would change.</p>"#
+            r#"<p id="pv-progress" class="text-meta text-muted">{applicable} of {shown} would change.</p>"#
         )));
         let button = if applicable == 0 {
             String::new()
@@ -1316,7 +1316,7 @@ async fn preview(State(s): State<UiState>, Path(action): Path<String>, body: Byt
             )
         };
         yield Ok(patch(&format!(
-            r#"<div id="pv-apply" class="actions" data-init="$_apply = document.querySelectorAll('#lib-apply input[name=path]:checked').length">{button}<button type="button" class="quiet" data-on:click="document.getElementById('lib-preview').replaceChildren()">Cancel</button></div>"#
+            r#"<div id="pv-apply" class="mt-2.5 flex flex-wrap items-center gap-2" data-init="$_apply = document.querySelectorAll('#lib-apply input[name=path]:checked').length">{button}<button type="button" class="quiet" data-on:click="document.getElementById('lib-preview').replaceChildren()">Cancel</button></div>"#
         )));
     })
     .into_response()

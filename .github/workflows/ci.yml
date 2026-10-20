@@ -98,6 +98,20 @@ jobs:
             python3 scripts/changelog.py --lint
           fi
 
+  # The web UI's stylesheet is compiled by Tailwind and committed, since the
+  # server embeds it. A source edited without a rebuild would ship the old CSS.
+  css:
+    name: Stylesheet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+      - uses: jdx/mise-action@9149ea85001c7435d5a66bb127d6a1b6227cb0a5 # v5.0.0
+        with:
+          install_args: just github:tailwindlabs/tailwindcss
+      - run: just css
+      - name: Compiled stylesheet matches its sources
+        run: git diff --exit-code crates/slsk-mcp/assets/app.css
+
   # Runs on pull requests too, so one that moves a single version number
   # fails before it merges.
   version:
@@ -212,7 +226,7 @@ jobs:
 
   create-manifest:
     name: Push image manifest
-    needs: [test, lint, format, chart, changelog, build-image, version]
+    needs: [test, lint, format, chart, changelog, css, build-image, version]
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:

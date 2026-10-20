@@ -1,11 +1,11 @@
-<ul class="rows tight filechanges">
+<ul class="rows tight *:block">
 {% for f in files %}
   <li>
-    <div class="row"><span class="path">{{ f.file }}</span>{% if let Some(to) = f.to %}<span class="path to">→ {{ to }}</span>{% endif %}{% if f.changes.is_empty() %}<span class="meta">tags unchanged</span>{% endif %}</div>
+    <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5"><span class="min-w-0 flex-[1_1_60%] wrap-anywhere">{{ f.file }}</span>{% if let Some(to) = f.to %}<span class="min-w-0 flex-[1_1_60%] wrap-anywhere">→ {{ to }}</span>{% endif %}{% if f.changes.is_empty() %}<span class="text-meta text-muted wrap-anywhere">tags unchanged</span>{% endif %}</div>
     {% if !f.changes.is_empty() %}
-    <table class="changes">
+    <table class="mt-1 mb-2 w-full text-meta">
     {% for c in f.changes %}
-      <tr><th>{{ self.label(c.field) }}</th><td class="from">{% if let Some(o) = c.old %}{{ o }}{% else %}<span class="none">none</span>{% endif %}</td><td class="to">{% if let Some(n) = c.new %}{{ n }}{% else %}<span class="none">removed</span>{% endif %}</td></tr>
+      <tr><th class="w-[1%] py-0.5 pr-2.5 text-left align-top font-normal whitespace-nowrap text-muted">{{ self.label(c.field) }}</th><td class="border-b border-rule px-1.5 py-0.5 wrap-anywhere text-muted line-through decoration-rule">{% if let Some(o) = c.old %}{{ o }}{% else %}<span class="italic no-underline">none</span>{% endif %}</td><td class="border-b border-rule px-1.5 py-0.5 wrap-anywhere">{% if let Some(n) = c.new %}{{ n }}{% else %}<span class="italic no-underline">removed</span>{% endif %}</td></tr>
     {% endfor %}
     </table>
     {% endif %}

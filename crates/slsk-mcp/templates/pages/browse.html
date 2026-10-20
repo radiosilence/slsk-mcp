@@ -1,12 +1,12 @@
-<div class="area">
-  <form id="browse-find" class="finder-form" data-indicator="_browsing" data-on:submit__prevent="@post('/browse', {contentType: 'form', selector: '#browse-find'})">
-    <input name="username" value="{{ username }}" placeholder="Username" autocomplete="off" autocapitalize="off" required>
-    <button type="submit" data-attr:disabled="$_browsing" data-class:busy="$_browsing">Browse</button>
+<div class="grid min-w-0 gap-3 *:min-w-0">
+  <form id="browse-find" class="flex flex-wrap items-center gap-2" data-indicator="_browsing" data-on:submit__prevent="@post('/browse', {contentType: 'form', selector: '#browse-find'})">
+    <input class="basis-full" name="username" value="{{ username }}" placeholder="Username" autocomplete="off" autocapitalize="off" required>
+    <button class="flex-auto" type="submit" data-attr:disabled="$_browsing" data-class:busy="$_browsing">Browse</button>
   </form>
   {% if username.is_empty() %}
-  <div id="browse"><p class="note">Browse someone's shares: type their name, or tap a name in search results, uploads or chat.{% if let Some(me) = me %} Or browse <a class="link" href="{{ crate::ui::browse_href(me, "") }}">your own</a>.{% endif %}</p></div>
+  <div id="browse"><p class="text-meta text-muted">Browse someone's shares: type their name, or tap a name in search results, uploads or chat.{% if let Some(me) = me %} Or browse <a class="wrap-anywhere" href="{{ crate::ui::browse_href(me, "") }}">your own</a>.{% endif %}</p></div>
   {% else %}
   {# The peer takes a while to answer, so their shares follow the page. #}
-  <div id="browse" data-init="@get(location.pathname + location.search)"><p class="note">Asking {{ username }} for their shares…</p></div>
+  <div id="browse" data-init="@get(location.pathname + location.search)"><p class="text-meta text-muted">Asking {{ username }} for their shares…</p></div>
   {% endif %}
 </div>

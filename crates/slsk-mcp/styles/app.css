@@ -1,0 +1,181 @@
+/*
+ * The web UI's stylesheet, compiled by Tailwind into assets/app.css (`just css`). The compiled file is committed: the
+ * crate embeds it, and building slsk-mcp must not need the Tailwind CLI.
+ *
+ * The pages carry their look as utilities in the templates and in the HTML the Rust code writes. What is here is what
+ * those cannot say well: element defaults, classes that Datastar or a script toggles (`busy`), tones keyed on a
+ * status the server writes into the markup, and the few clusters nearly every page repeats.
+ */
+@import "tailwindcss" source(none);
+@source "../templates";
+@source "../src";
+@import "./theme.css";
+
+@theme {
+  --animate-busy: busy 0.7s linear infinite;
+  --animate-fade: fade 4s forwards;
+
+  @keyframes busy {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  /* A confirmation: seen, then gone by itself. */
+  @keyframes fade {
+    0%,
+    80% {
+      opacity: 1;
+    }
+    100% {
+      opacity: 0;
+      visibility: hidden;
+    }
+  }
+}
+
+@layer base {
+  html,
+  body {
+    @apply overflow-x-hidden;
+  }
+
+  body {
+    @apply bg-bg text-control text-ink;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  a {
+    @apply text-brand hover:underline;
+  }
+
+  p {
+    @apply my-[1em];
+  }
+
+  h2,
+  h3 {
+    @apply mt-4 mb-2 flex items-baseline gap-2 text-meta font-bold tracking-[.08em] text-muted uppercase;
+  }
+
+  h3 {
+    @apply mt-[18px] mb-1.5;
+  }
+
+  summary {
+    @apply cursor-pointer;
+  }
+
+  input,
+  select,
+  textarea,
+  button {
+    @apply max-w-full min-w-0 rounded-md border border-rule bg-bg px-2.5 py-[7px] text-ink;
+  }
+
+  input,
+  textarea {
+    @apply text-input;
+  }
+
+  :is(input, select, textarea):focus {
+    @apply outline outline-brand;
+  }
+
+  button {
+    @apply cursor-pointer bg-rule disabled:cursor-progress disabled:opacity-55;
+  }
+
+  /* A <progress>, not a styled span: the CSP forbids inline widths. */
+  progress {
+    @apply mt-2 block h-1 w-full appearance-none overflow-hidden rounded-xs border-0 bg-rule;
+  }
+
+  progress::-webkit-progress-bar {
+    @apply bg-rule;
+  }
+
+  progress::-webkit-progress-value {
+    @apply bg-brand transition-[width] duration-500;
+  }
+
+  progress::-moz-progress-bar {
+    @apply bg-brand;
+  }
+
+  /* Browser defaults that preflight removes, which the pages are drawn with. */
+  input:is([type="checkbox"], [type="radio"]) {
+    margin: revert;
+  }
+
+  ::placeholder {
+    color: revert;
+  }
+}
+
+@layer components {
+  /* A link drawn as a button. */
+  .button {
+    @apply inline-block max-w-full min-w-0 cursor-pointer rounded-md border border-rule bg-rule px-2.5 py-[7px] text-ink hover:no-underline;
+  }
+
+  /* The weights beside the default: prominent is what a form or card is for; quiet is a secondary action. */
+  .primary {
+    @apply border-brand bg-brand font-semibold text-bg;
+  }
+
+  .quiet {
+    @apply bg-transparent text-muted;
+  }
+
+  /* An album, a peer, a conversation: a panel on the page. */
+  .card {
+    @apply mb-2 rounded-lg border border-rule bg-surface px-3 py-2.5;
+  }
+
+  /* Lists of rows, on most pages; a button in a row is compact. */
+  .rows > li {
+    @apply flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1 border-b border-rule py-2;
+  }
+
+  .rows.tight > li {
+    @apply border-b-0 py-1;
+  }
+
+  .rows > li :is(button, .button) {
+    @apply flex-none px-2.5 py-1 text-meta;
+  }
+
+  /* A status as a label. Its tone comes from the label's own class, or from the status the server writes onto the
+   * card or row around it. */
+  .pill {
+    @apply rounded-full bg-rule px-2 py-0.5 text-[11px] tracking-[.05em] text-muted uppercase;
+  }
+
+  .pill:is(.ok, .keep, .online),
+  :is(.connected, .imported, .moved) .pill {
+    @apply bg-brand/20 text-brand;
+  }
+
+  .pill.bad,
+  :is(.displaced, .rejected, .failed, .suspect) .pill {
+    @apply bg-bad/20 text-bad;
+  }
+
+  .pill:is(.warn, .spare, .away),
+  :is(.review, .downloading, .importing, .left) .pill {
+    @apply bg-warn/20 text-warn;
+  }
+
+  /* In flight: Datastar's request indicator sets the class, so it lasts exactly as long as the request. */
+  :is(button, a).busy::after,
+  .card.busy .pill::after {
+    content: "";
+    @apply ms-[.45em] inline-block size-[.8em] animate-busy rounded-full border-2 border-current border-r-transparent align-[-.1em] motion-reduce:animate-none motion-reduce:border-r-current;
+  }
+
+  /* Errors and confirmations float over the page, so one is seen wherever the tap was. */
+  .toast {
+    @apply fixed inset-x-4 bottom-4 z-10 rounded-lg border bg-surface px-3.5 py-3 shadow-[0_6px_24px_rgba(0,0,0,.35)];
+  }
+}

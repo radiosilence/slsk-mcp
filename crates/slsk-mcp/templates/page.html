@@ -14,21 +14,21 @@
 <body data-signals="{{ signals }}"
   data-effect="$_url && $_url != location.pathname + location.search && history.pushState(null, '', $_url)"
   data-on:popstate__window="location.pathname + location.search != $_url && location.reload()">
-<header data-effect="$jobs; $history; @get('/stream?page={{ tab }}')"
+<header class="sticky top-0 z-2 border-b border-rule bg-surface px-4 py-2.5 pt-[max(10px,env(safe-area-inset-top))] max-sm:px-3 max-sm:py-2" data-effect="$jobs; $history; @get('/stream?page={{ tab }}')"
   data-on-interval__duration.20s="@get('/stream?page={{ tab }}')"
   data-on:visibilitychange__document="!document.hidden && @get('/stream?page={{ tab }}')">
   {{ status|safe }}
 </header>
-<nav class="tabs">
+<nav class="sticky top-0 z-1 flex gap-1 overflow-x-auto border-b border-rule bg-surface px-4 pt-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
 {% for p in self.nav() %}
-  <a href="{{ p.href }}"{% if p.active %} class="active" aria-current="page"{% endif %}>{{ p.label }}{% if p.name == "uploads" %} {{ up_count|safe }}{% endif %}{% if p.name == "chat" %} {{ chat_count|safe }}{% endif %}</a>
+  <a href="{{ p.href }}" class="flex-none border-b-2 px-3 py-2 whitespace-nowrap hover:no-underline {% if p.active %}border-brand text-ink{% else %}border-transparent text-muted{% endif %}"{% if p.active %} aria-current="page"{% endif %}>{{ p.label }}{% if p.name == "uploads" %} {{ up_count|safe }}{% endif %}{% if p.name == "chat" %} {{ chat_count|safe }}{% endif %}</a>
 {% endfor %}
 </nav>
-<main>
+<main class="mx-auto grid max-w-[1100px] grid-cols-[minmax(0,1fr)] gap-6 p-4 max-sm:gap-4 max-sm:p-3">
   <form id="act" hidden></form>
   <div id="flash"></div>
   {{ body|safe }}
 </main>
-<footer class="version"><a href="https://github.com/radiosilence/slsk-mcp/releases/tag/v{{ version }}">slsk-mcp {{ version }}</a></footer>
+<footer class="px-4 py-6 text-center text-fine"><a class="text-muted hover:text-ink hover:no-underline" href="https://github.com/radiosilence/slsk-mcp/releases/tag/v{{ version }}">slsk-mcp {{ version }}</a></footer>
 </body>
 </html>

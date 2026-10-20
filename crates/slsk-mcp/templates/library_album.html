@@ -1,18 +1,18 @@
-<div id="lib-album" class="job album-detail">
-  <div class="row">
-    <strong class="title">{{ self.title() }}</strong>
+<div id="lib-album" class="card">
+  <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
+    <strong class="min-w-0 flex-auto wrap-anywhere">{{ self.title() }}</strong>
     {% if row.spare().is_some() %}<span class="pill spare">spare</span>{% endif %}
     {% if row.kept() %}<span class="pill keep">kept</span>{% endif %}
     <button type="button" class="quiet" aria-label="Close" data-on:click="document.getElementById('lib-album').replaceChildren(); $_libalbum = ''; $_url = '{{ self.closed() }}'">Close</button>
   </div>
-  <p class="meta">{% if let Some(a) = row.album.album_artist %}{{ a }}{% endif %}{% if let Some(y) = row.album.year %} · {{ y }}{% endif %} · {% if row.album.format.is_empty() %}?{% else %}{{ row.album.format }}{% endif %} · {{ row.album.tracks }} track{% if row.album.tracks != 1 %}s{% endif %}</p>
-  <p class="meta path">{{ self.rel(row.album.path) }}</p>
-  <p class="meta">{% if let Some((change, to)) = row.refile() %}{% if let Some(to) = to %}The rules file it at <span class="path">{{ self.rel(to) }}</span> ({{ change.label() }}).{% else %}The rules cannot file it: {{ change.label() }}.{% endif %}{% else %}Where the rules file it.{% endif %}{% if let Some(why) = row.spare() %} Spare copy: {{ why }}.{% endif %}</p>
+  <p class="my-0.5 text-meta text-muted wrap-anywhere">{% if let Some(a) = row.album.album_artist %}{{ a }}{% endif %}{% if let Some(y) = row.album.year %} · {{ y }}{% endif %} · {% if row.album.format.is_empty() %}?{% else %}{{ row.album.format }}{% endif %} · {{ row.album.tracks }} track{% if row.album.tracks != 1 %}s{% endif %}</p>
+  <p class="my-0.5 text-fine text-muted wrap-anywhere">{{ self.rel(row.album.path) }}</p>
+  <p class="my-0.5 text-meta text-muted wrap-anywhere">{% if let Some((change, to)) = row.refile() %}{% if let Some(to) = to %}The rules file it at <span class="min-w-0 flex-[1_1_60%] wrap-anywhere">{{ self.rel(to) }}</span> ({{ change.label() }}).{% else %}The rules cannot file it: {{ change.label() }}.{% endif %}{% else %}Where the rules file it.{% endif %}{% if let Some(why) = row.spare() %} Spare copy: {{ why }}.{% endif %}</p>
   <form id="lib-one">
     <input type="hidden" name="path" value="{{ row.album.path }}">
     {% include "library_filter.html" %}
   </form>
-  <div class="actions">
+  <div class="my-2.5 flex flex-wrap gap-2">
     <button type="button" data-indicator="_al_retag" data-attr:disabled="$_al_retag" data-class:busy="$_al_retag" data-on:click="@get('/library/album/releases', {contentType: 'form', selector: '#lib-one'})">Re-tag from MusicBrainz</button>
     <button type="button" data-indicator="_al_edit" data-attr:disabled="$_al_edit" data-class:busy="$_al_edit" data-on:click="@get('/library/album/edit', {contentType: 'form', selector: '#lib-one'})">Edit tags</button>
     {% if row.refile().is_some() %}<button type="button" data-indicator="_al_refile" data-attr:disabled="$_al_refile" data-class:busy="$_al_refile" data-on:click="@post('/library/preview/refile', {contentType: 'form', selector: '#lib-one'})">Re-file</button>{% endif %}
@@ -22,14 +22,14 @@
   </div>
   <div id="lib-retag"></div>
   <div id="lib-edit"></div>
-  <ul class="rows tight files">
+  <ul class="rows tight mt-2">
   {% for t in tracks %}
     <li>
-      <details class="album">
-        <summary><span class="title">{% if let Some(d) = t.disc %}{% if t.disc_total.unwrap_or(1) > 1 %}{{ d }}-{% endif %}{% endif %}{% if let Some(n) = t.track %}{{ n }}. {% endif %}{% if let Some(title) = t.title %}{{ title }}{% else %}{{ self.file(t) }}{% endif %}</span><span class="meta">{% if let Some(a) = t.artist %}{{ a }} · {% endif %}{{ self.length(t) }}</span></summary>
-        <p class="meta path">{{ self.file(t) }}</p>
-        <table class="tags">
-        {% for (name, value) in self.tags(t) %}<tr><th>{{ name }}</th><td>{{ value }}</td></tr>{% endfor %}
+      <details class="min-w-0 flex-1">
+        <summary class="flex cursor-pointer list-none flex-wrap gap-x-2.5 gap-y-0.5 [&::-webkit-details-marker]:hidden"><span class="min-w-0 flex-[1_1_60%] wrap-anywhere">{% if let Some(d) = t.disc %}{% if t.disc_total.unwrap_or(1) > 1 %}{{ d }}-{% endif %}{% endif %}{% if let Some(n) = t.track %}{{ n }}. {% endif %}{% if let Some(title) = t.title %}{{ title }}{% else %}{{ self.file(t) }}{% endif %}</span><span class="text-meta text-muted wrap-anywhere">{% if let Some(a) = t.artist %}{{ a }} · {% endif %}{{ self.length(t) }}</span></summary>
+        <p class="text-fine text-muted wrap-anywhere">{{ self.file(t) }}</p>
+        <table class="mt-1 mb-2 w-full text-meta">
+        {% for (name, value) in self.tags(t) %}<tr><th class="w-[1%] py-0.5 pr-2.5 text-left align-top font-normal whitespace-nowrap text-muted">{{ name }}</th><td class="border-b border-rule px-1.5 py-0.5 wrap-anywhere">{{ value }}</td></tr>{% endfor %}
         </table>
       </details>
     </li>

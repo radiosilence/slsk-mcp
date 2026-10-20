@@ -1,35 +1,35 @@
 <div id="library">
-{% if let Some(e) = error %}<p class="error">{{ e }}</p>{% else %}
-{% if total == 0 %}<p class="note">No albums match.</p>{% else %}
+{% if let Some(e) = error %}<p class="text-meta text-bad wrap-anywhere">{{ e }}</p>{% else %}
+{% if total == 0 %}<p class="text-meta text-muted">No albums match.</p>{% else %}
 <form id="lib-sel" data-signals="{_sel: 0, _spares: 0}"
   data-on:change="evt.target.name == 'all' ? el.querySelectorAll('input[name=path]').forEach(c => c.checked = evt.target.checked) : (evt.target.checked || (el.querySelector('input[name=all]').checked = false)); $_sel = el.querySelector('input[name=all]').checked ? {{ total }} : el.querySelectorAll('input[name=path]:checked').length; $_spares = el.querySelector('input[name=all]').checked ? {{ spares }} : el.querySelectorAll('input[name=path][data-spare]:checked').length">
   {% include "library_filter.html" %}
-  <div class="lib-head">
-    <label class="toggle"><input type="checkbox" name="all" value="1"> Select all {{ total }}</label>
-    <span class="note">{{ total }} album{% if total != 1 %}s{% endif %}, newest import first</span>
+  <div class="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-rule pt-1 pb-2">
+    <label class="flex items-center gap-1.5 text-muted"><input type="checkbox" name="all" value="1"> Select all {{ total }}</label>
+    <span class="text-meta text-muted">{{ total }} album{% if total != 1 %}s{% endif %}, newest import first</span>
   </div>
-  <ul class="rows albums">
+  <ul class="rows">
   {% for r in rows %}
-    <li>
-      <input type="checkbox" name="path" value="{{ r.album.path }}" aria-label="Select {{ self.rel(r.album.path) }}"{% if r.spare().is_some() %} data-spare{% endif %}>
-      <div class="album">
-        <div class="row">
-          {% let (href, get) = self.opening(r.album.path) %}<a class="title link" href="{{ href }}" data-on:click="evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || (evt.preventDefault(), @get('{{ get }}'), document.getElementById('lib-album').scrollIntoView({block: 'start'}))">{% if let Some(a) = r.album.album %}{{ a }}{% else %}{{ self.rel(r.album.path) }}{% endif %}</a>
+    <li class="flex-nowrap items-start">
+      <input class="mx-0.5 mt-0.5 size-[18px] flex-none" type="checkbox" name="path" value="{{ r.album.path }}" aria-label="Select {{ self.rel(r.album.path) }}"{% if r.spare().is_some() %} data-spare{% endif %}>
+      <div class="min-w-0 flex-1">
+        <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
+          {% let (href, get) = self.opening(r.album.path) %}<a class="min-w-0 font-semibold wrap-anywhere" href="{{ href }}" data-on:click="evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || (evt.preventDefault(), @get('{{ get }}'), document.getElementById('lib-album').scrollIntoView({block: 'start'}))">{% if let Some(a) = r.album.album %}{{ a }}{% else %}{{ self.rel(r.album.path) }}{% endif %}</a>
           {% if r.spare().is_some() %}<span class="pill spare">spare</span>{% endif %}
           {% if r.kept() %}<span class="pill keep">kept</span>{% endif %}
           {% if let Some((_, to)) = r.refile() %}{% if to.is_some() %}<span class="pill">would move</span>{% else %}<span class="pill">can't file</span>{% endif %}{% endif %}
         </div>
-        <div class="meta">{% if let Some(a) = r.album.album_artist %}{{ a }}{% endif %}{% if let Some(y) = r.album.year %} · {{ y }}{% endif %} · {% if r.album.format.is_empty() %}?{% else %}{{ r.album.format }}{% endif %} · {{ r.album.tracks }} track{% if r.album.tracks != 1 %}s{% endif %}</div>
-        <div class="meta path">{{ self.rel(r.album.path) }}</div>
-        {% if let Some(why) = r.spare() %}<div class="meta">Spare: {{ why }}</div>{% endif %}
-        {% if let Some((change, to)) = r.refile() %}<div class="meta">{% if let Some(to) = to %}Rules file it at {{ self.rel(to) }} ({{ change.label() }}){% else %}The rules cannot file it here: {{ change.label() }}{% endif %}</div>{% endif %}
+        <div class="text-meta text-muted wrap-anywhere">{% if let Some(a) = r.album.album_artist %}{{ a }}{% endif %}{% if let Some(y) = r.album.year %} · {{ y }}{% endif %} · {% if r.album.format.is_empty() %}?{% else %}{{ r.album.format }}{% endif %} · {{ r.album.tracks }} track{% if r.album.tracks != 1 %}s{% endif %}</div>
+        <div class="text-fine text-muted wrap-anywhere">{{ self.rel(r.album.path) }}</div>
+        {% if let Some(why) = r.spare() %}<div class="text-meta text-muted wrap-anywhere">Spare: {{ why }}</div>{% endif %}
+        {% if let Some((change, to)) = r.refile() %}<div class="text-meta text-muted wrap-anywhere">{% if let Some(to) = to %}Rules file it at {{ self.rel(to) }} ({{ change.label() }}){% else %}The rules cannot file it here: {{ change.label() }}{% endif %}</div>{% endif %}
       </div>
-      <span class="meta when">{{ self.imported(r.album) }}</span>
+      <span class="flex-none text-meta whitespace-nowrap text-muted">{{ self.imported(r.album) }}</span>
     </li>
   {% endfor %}
   </ul>
-  <div class="lib-bar" data-show="$_sel > 0">
-    <span class="count" data-text="$_sel + ' selected'"></span>
+  <div class="sticky bottom-0 z-1 mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-rule bg-surface px-3 py-2.5 pb-[max(10px,env(safe-area-inset-bottom))] shadow-[0_-6px_24px_rgba(0,0,0,.3)]" data-show="$_sel > 0">
+    <span class="mr-auto text-ink" data-text="$_sel + ' selected'"></span>
     <button type="button" data-indicator="_pv_refile" data-attr:disabled="$_pv_refile" data-class:busy="$_pv_refile" data-on:click="@post('/library/preview/refile', {contentType: 'form', selector: '#lib-sel'}); document.getElementById('lib-preview').scrollIntoView({block: 'start'})">Re-file</button>
     <button type="button" data-indicator="_pv_credit" data-attr:disabled="$_pv_credit" data-class:busy="$_pv_credit" data-on:click="@post('/library/preview/credit', {contentType: 'form', selector: '#lib-sel'}); document.getElementById('lib-preview').scrollIntoView({block: 'start'})">Credit artists</button>
     <button type="button" data-indicator="_pv_enrich" data-attr:disabled="$_pv_enrich" data-class:busy="$_pv_enrich" data-on:click="@post('/library/preview/enrich', {contentType: 'form', selector: '#lib-sel'}); document.getElementById('lib-preview').scrollIntoView({block: 'start'})">Enrich</button>

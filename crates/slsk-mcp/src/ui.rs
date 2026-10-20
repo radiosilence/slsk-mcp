@@ -250,14 +250,14 @@ fn signals(json: &str) -> Event {
 /// A confirmation that fades by itself; tapping it dismisses it sooner.
 fn flash_ok(msg: &str) -> String {
     format!(
-        r#"<div id="flash" class="flash ok" role="status" data-on:click="el.className = ''">{}</div>"#,
+        r#"<div id="flash" class="toast border-brand text-brand animate-fade motion-reduce:[animation-timing-function:steps(1,end)]" role="status" data-on:click="el.className = ''">{}</div>"#,
         askama_escape(msg)
     )
 }
 
 fn flash_err(msg: &str) -> String {
     format!(
-        r#"<div id="flash" class="flash error" role="alert" data-on:click="el.className = ''">{}</div>"#,
+        r#"<div id="flash" class="toast border-bad text-meta text-bad" role="alert" data-on:click="el.className = ''">{}</div>"#,
         askama_escape(msg)
     )
 }
@@ -925,7 +925,7 @@ fn up_count_html(app: &App) -> String {
             .count()
     });
     let text = if n > 0 { n.to_string() } else { String::new() };
-    format!(r#"<span id="up-count" class="count">{text}</span>"#)
+    format!(r#"<span id="up-count" class="text-ink empty:hidden">{text}</span>"#)
 }
 
 /// Who is taking what from us, grouped by person: those receiving now
@@ -1164,7 +1164,10 @@ impl ResultsView {
 /// sends nothing to the network.
 async fn search(State(s): State<UiState>, Query(view): Query<SearchQuery>) -> Response {
     let Some(engine) = s.app.session.engine().cloned() else {
-        return one(r#"<div id="results" class="note">Sign in to Soulseek first.</div>"#.into());
+        return one(
+            r#"<div id="results" class="text-meta text-muted">Sign in to Soulseek first.</div>"#
+                .into(),
+        );
     };
     let query = view.q.trim().to_string();
     if query.is_empty() {
@@ -1193,7 +1196,7 @@ async fn search(State(s): State<UiState>, Query(view): Query<SearchQuery>) -> Re
             let crate::graphql::Heard { responses, done, error } = heard.borrow_and_update().clone();
             if let Some(e) = error {
                 yield Ok(patch(&format!(
-                    r#"<div id="results" class="note">{}</div>"#,
+                    r#"<div id="results" class="text-meta text-muted">{}</div>"#,
                     askama_escape(&e)
                 )));
                 break;
@@ -1226,7 +1229,7 @@ async fn grab(State(s): State<UiState>, axum::Form(form): axum::Form<SearchForm>
     match graphql::grab(&s.app, form.q.trim(), LISTEN, filter, false).await {
         Ok(_) => done(&s.app, PAGE).await,
         Err(e) => one(format!(
-            r#"<div id="flash" class="flash error">{}</div>"#,
+            r#"<div id="flash" class="toast border-bad text-meta text-bad">{}</div>"#,
             askama_escape(&e.message)
         )),
     }
@@ -1264,7 +1267,7 @@ async fn download(
     {
         Ok(job) => one(flash_ok(&format!("Downloading {}", job.title))),
         Err(e) => one(format!(
-            r#"<div id="flash" class="flash error">{}</div>"#,
+            r#"<div id="flash" class="toast border-bad text-meta text-bad">{}</div>"#,
             askama_escape(&format!("{e:#}"))
         )),
     }
@@ -1424,7 +1427,7 @@ async fn account(State(s): State<UiState>, axum::Form(f): axum::Form<AccountForm
             one(status_html(&s.app).await)
         }
         Err(e) => one(format!(
-            r#"<div id="flash" class="flash error">{}</div>"#,
+            r#"<div id="flash" class="toast border-bad text-meta text-bad">{}</div>"#,
             askama_escape(&format!("{e:#}"))
         )),
     }

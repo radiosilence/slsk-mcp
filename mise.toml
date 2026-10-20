@@ -4,3 +4,5 @@ rust = { version = "1", components = "rustfmt,clippy" }
 just = "latest"
 lefthook = "latest"
 node = "24"
+# Compiles crates/slsk-mcp/styles/ into the committed assets/app.css (`just css`).
+"github:tailwindlabs/tailwindcss" = "4.3.3"

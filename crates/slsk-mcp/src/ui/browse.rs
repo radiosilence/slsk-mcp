@@ -865,7 +865,7 @@ mod tests {
         let mut left = 3 + 2 * page;
         let html = tree(&p, &dirs, b"", false, &mut left);
         assert_eq!(left, 0);
-        assert_eq!(html.matches("class=\"node dir\"").count(), 3 + 2 * page);
+        assert_eq!(html.matches("aria-expanded=").count(), 3 + 2 * page);
         assert!(html.contains("Collapse other folders"));
     }
 
@@ -900,12 +900,12 @@ mod tests {
             .collect();
         let p = place("@@m", &[]);
         let html = tree(&p, &dirs, b"@@m", false, &mut { MOST_ROWS });
-        assert_eq!(html.matches("class=\"node dir\"").count(), page);
+        assert_eq!(html.matches("aria-expanded=").count(), page);
         assert!(html.contains("Show more"));
         let mut p = p;
         p.more.insert(b"@@m".to_vec(), 1);
         let html = tree(&p, &dirs, b"@@m", false, &mut { MOST_ROWS });
-        assert_eq!(html.matches("class=\"node dir\"").count(), page + 3);
+        assert_eq!(html.matches("aria-expanded=").count(), page + 3);
         assert!(!html.contains("Show more"));
     }
 

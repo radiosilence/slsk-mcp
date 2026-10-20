@@ -1,6 +1,6 @@
-<ul id="thread-lines" class="lines">
-{% match note %}{% when Some with (n) %}<li class="note">{{ n }}</li>{% when None %}{% endmatch %}
+<ul id="thread-lines" class="mt-2.5 grid gap-1.5 *:wrap-anywhere">
+{% match note %}{% when Some with (n) %}<li class="text-meta text-muted">{{ n }}</li>{% when None %}{% endmatch %}
 {% for l in lines %}
-  <li{% if l.ours %} class="ours"{% endif %}><span class="who">{{ l.who }}</span> <span class="body">{{ l.body }}</span> <span class="meta">{{ self.at(l) }}</span></li>
+  <li><span class="font-semibold {% if l.ours %}text-muted{% else %}text-brand{% endif %}">{{ l.who }}</span> <span class="whitespace-pre-wrap">{{ l.body }}</span> <span class="text-meta text-muted wrap-anywhere">{{ self.at(l) }}</span></li>
 {% endfor %}
 </ul>

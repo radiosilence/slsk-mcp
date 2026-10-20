@@ -22,4 +22,5 @@ A Soulseek client that runs as a service: it shares a music library, fetches alb
 just check   # Cargo.lock clean, fmt --check, clippy -D warnings, tests, the Pulumi package's typecheck and tests
 just fast    # what the pre-push hook runs
 just fmt
+just css     # recompile assets/app.css after changing classes in templates or src, or styles/; CI fails if it is stale
 ```

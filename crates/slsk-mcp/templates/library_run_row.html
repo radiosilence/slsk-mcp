@@ -1,6 +1,6 @@
-<li class="settled {% if r.ok %}moved{% else %}left{% endif %}">
-  <span class="path">{{ self.rel(r.path) }}</span>
-  <span class="pill">{% if r.ok %}done{% else %}failed{% endif %}</span>
-  <span class="meta">{{ r.detail }}</span>
-  {% for p in r.problems %}<span class="error">{{ p }}</span>{% endfor %}
+<li class="{% if r.ok %}moved{% else %}left{% endif %}">
+  <span class="min-w-0 flex-[1_1_60%] wrap-anywhere">{{ self.rel(r.path) }}</span>
+  <span class="pill flex-none">{% if r.ok %}done{% else %}failed{% endif %}</span>
+  <span class="text-meta text-muted wrap-anywhere">{{ r.detail }}</span>
+  {% for p in r.problems %}<span class="text-meta text-bad wrap-anywhere">{{ p }}</span>{% endfor %}
 </li>
