@@ -51,6 +51,20 @@ async fn bans_html(app: &App) -> String {
     .unwrap_or_default()
 }
 
+#[derive(Template)]
+#[template(path = "pages/bans.html")]
+struct BansPage {
+    list: String,
+}
+
+pub(super) async fn bans_page(app: &App) -> String {
+    BansPage {
+        list: bans_html(app).await,
+    }
+    .render()
+    .unwrap_or_default()
+}
+
 async fn bans(State(s): State<UiState>) -> Response {
     one(bans_html(&s.app).await)
 }
@@ -136,6 +150,20 @@ async fn settings_html(app: &App) -> String {
         },
     };
     view.render().unwrap_or_default()
+}
+
+#[derive(Template)]
+#[template(path = "pages/settings.html")]
+struct SettingsPage {
+    settings: String,
+}
+
+pub(super) async fn settings_page(app: &App) -> String {
+    SettingsPage {
+        settings: settings_html(app).await,
+    }
+    .render()
+    .unwrap_or_default()
 }
 
 async fn settings(State(s): State<UiState>) -> Response {
@@ -266,9 +294,32 @@ struct Days {
     days: Option<i64>,
 }
 
+#[derive(Template)]
+#[template(path = "pages/triage.html")]
+struct TriagePage {
+    triage: String,
+}
+
+pub(super) async fn triage_page(app: &App, q: &[(String, String)]) -> String {
+    let days = super::field(q, "days").and_then(|d| d.parse().ok());
+    TriagePage {
+        triage: triage_html(app, days).await,
+    }
+    .render()
+    .unwrap_or_default()
+}
+
 async fn triage(State(s): State<UiState>, Query(q): Query<Days>) -> Response {
     let days = q.days.unwrap_or(7).clamp(1, 365);
-    let view = match crate::graphql::triage(&s.app, days, usize::MAX).await {
+    many(vec![
+        patch(&triage_html(&s.app, Some(days)).await),
+        super::place(&super::place_url("/triage", &[("days", &days.to_string())])),
+    ])
+}
+
+async fn triage_html(app: &App, days: Option<i64>) -> String {
+    let days = days.unwrap_or(7).clamp(1, 365);
+    let view = match crate::graphql::triage(app, days, usize::MAX).await {
         Ok(causes) => TriageView {
             days,
             causes,
@@ -280,11 +331,5 @@ async fn triage(State(s): State<UiState>, Query(q): Query<Days>) -> Response {
             error: Some(e.message),
         },
     };
-    many(vec![
-        patch(&view.render().unwrap_or_default()),
-        super::place(
-            "triage",
-            &super::place_url("/triage", &[("days", &days.to_string())]),
-        ),
-    ])
+    view.render().unwrap_or_default()
 }

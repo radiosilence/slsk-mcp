@@ -72,6 +72,20 @@ async fn html(app: &App) -> String {
     view.render().unwrap_or_default()
 }
 
+#[derive(Template)]
+#[template(path = "pages/wishlist.html")]
+struct Page {
+    list: String,
+}
+
+pub(super) async fn page(app: &App) -> String {
+    Page {
+        list: html(app).await,
+    }
+    .render()
+    .unwrap_or_default()
+}
+
 async fn view(State(s): State<UiState>) -> Response {
     one(html(&s.app).await)
 }

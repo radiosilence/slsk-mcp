@@ -247,8 +247,11 @@ the other, and nothing else to either.
 The UI reaches everything GraphQL and MCP do, so a phone is a full client:
 albums and uploads, then the wishlist, the library (one list of albums to
 re-file, credit, enrich, re-import or bin), browsing a user's shares, rooms and private messages, bans,
-settings and triage. Each action calls the same Rust the GraphQL resolvers
-call. Buttons show busy while their request is in flight and then the
+settings and triage. Each has its own address, and the server draws that
+page whole around a shared layout, so a link or a reload costs one request
+and nothing for the other pages; Datastar then patches parts of it in place,
+and a live stream updates only what that page shows. Each action calls the
+same Rust the GraphQL resolvers call. Buttons show busy while their request is in flight and then the
 server's answer, never a guess. Anything that changes the library or reaches
 other people (binning, re-filing, enriching, banning, sending a message) asks
 first; library changes show exactly what they will do before they do it.

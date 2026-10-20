@@ -228,6 +228,22 @@ fn note(username: &str, error: String) -> String {
     .unwrap_or_default()
 }
 
+#[derive(Template)]
+#[template(path = "pages/browse.html")]
+struct Page<'a> {
+    username: &'a str,
+}
+
+/// The page around a user's shares, which it fetches once drawn: the peer
+/// takes its time to answer.
+pub(super) fn page(username: &str) -> String {
+    Page {
+        username: username.trim(),
+    }
+    .render()
+    .unwrap_or_default()
+}
+
 #[derive(serde::Deserialize)]
 struct Fresh {
     #[serde(default)]
@@ -255,7 +271,7 @@ fn browse_at(s: UiState, form: &[(String, String)], fresh: bool) -> Response {
     let Ok(at) = URL_SAFE_NO_PAD.decode(&key) else {
         return failed(&anyhow::anyhow!("not a folder key"));
     };
-    let here = super::place("browse", &super::browse_href(&username, &key));
+    let here = super::place(&super::browse_href(&username, &key));
     let Some(engine) = s.app.session.engine().cloned() else {
         return failed(&anyhow::anyhow!("Sign in to Soulseek first."));
     };

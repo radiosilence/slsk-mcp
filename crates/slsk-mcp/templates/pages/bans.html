@@ -1,0 +1,7 @@
+<div class="area">
+  <form id="ban-form" class="finder-form" data-indicator="_banning" data-on:submit__prevent="confirm('Ban this user? They will get nothing more from you.') && @post('/bans/add', {contentType: 'form', selector: '#ban-form'})">
+    <input name="username" data-bind:_banuser placeholder="Username" autocomplete="off" autocapitalize="off" required>
+    <button type="submit" data-attr:disabled="$_banning" data-class:busy="$_banning">Ban</button>
+  </form>
+  {{ list|safe }}
+</div>

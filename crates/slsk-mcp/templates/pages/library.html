@@ -1,0 +1,24 @@
+<div class="area">
+  <form id="lib-find" class="finder-form" data-indicator="_finding" data-on:submit__prevent="@post('/library/find', {contentType: 'form', selector: '#lib-find'})">
+    <input name="q" value="{{ q }}" data-bind:_libq placeholder="burial, artist:burial, year:1990..1999" autocomplete="off">
+    <select name="since" data-bind:_libsince data-on:change="$_libsince != 'date' && @post('/library/find', {contentType: 'form', selector: '#lib-find'})">
+      <option value="">Imported any time</option>
+      <option value="today">Imported today</option>
+      <option value="week">Imported this week</option>
+      <option value="month">Imported this month</option>
+      <option value="date">Imported since…</option>
+    </select>
+    <input type="date" name="from" data-bind:_libfrom data-show="$_libsince == 'date'" data-on:change="@post('/library/find', {contentType: 'form', selector: '#lib-find'})">
+    <select name="show" data-bind:_libshow data-on:change="@post('/library/find', {contentType: 'form', selector: '#lib-find'})">
+      <option value="">Every album</option>
+      <option value="dups">Held more than once</option>
+      <option value="moves">Not where the rules file them</option>
+    </select>
+    <button type="submit" data-attr:disabled="$_finding" data-class:busy="$_finding">Find</button>
+  </form>
+  {{ run|safe }}
+  <div id="lib-album"></div>
+  <div id="lib-preview"></div>
+  {# Reading the library takes a moment, so the list follows the page. #}
+  <div id="library" data-init="@get(location.pathname + location.search)"><p class="note">Reading the library…</p></div>
+</div>
