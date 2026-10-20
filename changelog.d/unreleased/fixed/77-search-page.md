@@ -1,0 +1,1 @@
+- **Web UI search has its own address and reuses cached searches.** Search moved to `/search?q=…`, where reloading, coming back or showing more joins a search of the same words from the last ten minutes instead of spending another; results are drawn a hundred folders at a time, and links to a user's shares open in a new tab.

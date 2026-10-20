@@ -245,7 +245,7 @@ the other, and nothing else to either.
 ## The web UI
 
 The UI reaches everything GraphQL and MCP do, so a phone is a full client:
-albums and uploads, then the wishlist, the library (one list of albums to
+search, albums and uploads, then the wishlist, the library (one list of albums to
 re-file, credit, enrich, re-import or bin), browsing a user's shares, rooms and private messages, bans,
 settings and triage. Each has its own address, and the server draws that
 page whole around a shared layout, so a link or a reload costs one request
@@ -255,6 +255,15 @@ same Rust the GraphQL resolvers call. Buttons show busy while their request is i
 server's answer, never a guess. Anything that changes the library or reaches
 other people (binning, re-filing, enriching, banning, sending a message) asks
 first; library changes show exactly what they will do before they do it.
+
+Search has its own address, holding the query, the lossless filter and how
+many results are shown (`/search?q=…&shown=200`), and shares
+the server's ten-minute reuse of identical searches with MCP: reloading it,
+coming back to it or showing more joins the search already running or
+answered rather than spending another from the hourly budget. Results are
+regrouped at most once a second and drawn a hundred folders at a time, since
+a generic query draws thousands; links to a user's shares open in a new tab
+so the results stay put.
 
 The Library tab is a manager for the library sift files. It lists every
 album, newest import first, narrowed by a search (beets' query terms), an
@@ -289,6 +298,19 @@ each.
 
 The GraphQL mutations behind these take `preview: true` for the same answer
 without the change, so an assistant can show it first.
+
+Browsing shares, a peer's or this client's own (the library as peers see it,
+read from the share index rather than over the network), works like Finder's
+list view. The folder in the address is the open one; the folders in it
+expand in place, and the expanded set is in the address too, relative to the
+open folder (`open=Album&open=Album/CD1`), so a reload, a shared link or back
+and forward draw the same tree. Moving into a folder keeps what was expanded
+below it, and moving up leaves the way back down expanded. Every folder and
+file in the tree has its own download button; a folder downloads as one job
+per album. Each folder draws 500 rows at a time, with "Show more" adding a
+page that the address also records. A peer sends its whole share list at
+once, so it is fetched once, kept for ten minutes, and every step through it
+after that is local.
 
 ## Security notes
 

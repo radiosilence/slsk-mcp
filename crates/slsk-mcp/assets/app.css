@@ -155,8 +155,21 @@ a.link { text-decoration: none; overflow-wrap: anywhere; }
 .about > summary { cursor: pointer; color: var(--dim); }
 .desc { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--dim); }
 .crumbs { display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: baseline; margin: 8px 0; }
-.files .pick { display: flex; align-items: center; gap: 8px; flex: 1 1 60%; min-width: 0; }
-.files .pick input { flex: none; width: 18px; height: 18px; }
+.files .pick, .tree .pick { display: flex; align-items: center; gap: 8px; flex: 1 1 60%; min-width: 0; }
+.files .pick input, .tree .pick input { flex: none; width: 18px; height: 18px; }
+/* The browse tree, as Finder's list view: each folder's rows nest under it,
+   with a disclosure marker in the gutter that files leave blank. */
+.tree { list-style: none; margin: 0; padding: 0; }
+.tree .tree { padding-left: 18px; }
+.tree .node { border-bottom: 1px solid var(--line); min-width: 0; }
+.tree .tree .node:last-child { border-bottom: 0; }
+.tree .line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 6px 0; min-width: 0; }
+.tree .disclosure { flex: none; width: 1em; color: var(--dim); text-align: center; }
+.tree .node.file > .line { padding-left: calc(1em + 10px); }
+.tree .name { flex: 1 1 50%; min-width: 0; overflow-wrap: anywhere; }
+.tree .line .meta { flex: 0 1 auto; }
+.tree .line button { flex: none; padding: 3px 10px; font-size: 13px; }
+.tree .more { padding: 6px 0; }
 .badge { background: var(--accent); color: #0b1a12; border-radius: 99px; padding: 0 7px; font-size: 12px; font-weight: 600; }
 .unread .link { font-weight: 600; }
 .clip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
