@@ -102,9 +102,11 @@ jobs:
             fi
           fi
           # Whether this run releases, the one answer every release job reads.
-          # A pull request: a release PR (branch `release-*`, or a version
-          # change), which runs everything. A push: the version differs from
-          # the one at the diff's base and is not out yet; comparing with the latest release
+          # A pull request: a release PR (branch `release-v*`, or a version
+          # change), which runs everything. A push: it changes the version
+          # (against its parent, not the diff's base: a push landing while a
+          # release run is still going would otherwise release it again) and
+          # that version is not out yet; comparing with the latest release
           # alone would let a push landing while a release ran release it
           # again. A manual run: whatever version is not out yet. Only main
           # releases. Only a 404 means the version is not out: any other
@@ -112,12 +114,12 @@ jobs:
           # never.
           version=$(version_of < crates/slsk-mcp/Cargo.toml)
           bumped=false
-          if [ "$(git show "${base:-HEAD^1}:crates/slsk-mcp/Cargo.toml" 2>/dev/null | version_of)" != "$version" ]; then
+          if [ "$(git show HEAD^1:crates/slsk-mcp/Cargo.toml 2>/dev/null | version_of)" != "$version" ]; then
             bumped=true
           fi
           case "$EVENT" in
             pull_request)
-              case "$HEAD_REF" in release-*) bumped=true ;; esac
+              case "$HEAD_REF" in release-v*) bumped=true ;; esac
               release=$bumped
               ;;
             *)
