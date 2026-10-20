@@ -14,7 +14,7 @@
 <body data-signals="{{ signals }}"
   data-effect="$_url && $_url != location.pathname + location.search && history.pushState(null, '', $_url)"
   data-on:popstate__window="location.pathname + location.search != $_url && location.reload()">
-<header data-effect="$settled; $history; @get('/stream?page={{ tab }}')"
+<header data-effect="$jobs; $history; @get('/stream?page={{ tab }}')"
   data-on-interval__duration.20s="@get('/stream?page={{ tab }}')"
   data-on:visibilitychange__document="!document.hidden && @get('/stream?page={{ tab }}')">
   {{ status|safe }}
