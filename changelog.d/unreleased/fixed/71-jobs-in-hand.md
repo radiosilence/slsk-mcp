@@ -1,0 +1,1 @@
+- **Jobs that need attention are capped too.** Failed, review and suspect jobs share the 500-row limit and "Show more" with settled ones, an index keeps listing them from reading every job ever made, and job buttons stay busy until their card is redrawn.
