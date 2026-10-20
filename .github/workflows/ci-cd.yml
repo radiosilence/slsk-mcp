@@ -70,7 +70,7 @@ jobs:
         # against its base. A push's is against the last commit on main whose
         # run passed, so a push whose run was cancelled or failed still
         # reaches CD with the next one. A manual run, a release, a push with
-        # no passing run in its last hundred commits, or a diff that cannot
+        # no passing run in its last two hundred commits, or a diff that cannot
         # be worked out, runs everything.
         #
         # Allowlists, so the question is "did any source of this domain
@@ -90,7 +90,7 @@ jobs:
             base=
             if passed=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci-cd.yml --branch main --event push \
                   --status success --limit 1 --json headSha --jq '.[0].headSha // empty') \
-              && [ -n "$passed" ] && git fetch -q --deepen=100 origin main \
+              && [ -n "$passed" ] && git fetch -q --deepen=200 origin main \
               && git merge-base --is-ancestor "$passed" HEAD; then
               base=$passed
               # A re-run of a commit that passed diffs against its parent.
@@ -538,7 +538,7 @@ jobs:
     name: Publish chart
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: [changes, container-release]
+    needs: [container-release]
     if: ${{ !cancelled() && needs.container-release.result == 'success' }}
     permissions:
       contents: read
@@ -556,15 +556,19 @@ jobs:
           cache-dependency-path: deploy/pulumi/package-lock.json
       - run: npm ci
       # A version cannot be published twice, so a retried release skips one
-      # already out and goes on to the GitHub release.
+      # already out and goes on to the GitHub release. Only a 404 means it is
+      # not out; any other error fails rather than guessing.
       - env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ needs.changes.outputs.version }}
         run: |
-          name=$(node -p "require('./package.json').name")
-          if [ -n "$(npm view "$name@$VERSION" version 2>/dev/null)" ]; then
-            echo "$name@$VERSION is already published"
+          spec="$(node -p 'const p = require("./package.json"); p.name + "@" + p.version')"
+          if out=$(npm view "$spec" version 2>&1); then
+            echo "$spec is already published"
             exit 0
+          fi
+          if [[ "$out" != *E404* ]]; then
+            echo "::error::cannot tell whether $spec is published: $out"
+            exit 1
           fi
           npm publish
 
