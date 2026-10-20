@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use askama::Template;
 use axum::Router;
+use axum::body::Bytes;
 use axum::extract::{Path, Query, Request, State};
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::middleware::Next;
@@ -427,7 +428,7 @@ async fn render_page(
         "q": if tab == "albums" { q.as_str() } else { "" },
         "lossless": lossless,
         "busy": false,
-        "settled": PAGE,
+        "jobs": PAGE,
         "history": PAGE,
         "_url": url,
         "_libq": lib("q"),
@@ -519,9 +520,12 @@ async fn status_html(app: &App) -> String {
 }
 
 /// Rows shown at first, and added by each "Show more", in the lists that
-/// grow without end: settled jobs and upload history. Rendering every row
-/// made the page heavy enough to crash phone browsers.
+/// grow without end: each kind of job, and upload history. A phone browser
+/// cannot hold many thousands of them.
 const PAGE: i64 = 500;
+
+/// The most rows a page may ask for, whatever its signals say.
+const MOST: i64 = 100_000;
 
 /// A job that landed or was cancelled, as its one line.
 struct Settled {
@@ -569,7 +573,7 @@ struct JobsView {
     underway: Vec<Job>,
     /// Imported, or cancelled by someone: the newest few hundred.
     settled: Vec<Settled>,
-    /// Older settled jobs exist beyond those shown.
+    /// Older jobs exist beyond those shown.
     more: bool,
     /// Queue places by job id, for those waiting in a peer's queue.
     places: HashMap<String, u32>,
@@ -756,14 +760,17 @@ impl JobsView {
     }
 }
 
-/// Every job in hand, and the newest `settled` of those done with.
-async fn jobs_html(app: &App, settled: i64) -> String {
-    let (active, mut done) = crate::db::job_board(&app.db, settled + 1)
+/// The newest `shown` jobs in hand, and the newest `shown` of those done
+/// with.
+async fn jobs_html(app: &App, shown: i64) -> String {
+    let shown = shown.clamp(1, MOST);
+    let (mut active, mut done) = crate::db::job_board(&app.db, shown + 1)
         .await
         .inspect_err(|e| tracing::warn!(error = %e, "could not list jobs"))
         .unwrap_or_default();
-    let more = done.len() as i64 > settled;
-    done.truncate(settled.max(0) as usize);
+    let more = active.len() as i64 > shown || done.len() as i64 > shown;
+    active.truncate(shown as usize);
+    done.truncate(shown as usize);
     let jobs = graphql::job_views(app, active).await.unwrap_or_else(|e| {
         tracing::warn!(error = ?e, "could not show jobs");
         Vec::new()
@@ -915,12 +922,13 @@ async fn uploads_html(app: &App, shown: i64) -> String {
         .and_hms_opt(0, 0, 0)
         .map(|t| t.and_utc())
         .unwrap_or(now);
+    let shown = shown.clamp(1, MOST);
     let mut history = crate::db::recent_uploads(&app.db, shown + 1)
         .await
         .inspect_err(|e| tracing::warn!(error = %e, "could not read upload history"))
         .unwrap_or_default();
     let more = history.len() as i64 > shown;
-    history.truncate(shown.max(0) as usize);
+    history.truncate(shown as usize);
     let today = crate::db::upload_totals(&app.db, midnight)
         .await
         .unwrap_or_default();
@@ -947,14 +955,14 @@ async fn uploads_html(app: &App, shown: i64) -> String {
 #[derive(serde::Deserialize)]
 #[serde(default)]
 struct Shown {
-    settled: i64,
+    jobs: i64,
     history: i64,
 }
 
 impl Default for Shown {
     fn default() -> Self {
         Self {
-            settled: PAGE,
+            jobs: PAGE,
             history: PAGE,
         }
     }
@@ -989,7 +997,7 @@ async fn stream(
             let parts = [
                 status_html(&app).await,
                 match page.as_str() {
-                    "albums" => jobs_html(&app, shown.settled).await,
+                    "albums" => jobs_html(&app, shown.jobs).await,
                     "uploads" => uploads_html(&app, shown.history).await,
                     _ => String::new(),
                 },
@@ -1133,7 +1141,7 @@ async fn grab(State(s): State<UiState>, axum::Form(form): axum::Form<SearchForm>
         ..Default::default()
     });
     match graphql::grab(&s.app, form.q.trim(), 10, filter, false).await {
-        Ok(_) => done(),
+        Ok(_) => done(&s.app, PAGE).await,
         Err(e) => one(format!(
             r#"<div id="flash" class="flash error">{}</div>"#,
             askama_escape(&e.message)
@@ -1182,6 +1190,7 @@ async fn download(
 async fn job_action(
     State(s): State<UiState>,
     Path((id, action)): Path<(Uuid, String)>,
+    body: Bytes,
 ) -> Response {
     let jobs = &s.app.jobs;
     let result = match action.as_str() {
@@ -1206,28 +1215,42 @@ async fn job_action(
         _ => return StatusCode::NOT_FOUND.into_response(),
     };
     match result {
-        Ok(()) => done(),
+        Ok(()) => done(&s.app, jobs_shown(&body)).await,
         Err(e) => failed(&e),
     }
 }
 
-/// Any earlier error cleared: the change on the card, which the stream
-/// draws within a second, is the confirmation. The stream alone draws the
-/// job list, so it keeps the rows the page asked to see.
-fn done() -> Response {
-    one("<div id=\"flash\"></div>".into())
+/// The job list as it now stands, as many rows as the page shows, and any
+/// earlier error cleared: the change on the card is the confirmation, and
+/// the button stays busy until it is drawn.
+async fn done(app: &App, shown: i64) -> Response {
+    one(format!(
+        "{}\n<div id=\"flash\"></div>",
+        jobs_html(app, shown).await
+    ))
+}
+
+/// How many jobs the page shows, from the signals a JSON request carries.
+fn jobs_shown(body: &[u8]) -> i64 {
+    serde_json::from_slice::<Shown>(body)
+        .unwrap_or_default()
+        .jobs
 }
 
 fn failed(e: &anyhow::Error) -> Response {
     one(flash_err(&format!("{e:#}")))
 }
 
-async fn resolve(State(s): State<UiState>, Path((id, release)): Path<(Uuid, String)>) -> Response {
+async fn resolve(
+    State(s): State<UiState>,
+    Path((id, release)): Path<(Uuid, String)>,
+    body: Bytes,
+) -> Response {
     if Uuid::parse_str(&release).is_err() {
         return StatusCode::BAD_REQUEST.into_response();
     }
     match s.app.jobs.import_soon(id, false, Some(release)).await {
-        Ok(()) => done(),
+        Ok(()) => done(&s.app, jobs_shown(&body)).await,
         Err(e) => failed(&e),
     }
 }
@@ -1257,7 +1280,7 @@ async fn resolve_pasted(
         .import_soon(id, false, Some(release.to_string()))
         .await
     {
-        Ok(()) => done(),
+        Ok(()) => done(&s.app, PAGE).await,
         Err(e) => failed(&e),
     }
 }
@@ -1291,7 +1314,7 @@ async fn cancel_upload(
     if let (Some(e), Some(name)) = (s.app.session.engine(), f.filename) {
         e.cancel_upload(&f.username, &RawStr::from(name));
     }
-    one("<div id=\"flash\"></div>".into())
+    one(uploads_html(&s.app, PAGE).await)
 }
 
 async fn ban(State(s): State<UiState>, axum::Form(f): axum::Form<UserFileForm>) -> Response {
