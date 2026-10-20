@@ -495,10 +495,24 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           tags=(-t "$IMAGE:sha-${GITHUB_SHA::7}" -t "$IMAGE:main")
-          current=$(docker buildx imagetools inspect "$IMAGE:main" --format '{{json .Image}}' 2>/dev/null \
-            | jq -r '[.. | objects | .config.Labels?["org.opencontainers.image.revision"]? // empty][0] // empty' || true)
+          # Only a missing tag or a missing label means "move it"; any other
+          # registry error fails, since guessing could move `main` backwards.
+          current=
+          if image=$(docker buildx imagetools inspect "$IMAGE:main" --format '{{json .Image}}' 2>&1); then
+            current=$(jq -r '[.. | objects | .config.Labels?["org.opencontainers.image.revision"]? // empty][0] // empty' <<< "$image")
+          elif [[ "$image" != *"not found"* ]]; then
+            echo "::error::cannot inspect $IMAGE:main: $image"
+            exit 1
+          fi
+          # A labelled commit that no longer exists (404) is moved past.
           if [ -n "$current" ] && [ "$current" != "$GITHUB_SHA" ]; then
-            status=$(gh api "repos/$GITHUB_REPOSITORY/compare/$current...$GITHUB_SHA" --jq .status)
+            if ! status=$(gh api "repos/$GITHUB_REPOSITORY/compare/$current...$GITHUB_SHA" --jq .status 2>&1); then
+              if [[ "$status" != *"HTTP 404"* ]]; then
+                echo "::error::cannot compare $current with $GITHUB_SHA: $status"
+                exit 1
+              fi
+              status=ahead
+            fi
             if [ "$status" != ahead ]; then
               echo "::notice::main holds $current, which this commit does not descend from ($status); leaving it"
               tags=(-t "$IMAGE:sha-${GITHUB_SHA::7}")
