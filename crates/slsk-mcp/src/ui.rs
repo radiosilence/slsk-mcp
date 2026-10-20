@@ -68,7 +68,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/", get(StatusCode::NOT_FOUND))
         .route("/uploads", get(StatusCode::NOT_FOUND))
         .route("/stream", get(stream))
-        .route("/search", post(search))
+        .route("/search", get(search))
         .route("/grab", post(grab))
         .route("/download", post(download))
         .route("/jobs/{id}/{action}", post(job_action))
@@ -297,6 +297,7 @@ fn percent(done: u64, total: u64) -> u64 {
 
 /// The pages, in the order the nav lists them: name, address and label.
 const PAGES: &[(&str, &str, &str)] = &[
+    ("search", "/search", "Search"),
     ("albums", "/", "Albums"),
     ("uploads", "/uploads", "Uploads"),
     ("wishlist", "/wishlist", "Wishlist"),
@@ -359,6 +360,13 @@ struct AlbumsPage {
     jobs: String,
 }
 
+#[derive(Template)]
+#[template(path = "pages/search.html")]
+struct SearchPage {
+    q: String,
+    lossless: bool,
+}
+
 /// A browser asking for a page's address gets the whole page. The same
 /// address fetched by the page itself (`Datastar-Request`) is a fragment of
 /// it, and goes on to its own handler.
@@ -367,6 +375,13 @@ async fn pages(State(s): State<UiState>, request: Request, next: Next) -> Respon
         && !request.headers().contains_key("datastar-request")
         && let Some(&(tab, ..)) = PAGES.iter().find(|p| request.uri().path() == p.1)
     {
+        // Searches were once drawn on Albums, at `/?q=…`.
+        if tab == "albums"
+            && let Some(query) = request.uri().query()
+            && url::form_urlencoded::parse(query.as_bytes()).any(|(k, v)| k == "q" && !v.is_empty())
+        {
+            return axum::response::Redirect::to(&format!("/search?{query}")).into_response();
+        }
         return match render_page(&s, tab, request.uri()).await {
             Ok(html) => html.into_response(),
             Err(e) => e.into_response(),
@@ -425,7 +440,7 @@ async fn render_page(
         }
     };
     let signals = serde_json::json!({
-        "q": if tab == "albums" { q.as_str() } else { "" },
+        "q": if tab == "albums" || tab == "search" { q.as_str() } else { "" },
         "lossless": lossless,
         "busy": false,
         "jobs": PAGE,
@@ -446,6 +461,7 @@ async fn render_page(
         }
         .render()
         .unwrap_or_default(),
+        "search" => SearchPage { q, lossless }.render().unwrap_or_default(),
         "uploads" => uploads_html(&s.app, PAGE).await,
         "wishlist" => wishlist::page(&s.app).await,
         "library" => library::page(s, &q),
@@ -1028,11 +1044,37 @@ struct SearchForm {
     lossless: bool,
 }
 
+/// A search's view, all of it in the address.
+#[derive(serde::Deserialize)]
+struct SearchQuery {
+    #[serde(default)]
+    q: String,
+    /// Any value means lossless, as the page reads it.
+    #[serde(default)]
+    lossless: String,
+    /// How many folders are drawn.
+    #[serde(default)]
+    shown: String,
+}
+
+/// Folders shown at first, and added by each "Show more", in search results.
+/// A generic query is answered with thousands, and a page drawing them all
+/// every second stops responding.
+const FOUND: usize = 100;
+
+/// How long the web UI's searches listen for peers: as long as a grab, so
+/// either stands in for the other.
+const LISTEN: u64 = 10;
+
 #[derive(Template)]
 #[template(path = "results.html")]
 struct ResultsView {
     query: String,
     folders: Vec<Folder>,
+    /// Folders found beyond those shown.
+    more: usize,
+    /// The address that shows another page of them.
+    next: String,
     searching: bool,
     responses: usize,
 }
@@ -1076,51 +1118,52 @@ impl ResultsView {
     }
 }
 
-/// Stream results as peers answer, regrouped every second or so.
-async fn search(State(s): State<UiState>, axum::Form(form): axum::Form<SearchForm>) -> Response {
+/// The results for the address's query, regrouped as peers answer, at most
+/// once a second, the first `shown` of them. The search is shared with any of the same words from the
+/// last ten minutes, so reopening or reloading the page, or showing more,
+/// sends nothing to the network.
+async fn search(State(s): State<UiState>, Query(view): Query<SearchQuery>) -> Response {
     let Some(engine) = s.app.session.engine().cloned() else {
         return one(r#"<div id="results" class="note">Sign in to Soulseek first.</div>"#.into());
     };
-    let query = form.q.trim().to_string();
+    let query = view.q.trim().to_string();
+    if query.is_empty() {
+        return one(r#"<div id="results"></div>"#.into());
+    }
     let filter = Filter {
-        lossless: form.lossless,
+        lossless: !view.lossless.is_empty(),
         ..Default::default()
     };
-    let here = place(&place_url(
-        "/",
+    let lossless = if filter.lossless { "true" } else { "" };
+    let found = view
+        .shown
+        .parse()
+        .map_or(FOUND, |n: usize| n.clamp(1, MOST as usize));
+    let next = place_url(
+        "/search",
         &[
             ("q", &query),
-            ("lossless", if form.lossless { "1" } else { "" }),
+            ("lossless", lossless),
+            ("shown", &(found + FOUND).to_string()),
         ],
-    ));
-    let rx = match engine.pace().await {
-        Ok(()) => engine.search(&query),
-        Err(e) => Err(e),
-    };
+    );
     let events = async_stream::stream! {
-        yield Ok(here);
-        let mut rx = match rx {
-            Ok(rx) => rx,
-            Err(e) => {
+        let mut heard = graphql::listen(&engine, &query, LISTEN);
+        loop {
+            let crate::graphql::Heard { responses, done, error } = heard.borrow_and_update().clone();
+            if let Some(e) = error {
                 yield Ok(patch(&format!(
                     r#"<div id="results" class="note">{}</div>"#,
-                    askama_escape(&e.to_string())
+                    askama_escape(&e)
                 )));
-                return;
+                break;
             }
-        };
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(12);
-        let mut responses = Vec::new();
-        loop {
-            let tick = tokio::time::Instant::now() + Duration::from_millis(1000);
-            while let Ok(Some(r)) = tokio::time::timeout_at(tick.min(deadline), rx.recv()).await {
-                responses.push(r);
-            }
-            let done = tokio::time::Instant::now() >= deadline;
-            let folders = crate::folders::relevant(crate::folders::group(&responses, &filter), &query);
-            let view = ResultsView { query: query.clone(), folders, searching: !done, responses: responses.len() };
+            let mut folders = crate::folders::relevant(crate::folders::group(&responses, &filter), &query);
+            let more = folders.len().saturating_sub(found);
+            folders.truncate(found);
+            let view = ResultsView { query: query.clone(), folders, more, next: next.clone(), searching: !done, responses: responses.len() };
             yield Ok(patch(&view.render().unwrap_or_default()));
-            if done {
+            if done || heard.changed().await.is_err() {
                 break;
             }
         }
@@ -1140,7 +1183,7 @@ async fn grab(State(s): State<UiState>, axum::Form(form): axum::Form<SearchForm>
         lossless: true,
         ..Default::default()
     });
-    match graphql::grab(&s.app, form.q.trim(), 10, filter, false).await {
+    match graphql::grab(&s.app, form.q.trim(), LISTEN, filter, false).await {
         Ok(_) => done(&s.app, PAGE).await,
         Err(e) => one(format!(
             r#"<div id="flash" class="flash error">{}</div>"#,
