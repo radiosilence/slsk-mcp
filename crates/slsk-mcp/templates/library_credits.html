@@ -1,7 +1,7 @@
 <ul class="rows tight">
 {% for c in credits %}
   <li class="grid gap-0.5">
-    <span class="min-w-0 flex-[1_1_60%] wrap-anywhere">{{ c.file }}</span>
+    <span class="min-w-0 wrap-anywhere">{{ c.file }}</span>
     <span class="text-meta text-muted wrap-anywhere">{% if let Some(r) = c.release %}from release {{ r }}{% else %}split by artists the library holds{% endif %}</span>
     {% if !c.artists.is_empty() %}<span class="text-meta wrap-anywhere">ARTISTS <strong>{{ c.artists.join(" / ") }}</strong>{% if !c.artist_ids.is_empty() %} <span class="text-[11px] text-muted">{{ c.artist_ids.join(", ") }}</span>{% endif %}</span>{% endif %}
     {% if !c.album_artists.is_empty() %}<span class="text-meta wrap-anywhere">ALBUMARTISTS <strong>{{ c.album_artists.join(" / ") }}</strong>{% if !c.album_artist_ids.is_empty() %} <span class="text-[11px] text-muted">{{ c.album_artist_ids.join(", ") }}</span>{% endif %}</span>{% endif %}

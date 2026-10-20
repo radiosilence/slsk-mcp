@@ -16,7 +16,7 @@ fast:
 # Compile the web UI's stylesheet from crates/slsk-mcp/styles/. The output is committed because
 # the server embeds it; CI fails a build where it is stale.
 css:
-    tailwindcss --input crates/slsk-mcp/styles/app.css --output crates/slsk-mcp/assets/app.css
+    tailwindcss --optimize --input crates/slsk-mcp/styles/app.css --output crates/slsk-mcp/assets/app.css
 
 # Format
 fmt:
