@@ -1,0 +1,1 @@
+- **Every address is its own page.** The server draws each page whole around a shared layout instead of one page holding every tab, so a link or a reload costs one request and draws nothing for the other pages; the nav is plain links and the live stream updates only what the open page shows.
