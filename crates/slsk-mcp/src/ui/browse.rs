@@ -16,9 +16,10 @@ use std::time::{Duration, Instant};
 use askama::Template;
 use axum::Router;
 use axum::body::Bytes;
-use axum::extract::{Query, State};
+use axum::extract::State;
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
+use axum_extra::extract::{Form, Query};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use slsk_engine::slsk_proto::RawStr;
@@ -170,24 +171,18 @@ fn under(path: &[u8], dir: &[u8]) -> bool {
 }
 
 impl Place {
-    fn from_form(form: &[(String, String)]) -> anyhow::Result<Self> {
-        let username = super::field(form, "username")
-            .map(|u| u.trim().to_string())
-            .filter(|u| !u.is_empty())
-            .ok_or_else(|| anyhow::anyhow!("Say whose shares to browse."))?;
+    fn from_query(q: &BrowseQuery) -> anyhow::Result<Self> {
+        let username = q.username.trim().to_string();
+        if username.is_empty() {
+            anyhow::bail!("Say whose shares to browse.");
+        }
         let at = URL_SAFE_NO_PAD
-            .decode(super::field(form, "key").unwrap_or_default())
+            .decode(&q.key)
             .map_err(|_| anyhow::anyhow!("not a folder key"))?;
-        let paths = |name: &str| {
-            form.iter()
-                .filter(move |(k, _)| k == name)
-                .map(|(_, v)| join(&at, v))
-                .collect::<Vec<_>>()
-        };
-        let open = paths("open").into_iter().collect();
+        let open = q.open.iter().map(|r| join(&at, r)).collect();
         let mut more = BTreeMap::new();
-        for p in paths("more") {
-            *more.entry(p).or_default() += 1;
+        for r in &q.more {
+            *more.entry(join(&at, r)).or_default() += 1;
         }
         Ok(Self {
             username,
@@ -472,27 +467,37 @@ pub(super) fn page(s: &UiState, username: &str) -> String {
     .unwrap_or_default()
 }
 
-#[derive(serde::Deserialize)]
-struct Fresh {
+/// A tree's place as the address names it: see [`Place`]. `fresh` asks the
+/// peer for their shares again rather than using the cached listing.
+#[derive(serde::Deserialize, Default)]
+struct BrowseQuery {
     #[serde(default)]
-    fresh: bool,
+    username: String,
+    #[serde(default)]
+    key: String,
+    #[serde(default)]
+    open: Vec<String>,
+    #[serde(default)]
+    more: Vec<String>,
+    #[serde(default)]
+    fresh: Option<String>,
 }
 
-/// Open a user's shares at a folder (the top when none is given). The
-/// username arrives in a form field, never in the URL or an expression.
-async fn browse(State(s): State<UiState>, Query(q): Query<Fresh>, body: Bytes) -> Response {
-    browse_at(s, &fields(&body), q.fresh)
+/// Open a user's shares at their top. The username arrives in a form
+/// field, never in the URL or an expression.
+async fn browse(State(s): State<UiState>, Form(q): Form<BrowseQuery>) -> Response {
+    browse_at(s, &q)
 }
 
-/// The same, from the address: `/browse?username=…&key=…`, which `browse`
-/// reports as the place it drew.
-async fn browse_get(State(s): State<UiState>, Query(q): Query<Vec<(String, String)>>) -> Response {
-    let fresh = super::field(&q, "fresh").is_some();
-    browse_at(s, &q, fresh)
+/// The same, from the address: `/browse?username=…&key=…&open=…`, which
+/// `browse` reports as the place it drew.
+async fn browse_get(State(s): State<UiState>, Query(q): Query<BrowseQuery>) -> Response {
+    browse_at(s, &q)
 }
 
-fn browse_at(s: UiState, form: &[(String, String)], fresh: bool) -> Response {
-    let p = match Place::from_form(form) {
+fn browse_at(s: UiState, q: &BrowseQuery) -> Response {
+    let fresh = q.fresh.is_some();
+    let p = match Place::from_query(q) {
         Ok(p) => p,
         Err(e) => return failed(&e),
     };
@@ -781,10 +786,12 @@ mod tests {
         }
     }
 
-    fn query(href: &str) -> Vec<(String, String)> {
-        url::form_urlencoded::parse(href.split_once('?').unwrap().1.as_bytes())
-            .into_owned()
-            .collect()
+    fn query(href: &str) -> BrowseQuery {
+        Query::try_from_uri(&href.parse().unwrap()).unwrap().0
+    }
+
+    fn reread(href: &str) -> Place {
+        Place::from_query(&query(href)).unwrap()
     }
 
     #[test]
@@ -792,22 +799,17 @@ mod tests {
         let mut p = place("@@music\\A", &["@@music\\A\\One", "@@music\\A\\One\\CD1"]);
         p.more.insert(b"@@music\\A".to_vec(), 2);
         let q = query(&p.href());
-        let opens: Vec<&str> = q
-            .iter()
-            .filter(|(k, _)| k == "open")
-            .map(|(_, v)| v.as_str())
-            .collect();
-        assert_eq!(opens, vec!["One", "One/CD1"]);
-        assert_eq!(q.iter().filter(|(k, v)| k == "more" && v == ".").count(), 2);
-        assert_eq!(Place::from_form(&q).unwrap(), p);
+        assert_eq!(q.open, vec!["One", "One/CD1"]);
+        assert_eq!(q.more, vec![".", "."]);
+        assert_eq!(Place::from_query(&q).unwrap(), p);
     }
 
     #[test]
     fn collapsing_a_folder_forgets_what_was_open_under_it() {
         let p = place("", &["A", "A\\B", "AB"]);
-        let q = Place::from_form(&query(&p.toggle(b"A"))).unwrap();
+        let q = reread(&p.toggle(b"A"));
         assert_eq!(q, place("", &["AB"]));
-        let q = Place::from_form(&query(&p.toggle(b"C"))).unwrap();
+        let q = reread(&p.toggle(b"C"));
         assert!(q.open.contains(b"C".as_slice()));
     }
 
@@ -815,13 +817,13 @@ mod tests {
     fn moving_keeps_what_is_open_below_and_the_way_back_down() {
         let p = place("A\\B", &["A\\B\\C", "A\\B\\C\\D"]);
         // Down: what was open below the new folder stays open.
-        let down = Place::from_form(&query(&p.go(b"A\\B\\C"))).unwrap();
+        let down = reread(&p.go(b"A\\B\\C"));
         assert_eq!(down, place("A\\B\\C", &["A\\B\\C\\D"]));
         // Up: the folder left, and everything open in it, stays expanded.
-        let up = Place::from_form(&query(&p.go(b""))).unwrap();
+        let up = reread(&p.go(b""));
         assert_eq!(up, place("", &["A", "A\\B", "A\\B\\C", "A\\B\\C\\D"]));
         // Sideways: nothing open elsewhere follows.
-        let side = Place::from_form(&query(&p.go(b"X"))).unwrap();
+        let side = reread(&p.go(b"X"));
         assert_eq!(side, place("X", &[]));
     }
 
