@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.0
+
+### Fixed
+
+- **The web UI no longer crashes phone browsers.** Settled albums and upload history show the newest 500 rows with a "Show more" button, the live stream sends only the open tab's lists and only when they change, and a page opened on another tab no longer draws the album list first.
+
 ## 0.3.3
 
 ### Fixed
