@@ -50,7 +50,6 @@ jobs:
     permissions:
       actions: read
       contents: read
-      pull-requests: read
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
       web: ${{ steps.filter.outputs.web }}
@@ -69,34 +68,43 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         # The domains a change touches, from its diff. A pull request's is
         # against its base. A push's is against the last commit on main whose
-        # run passed, so a push whose run was cancelled by the next one still
-        # reaches CD with it; without one in recent history, the commit
-        # before. A manual run, a release, or a diff that cannot be worked
-        # out, runs everything.
+        # run passed, so a push whose run was cancelled or failed still
+        # reaches CD with the next one. A manual run, a release, a push with
+        # no passing run in its last hundred commits, or a diff that cannot
+        # be worked out, runs everything.
         #
         # Allowlists, so the question is "did any source of this domain
         # change?" rather than "was everything recognisably irrelevant?". The
         # cost is that a new top-level directory of code is invisible here
         # until it is added below. Markdown is documentation wherever it sits.
         #
-        # Steps run under `bash -e`, where grep finding nothing is a failing
-        # command rather than an answer, so every question is asked in a
-        # condition.
+        # Steps run under `bash -eo pipefail`, where grep finding nothing is
+        # a failing command rather than an answer, so every question is asked
+        # in a condition, and no grep exits early (`-q`) on a pipe whose
+        # writer would then fail.
         run: |
           rust=true web=true package=true docker=true release=false
           version_of() { sed -n 's/^version = "\(.*\)"/\1/p' | head -1; }
           base=HEAD^1
           if [ "$EVENT" = "push" ]; then
-            passed=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci-cd.yml --branch main --event push \
-              --status success --limit 1 --json headSha --jq '.[0].headSha' 2>/dev/null || true)
-            if [ -n "$passed" ] && [ "$passed" != "$(git rev-parse HEAD)" ] && git fetch -q --deepen=100 origin main && git merge-base --is-ancestor "$passed" HEAD; then
+            base=
+            if passed=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci-cd.yml --branch main --event push \
+                  --status success --limit 1 --json headSha --jq '.[0].headSha // empty') \
+              && [ -n "$passed" ] && git fetch -q --deepen=100 origin main \
+              && git merge-base --is-ancestor "$passed" HEAD; then
               base=$passed
+              # A re-run of a commit that passed diffs against its parent.
+              if [ "$passed" = "$(git rev-parse HEAD)" ]; then
+                base=HEAD^1
+              fi
+            else
+              echo "no passing run to diff against -- running everything"
             fi
           fi
           # Whether this run releases, the one answer every release job reads.
           # A pull request: a release PR (branch `release-*`, or a version
-          # change), which runs everything. A push: it changes the version and
-          # that version is not out yet; comparing with the latest release
+          # change), which runs everything. A push: the version differs from
+          # the one at the diff's base and is not out yet; comparing with the latest release
           # alone would let a push landing while a release ran release it
           # again. A manual run: whatever version is not out yet. Only main
           # releases. Only a 404 means the version is not out: any other
@@ -104,7 +112,7 @@ jobs:
           # never.
           version=$(version_of < crates/slsk-mcp/Cargo.toml)
           bumped=false
-          if [ "$(git show HEAD^1:crates/slsk-mcp/Cargo.toml 2>/dev/null | version_of)" != "$version" ]; then
+          if [ "$(git show "${base:-HEAD^1}:crates/slsk-mcp/Cargo.toml" 2>/dev/null | version_of)" != "$version" ]; then
             bumped=true
           fi
           case "$EVENT" in
@@ -115,7 +123,7 @@ jobs:
             *)
               if [ "$GITHUB_REF" = refs/heads/main ] && { [ "$EVENT" = workflow_dispatch ] || [ "$bumped" = true ]; }; then
                 if ! answer=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/v$version" 2>&1); then
-                  if ! printf '%s' "$answer" | grep -q 'HTTP 404'; then
+                  if [[ "$answer" != *"HTTP 404"* ]]; then
                     echo "::error::could not tell whether v$version is released: $answer"
                     exit 1
                   fi
@@ -124,8 +132,8 @@ jobs:
               fi
               ;;
           esac
-          touches() { printf '%s\n' "$files" | grep -E "$1" | grep -qvE '\.md$'; }
-          if [ "$EVENT" != "workflow_dispatch" ] && [ "$release" = false ] && files=$(git diff --name-only "$base" HEAD); then
+          touches() { printf '%s\n' "$files" | grep -E "$1" | grep -vE '\.md$' > /dev/null; }
+          if [ "$EVENT" != "workflow_dispatch" ] && [ "$release" = false ] && [ -n "$base" ] && files=$(git diff --name-only "$base" HEAD); then
             echo "changes since $(git rev-parse --short "$base"):"
             printf '%s\n' "$files" | sed 's/^/  /'
             # Anything cargo compiles or that decides how. The server embeds
@@ -158,7 +166,11 @@ jobs:
 
   # The arm64 runners are few. A release cancels this repository's pull
   # request runs, which are re-run from their page or by the next push, and
-  # main's earlier non-release runs, which a newer one supersedes. A job of
+  # main's runs older than it that release nothing, which it supersedes (its
+  # diff covers their commits). A later push is left alone, as is any run
+  # whose commit is titled `release: ` or changes the version, matching the
+  # workflow's concurrency rule. Best effort: a failure here is reported and
+  # holds nothing up. A job of
   # its own, so only it holds a token that can cancel runs. The release
   # builds wait for it, so they queue on the runners it frees.
   make-room:
@@ -169,17 +181,27 @@ jobs:
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && needs.changes.outputs.release == 'true'
     permissions:
       actions: write
+      contents: read
     steps:
-      - env:
+      - continue-on-error: true
+        env:
           GH_TOKEN: ${{ github.token }}
           SELF: ${{ github.run_id }}
         run: |
           for status in requested queued pending waiting in_progress; do
             gh run list --repo "$GITHUB_REPOSITORY" --workflow ci-cd.yml --status "$status" --limit 100 \
-              --json databaseId,event,headBranch,displayTitle \
-              --jq '.[] | select(.event == "pull_request" or (.event == "push" and .headBranch == "main" and (.displayTitle | startswith("release: ") | not))) | .databaseId'
-          done | sort -u | while read -r id; do
-            [ "$id" = "$SELF" ] && continue
+              --json databaseId,event,headBranch,headSha,displayTitle \
+              --jq ".[] | select(.databaseId < $SELF)
+                | select(.event == \"pull_request\" or (.event == \"push\" and .headBranch == \"main\" and (.displayTitle | startswith(\"release: \") | not)))
+                | \"\\(.databaseId) \\(.event) \\(.headSha)\"" \
+              || echo "::warning::could not list $status runs" >&2
+          done | sort -u | while read -r id event sha; do
+            if [ "$event" = push ]; then
+              files=$(gh api "repos/$GITHUB_REPOSITORY/commits/$sha" --jq '.files[].filename') || continue
+              if grep -qx 'crates/slsk-mcp/Cargo.toml' <<< "$files"; then
+                continue
+              fi
+            fi
             echo "cancelling run $id"
             gh run cancel "$id" --repo "$GITHUB_REPOSITORY" || true
           done
@@ -419,6 +441,8 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
           tags: ${{ env.IMAGE }}:${{ github.sha }}
+          # Read by `container-main`, so `main` only moves forward.
+          labels: org.opencontainers.image.revision=${{ github.sha }}
 
   # The one status a ruleset should require. Skipped jobs are domains the
   # change does not touch and pass; anything failed or cancelled fails it.
@@ -446,7 +470,9 @@ jobs:
   # default, which would skip it whenever any job upstream was skipped.
 
   # `main` and `sha-<short>` follow the last commit whose checks passed and
-  # changed the image. Retagging needs no rebuild.
+  # changed the image. Retagging needs no rebuild. A release run and a later
+  # push can finish in either order, so `main` moves only to a commit that
+  # descends from the one it holds.
   container-main:
     name: Container image (main)
     runs-on: ubuntu-latest
@@ -463,7 +489,22 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - run: docker buildx imagetools create -t "$IMAGE:main" -t "$IMAGE:sha-${GITHUB_SHA::7}" "$IMAGE:$GITHUB_SHA"
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tags=(-t "$IMAGE:sha-${GITHUB_SHA::7}")
+          current=$(docker buildx imagetools inspect "$IMAGE:main" \
+            --format '{{ index (index .Image "linux/amd64").Config.Labels "org.opencontainers.image.revision" }}' 2>/dev/null || true)
+          status=ahead
+          if [ -n "$current" ] && [ "$current" != "<no value>" ]; then
+            status=$(gh api "repos/$GITHUB_REPOSITORY/compare/$current...$GITHUB_SHA" --jq .status)
+          fi
+          if [ "$status" = ahead ] || [ "$status" = identical ]; then
+            tags+=(-t "$IMAGE:main")
+          else
+            echo "::notice::main holds ${current::7}, which this commit does not descend from ($status); leaving it"
+          fi
+          docker buildx imagetools create "${tags[@]}" "$IMAGE:$GITHUB_SHA"
 
   # The image this commit already pushed, tagged with the release's version,
   # its major.minor and major, and `latest`. Retagging needs no rebuild, and
@@ -497,7 +538,7 @@ jobs:
     name: Publish chart
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: [container-release]
+    needs: [changes, container-release]
     if: ${{ !cancelled() && needs.container-release.result == 'success' }}
     permissions:
       contents: read
@@ -514,9 +555,18 @@ jobs:
           cache: npm
           cache-dependency-path: deploy/pulumi/package-lock.json
       - run: npm ci
-      - run: npm publish
-        env:
+      # A version cannot be published twice, so a retried release skips one
+      # already out and goes on to the GitHub release.
+      - env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.changes.outputs.version }}
+        run: |
+          name=$(node -p "require('./package.json').name")
+          if [ -n "$(npm view "$name@$VERSION" version 2>/dev/null)" ]; then
+            echo "$name@$VERSION is already published"
+            exit 0
+          fi
+          npm publish
 
   # Last, so a release never names an image or a package that does not exist.
   # Creates the tag through the API, on the commit that was built; the notes
