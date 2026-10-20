@@ -10,7 +10,7 @@
   </div>
   <ul class="rows">
   {% for r in rows %}
-    <li class="flex-nowrap! items-start!">
+    <li class="flex-nowrap items-start">
       <input class="mx-0.5 mt-0.5 size-[18px] flex-none" type="checkbox" name="path" value="{{ r.album.path }}" aria-label="Select {{ self.rel(r.album.path) }}"{% if r.spare().is_some() %} data-spare{% endif %}>
       <div class="min-w-0 flex-1">
         <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">

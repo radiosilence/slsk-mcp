@@ -1,4 +1,4 @@
-<li id="pv-{{ p.key }}" class="items-start!">
+<li id="pv-{{ p.key }}" class="items-start">
   {% if p.applicable %}<input class="mx-0.5 mt-0.5 size-[18px] flex-none" type="checkbox" name="path" value="{{ p.path }}" aria-label="Apply to {{ p.title }}"{% if p.ticked %} checked{% endif %}>{% if let Some(w) = p.with %}<input type="hidden" name="with-{{ p.key }}" value="{{ w }}">{% endif %}{% endif %}
   <details class="min-w-0 flex-1{% if !p.applicable %} pl-6{% endif %}">
     <summary class="flex cursor-pointer list-none flex-wrap gap-x-2.5 gap-y-0.5 [&::-webkit-details-marker]:hidden">
@@ -20,7 +20,7 @@
     {% when Body::Nothing %}
     {% when Body::Refile with { change, into, moves } %}
     {% if let Some(d) = into %}<p class="text-meta text-muted wrap-anywhere">Into <span class="min-w-0 flex-[1_1_60%] wrap-anywhere">{{ d }}</span></p>{% endif %}
-    <ul class="rows tight *:grid! *:grid-cols-[minmax(0,1fr)] *:gap-0!">
+    <ul class="rows tight *:grid *:grid-cols-[minmax(0,1fr)] *:gap-0">
     {% for (from, to) in moves %}
       <li>{% if from == to %}<span class="min-w-0 flex-[1_1_60%] wrap-anywhere">{{ from }}</span>{% else %}<span class="min-w-0 flex-[1_1_60%] wrap-anywhere text-muted line-through decoration-rule">{{ from }}</span><span class="min-w-0 flex-[1_1_60%] wrap-anywhere">→ {{ to }}</span>{% endif %}</li>
     {% endfor %}
@@ -47,7 +47,7 @@
     {% if cover %}<p class="text-meta text-muted wrap-anywhere">Cover: each file's front cover is replaced by the release's (or the album's own, when it has none).</p>{% endif %}
     {% if !companions.is_empty() %}
     <p class="text-meta text-muted wrap-anywhere">Other files:</p>
-    <ul class="rows tight *:grid! *:grid-cols-[minmax(0,1fr)] *:gap-0!">
+    <ul class="rows tight *:grid *:grid-cols-[minmax(0,1fr)] *:gap-0">
     {% for c in companions %}
       <li><span class="min-w-0 flex-[1_1_60%] wrap-anywhere text-muted line-through decoration-rule">{{ c.file }}</span>{% if c.stays %}<span class="text-meta text-muted wrap-anywhere">stays: {{ c.to }} is taken</span>{% else %}<span class="min-w-0 flex-[1_1_60%] wrap-anywhere">→ {{ c.to }}</span>{% endif %}</li>
     {% endfor %}
