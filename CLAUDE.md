@@ -14,7 +14,15 @@ A Soulseek client that runs as a service: it shares a music library, fetches alb
 
 ## Releasing
 
-`just release patch|minor|major` (or an exact `X.Y.Z`) branches from main, bumps the slsk-mcp crate and `Cargo.lock`, `deploy/pulumi/package.json` and its lockfile, and `APP_VERSION` in `deploy/pulumi/src/versions.ts`, turns the unreleased fragments into the version and opens the release PR. The three numbers are one: the package deploys the image by `APP_VERSION`, and CI fails any commit where they disagree. Merging the PR is the release: CI pushes the image's semver tags, then publishes the Pulumi package, then creates the GitHub release with the binaries and the changelog section as notes, so nothing names an image or package that does not exist yet. A push releases only when it changes the version; `gh workflow run ci.yml` on main retries a release that failed part way. The Release workflow (`gh workflow run release.yml -f bump=patch`) opens the same PR from CI.
+`just release patch|minor|major` (or an exact `X.Y.Z`) branches from main, bumps the slsk-mcp crate and `Cargo.lock`, `deploy/pulumi/package.json` and its lockfile, and `APP_VERSION` in `deploy/pulumi/src/versions.ts`, turns the unreleased fragments into the version and opens the release PR. The three numbers are one: the package deploys the image by `APP_VERSION`, and CI fails any commit where they disagree. Merging the PR is the release: CI pushes the image's semver tags, then publishes the Pulumi package, then creates the GitHub release with the binaries and the changelog section as notes, so nothing names an image or package that does not exist yet. A push releases only when it changes the version; `gh workflow run ci-cd.yml` on main retries a release that failed part way. The Release workflow (`gh workflow run release.yml -f bump=patch`) opens the same PR from CI.
+
+## CI/CD
+
+`.github/workflows/ci-cd.yml` is one pipeline. CI ends in the `Checks` job, the only status a ruleset should require; CD runs after it on main in the same run and ships what CI built.
+
+The `changes` job decides from the diff which domains a change touches (`rust`, `web`, `package`, `docker`) and each CI job runs only for its own, so a skipped job means the change could not affect it and passes `Checks`. Pull requests diff against their base, pushes to main against the last commit whose run passed; a manual run or a release runs everything, as does any change under `.github/`. Markdown counts for nothing. Each domain is an allowlist of paths, so a new top-level directory of code needs adding to the domain that builds it, and a new job needs an `if:` on its domain and a place in `Checks`' `needs`. `changes` also answers once whether the run releases, and every release job reads that answer.
+
+The static binaries are built once per architecture (`linux-build`); the image only copies them in, and a release attaches the same tarballs. CI pushes the image as `:<sha>` on main; CD moves `main` onto it, and a release adds the version tags.
 
 ## Check
 

@@ -1,0 +1,556 @@
+name: CI/CD
+
+# Two halves in one run, so the second ships what the first built.
+#
+# CI checks the change and ends in `Checks`, the one status a ruleset should
+# require. Each job runs only for the domains the change touches (see
+# `changes`); a skipped job passes `Checks`, a failed or cancelled one fails
+# it. Jobs can therefore be added, renamed or skipped without touching branch
+# protection.
+#
+# CD runs after `Checks` has passed on main. Every push that rebuilt the image
+# moves its `main` tag; a push that changes the version also releases: the
+# image's version tags, the Pulumi package and the GitHub release, in that
+# order. CD ships what CI built: the static binaries from `linux-build`, which
+# are also what the image holds.
+on:
+  push:
+    branches: [main]
+  # Every PR, including ones stacked on another PR's branch.
+  pull_request:
+  # Releases whatever version is not yet released: how a failed release is
+  # retried.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  IMAGE: ghcr.io/${{ github.repository }}
+
+# A pull request's newer push cancels its older run; on main, a newer push
+# cancels an older one that releases nothing. A run that may release is in a
+# group of its own and is never cancelled, and nor is a manual run, which is
+# how a failed release is retried. The group is chosen before any job runs, so
+# it cannot ask `changes`: a push may release when its head commit is titled
+# `release: ` (as `just release` names its pull request) or changes the
+# slsk-mcp crate's manifest, where the version lives.
+concurrency:
+  group: "ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'workflow_dispatch' && format('dispatch-{0}', github.run_id) || (startsWith(github.event.head_commit.message, 'release: ') || contains(github.event.head_commit.modified, 'crates/slsk-mcp/Cargo.toml')) && format('release-{0}', github.sha) || 'main' }}"
+  cancel-in-progress: "${{ github.event_name == 'pull_request' || (github.event_name == 'push' && !startsWith(github.event.head_commit.message, 'release: ') && !contains(github.event.head_commit.modified, 'crates/slsk-mcp/Cargo.toml')) }}"
+
+jobs:
+  # ── CI ──────────────────────────────────────────────────────────────────
+
+  changes:
+    name: Changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+      web: ${{ steps.filter.outputs.web }}
+      package: ${{ steps.filter.outputs.package }}
+      docker: ${{ steps.filter.outputs.docker }}
+      release: ${{ steps.filter.outputs.release }}
+      version: ${{ steps.filter.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+      - id: filter
+        env:
+          EVENT: ${{ github.event_name }}
+          HEAD_REF: ${{ github.head_ref }}
+          GH_TOKEN: ${{ github.token }}
+        # The domains a change touches, from its diff. A pull request's is
+        # against its base. A push's is against the last commit on main whose
+        # run passed, so a push whose run was cancelled by the next one still
+        # reaches CD with it; without one in recent history, the commit
+        # before. A manual run, a release, or a diff that cannot be worked
+        # out, runs everything.
+        #
+        # Allowlists, so the question is "did any source of this domain
+        # change?" rather than "was everything recognisably irrelevant?". The
+        # cost is that a new top-level directory of code is invisible here
+        # until it is added below. Markdown is documentation wherever it sits.
+        #
+        # Steps run under `bash -e`, where grep finding nothing is a failing
+        # command rather than an answer, so every question is asked in a
+        # condition.
+        run: |
+          rust=true web=true package=true docker=true release=false
+          version_of() { sed -n 's/^version = "\(.*\)"/\1/p' | head -1; }
+          base=HEAD^1
+          if [ "$EVENT" = "push" ]; then
+            passed=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci-cd.yml --branch main --event push \
+              --status success --limit 1 --json headSha --jq '.[0].headSha' 2>/dev/null || true)
+            if [ -n "$passed" ] && [ "$passed" != "$(git rev-parse HEAD)" ] && git fetch -q --deepen=100 origin main && git merge-base --is-ancestor "$passed" HEAD; then
+              base=$passed
+            fi
+          fi
+          # Whether this run releases, the one answer every release job reads.
+          # A pull request: a release PR (branch `release-*`, or a version
+          # change), which runs everything. A push: it changes the version and
+          # that version is not out yet; comparing with the latest release
+          # alone would let a push landing while a release ran release it
+          # again. A manual run: whatever version is not out yet.
+          version=$(version_of < crates/slsk-mcp/Cargo.toml)
+          bumped=false
+          if [ "$(git show HEAD^1:crates/slsk-mcp/Cargo.toml 2>/dev/null | version_of)" != "$version" ]; then
+            bumped=true
+          fi
+          case "$EVENT" in
+            pull_request)
+              case "$HEAD_REF" in release-*) bumped=true ;; esac
+              release=$bumped
+              ;;
+            *)
+              if { [ "$EVENT" = workflow_dispatch ] || [ "$bumped" = true ]; } \
+                && ! gh release view "v$version" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+                release=true
+              fi
+              ;;
+          esac
+          touches() { printf '%s\n' "$files" | grep -E "$1" | grep -qvE '\.md$'; }
+          if [ "$EVENT" != "workflow_dispatch" ] && [ "$release" = false ] && files=$(git diff --name-only "$base" HEAD); then
+            echo "changes since $(git rev-parse --short "$base"):"
+            printf '%s\n' "$files" | sed 's/^/  /'
+            # Anything cargo compiles or that decides how. The server embeds
+            # its templates and assets, so they are Rust too.
+            touches '^crates/|^Cargo\.(toml|lock)$|^\.cargo/|^rust-toolchain|^\.github/' || rust=false
+            # The compiled stylesheet: its sources, everything Tailwind reads
+            # class names from, the output itself, and the recipe and tool
+            # pin that build it. The justfile and mise.toml reach no other
+            # job: the Rust and Node jobs install their toolchains themselves.
+            touches '^crates/slsk-mcp/(styles|templates|src|assets)/|^justfile$|^mise\.toml$|^\.github/' || web=false
+            touches '^deploy/pulumi/|^\.github/' || package=false
+            # The static binaries and the image that copies them in. The Rust
+            # jobs already check the code, so a pull request builds these
+            # only when the recipe changed or the lockfile did, since the
+            # musl build compiles C dependencies (aws-lc-sys) the tests'
+            # glibc build does not; main whenever the binary changed, since
+            # CD ships it.
+            if [ "$EVENT" = "pull_request" ] || [ "$rust" = false ]; then
+              touches '^Dockerfile$|^Cargo\.lock$|^\.github/' || docker=false
+            fi
+          fi
+          {
+            echo "rust=$rust"
+            echo "web=$web"
+            echo "package=$package"
+            echo "docker=$docker"
+            echo "release=$release"
+            echo "version=$version"
+          } | tee -a "$GITHUB_OUTPUT"
+
+  # The arm64 runners are few. A release cancels this repository's pull
+  # request runs, which are re-run from their page or by the next push, and
+  # main's earlier non-release runs, which a newer one supersedes. A job of
+  # its own, so only it holds a token that can cancel runs.
+  make-room:
+    name: Make room for the release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: changes
+    if: github.event_name != 'pull_request' && needs.changes.outputs.release == 'true'
+    permissions:
+      actions: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          SELF: ${{ github.run_id }}
+        run: |
+          for status in requested queued pending waiting in_progress; do
+            gh run list --repo "$GITHUB_REPOSITORY" --workflow ci-cd.yml --status "$status" --limit 100 \
+              --json databaseId,event,headBranch,displayTitle \
+              --jq '.[] | select(.event == "pull_request" or (.event == "push" and .headBranch == "main" and (.displayTitle | startswith("release: ") | not))) | .databaseId'
+          done | sort -u | while read -r id; do
+            [ "$id" = "$SELF" ] && continue
+            echo "cancelling run $id"
+            gh run cancel "$id" --repo "$GITHUB_REPOSITORY" || true
+          done
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    timeout-minutes: 45
+    # A newer push cancels a PR's checks, never main's: a release run's
+    # publish jobs need these to finish.
+    concurrency:
+      group: test-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          shared-key: test
+          cache-on-failure: true
+      # The network tests run engines against an in-process server over real
+      # sockets; nothing outside cargo is needed.
+      - run: cargo test --workspace --locked
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    timeout-minutes: 30
+    concurrency:
+      group: lint-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          shared-key: lint
+          cache-on-failure: true
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  format:
+    name: Check Formatting
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
+        with:
+          toolchain: stable
+      - run: cargo fmt --all -- --check
+
+  chart:
+    name: Chart
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.package == 'true'
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: deploy/pulumi
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: deploy/pulumi/package-lock.json
+      - run: npm ci
+      - run: npm run check
+      - run: npm run build
+
+  # CHANGELOG.md is generated from changelog.d/ (scripts/changelog.py). A pull
+  # request adds fragments without regenerating it, so only its fragments and
+  # the released versions are checked; one that writes CHANGELOG.md, as a
+  # release does, must write exactly what the fragments make. Every change
+  # carries a fragment, so this runs for all of them.
+  changelog:
+    name: Changelog
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+      - run: python3 -m unittest scripts/test_changelog.py
+      - env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT" = "pull_request" ] && git diff --name-only HEAD^1 HEAD | grep -qx CHANGELOG.md; then
+            python3 scripts/changelog.py --check
+          else
+            python3 scripts/changelog.py --lint
+          fi
+
+  # The web UI's stylesheet is compiled by Tailwind and committed, since the
+  # server embeds it. A source edited without a rebuild would ship the old CSS.
+  css:
+    name: Stylesheet
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@9149ea85001c7435d5a66bb127d6a1b6227cb0a5 # v5.0.0
+        with:
+          install_args: just github:tailwindlabs/tailwindcss
+      - run: just css
+      - name: Compiled stylesheet matches its sources
+        run: git diff --exit-code crates/slsk-mcp/assets/app.css
+
+  # The crate, the Pulumi package and the image it deploys share one version
+  # number: the package pins the image by `APP_VERSION`. Runs on pull requests
+  # too, so one that moves a single number fails before it merges.
+  version:
+    name: Version
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.package == 'true'
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - env:
+          CRATE: ${{ needs.changes.outputs.version }}
+        run: |
+          CHART=$(node -p "require('./deploy/pulumi/package.json').version")
+          APP=$(sed -n 's/^export const APP_VERSION = "\(.*\)";/\1/p' deploy/pulumi/src/versions.ts)
+          if [ "$CRATE" != "$CHART" ] || [ "$CRATE" != "$APP" ]; then
+            echo "::error::versions disagree: Cargo.toml $CRATE, package.json $CHART, versions.ts $APP"
+            exit 1
+          fi
+
+  # The static binary, in release, once per architecture: the image copies
+  # it in and a release attaches the same tarball, for hosts without
+  # containers. Built on runners pinned to an OS version, each on its own
+  # architecture, with the Rust cache.
+  linux-build:
+    name: Build (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    needs: changes
+    if: needs.changes.outputs.docker == 'true'
+    timeout-minutes: 45
+    concurrency:
+      group: linux-build-${{ matrix.arch }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+      cancel-in-progress: true
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # cmake/clang for aws-lc-sys, the rustls crypto backend.
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends musl-tools musl-dev cmake clang
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          shared-key: ${{ matrix.target }}
+          cache-on-failure: true
+      # Tarred, because an artifact does not keep the executable bit; the
+      # tarball is the release's download as it stands.
+      - run: |
+          cargo build --release --locked -p slsk-mcp --target ${{ matrix.target }}
+          tar -czf slsk-mcp-linux-${{ matrix.arch }}.tar.gz -C target/${{ matrix.target }}/release slsk-mcp
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: slsk-mcp-linux-${{ matrix.arch }}
+          path: slsk-mcp-linux-${{ matrix.arch }}.tar.gz
+
+  # The binaries above on `scratch`, for both architectures. Nothing runs in
+  # the image's build, so neither architecture needs emulation. A pull request
+  # builds it to prove it builds. Main pushes it under the commit, in parallel
+  # with the checks: nothing deploys a commit tag, and CD moves `main`, and a
+  # release's version tags and `latest`, onto it only once `Checks` has passed.
+  container:
+    name: Container image
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [changes, linux-build]
+    if: ${{ !cancelled() && needs.linux-build.result == 'success' }}
+    concurrency:
+      group: container-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: slsk-mcp-linux-*
+      - run: |
+          mkdir -p dist/amd64 dist/arm64
+          tar -xzf slsk-mcp-linux-amd64/slsk-mcp-linux-amd64.tar.gz -C dist/amd64
+          tar -xzf slsk-mcp-linux-arm64/slsk-mcp-linux-arm64.tar.gz -C dist/arm64
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        env:
+          # The build record would be uploaded as an artifact of this run,
+          # alongside the ones the release attaches.
+          DOCKER_BUILD_RECORD_UPLOAD: false
+        with:
+          context: dist
+          file: Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+          tags: ${{ env.IMAGE }}:${{ github.sha }}
+
+  # The one status a ruleset should require. Skipped jobs are domains the
+  # change does not touch and pass; anything failed or cancelled fails it.
+  checks:
+    name: Checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [changes, test, lint, format, chart, changelog, css, version, linux-build, container]
+    if: always()
+    steps:
+      - env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          bad=$(echo "$NEEDS" | jq -r '[to_entries[] | select(.value.result != "success" and .value.result != "skipped") | .key] | join(" ")')
+          if [ -n "$bad" ]; then
+            echo "::error::not passed: $bad"
+            exit 1
+          fi
+
+  # ── CD ──────────────────────────────────────────────────────────────────
+  #
+  # Main only, after `Checks`. `checks` runs whatever its needs did, so every
+  # job here states the results it depends on rather than relying on the
+  # default, which would skip it whenever any job upstream was skipped.
+
+  # `main` and `sha-<short>` follow the last commit whose checks passed and
+  # changed the image. Retagging needs no rebuild.
+  container-main:
+    name: Container image (main)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [checks, container]
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && needs.checks.result == 'success' && needs.container.result == 'success' }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - run: docker buildx imagetools create -t "$IMAGE:main" -t "$IMAGE:sha-${GITHUB_SHA::7}" "$IMAGE:$GITHUB_SHA"
+
+  # The image this commit already pushed, tagged with the release's version,
+  # its major.minor and major, and `latest`. Retagging needs no rebuild, and
+  # repeats safely.
+  container-release:
+    name: Container image (release tags)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [changes, checks, container]
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && needs.changes.outputs.release == 'true' && needs.checks.result == 'success' && needs.container.result == 'success' }}
+    permissions:
+      contents: read
+      packages: write
+    env:
+      VERSION: ${{ needs.changes.outputs.version }}
+    steps:
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - run: |
+          docker buildx imagetools create \
+            -t "$IMAGE:v$VERSION" -t "$IMAGE:v${VERSION%.*}" -t "$IMAGE:v${VERSION%%.*}" -t "$IMAGE:latest" \
+            "$IMAGE:$GITHUB_SHA"
+
+  # After the image's version tag, which the package pins: a published package
+  # promises an image that exists, and a package version cannot be reused.
+  publish-chart:
+    name: Publish chart
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [container-release]
+    if: ${{ !cancelled() && needs.container-release.result == 'success' }}
+    permissions:
+      contents: read
+      packages: write
+    defaults:
+      run:
+        working-directory: deploy/pulumi
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          registry-url: https://npm.pkg.github.com
+          cache: npm
+          cache-dependency-path: deploy/pulumi/package-lock.json
+      - run: npm ci
+      - run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Last, so a release never names an image or a package that does not exist.
+  # Creates the tag through the API, on the commit that was built; the notes
+  # are the version's section of CHANGELOG.md, and the downloads are the
+  # tarballs the image was built from.
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [changes, checks, linux-build, container-release, publish-chart]
+    # Every need having run, not merely not failed: a release without one of
+    # its parts is not a release.
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') && !contains(needs.*.result, 'skipped') && needs.changes.outputs.release == 'true' }}
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.changes.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Release notes
+        run: |
+          awk -v h="## $VERSION" '$0==h{f=1;next} f&&/^## /{exit} f' CHANGELOG.md > notes.md
+          if ! grep -q . notes.md; then
+            echo "::error::CHANGELOG.md has no section for $VERSION"
+            exit 1
+          fi
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: artifacts
+          pattern: slsk-mcp-linux-*
+      # Release writes go through RELEASE_TOKEN: a release made with the
+      # workflow token starts no workflows of its own.
+      - name: Check the release token
+        env:
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          if [ -z "$RELEASE_TOKEN" ]; then
+            echo "::error::RELEASE_TOKEN is not set; the release cannot be published"
+            exit 1
+          fi
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          token: ${{ secrets.RELEASE_TOKEN }}
+          tag_name: v${{ env.VERSION }}
+          target_commitish: ${{ github.sha }}
+          name: v${{ env.VERSION }}
+          body_path: notes.md
+          files: artifacts/**/*.tar.gz
