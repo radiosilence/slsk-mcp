@@ -1,0 +1,1 @@
+- **The web UI is styled with Tailwind v4.** Its stylesheet is compiled from utilities in the templates and design tokens named as in koan's web UI, so the two share one vocabulary. The look is unchanged apart from links underlining only on hover.
