@@ -14,7 +14,7 @@
     {% if let Some(up) = up %}<a class="link up" href="{{ up }}" title="Up to the folder above" data-indicator="_browsing" data-on:click="evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || (evt.preventDefault(), $_browsing || (@get(el.getAttribute('href'))))">↑ Up</a>{% endif %}
     {% for c in crumbs %}{% if !loop.first %}<span class="meta">/</span>{% endif %}<a class="link" href="{{ c.href }}" data-indicator="_browsing" data-on:click="evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || (evt.preventDefault(), $_browsing || (@get(el.getAttribute('href'))))">{{ c.name }}</a>{% endfor %}
   </nav>
-  {% if !mine && (tree_files > 0 || has_files) %}
+  {% if !mine && tree_files > 0 %}
   <div class="actions">
     {% if tree_files > 0 %}<button type="button" class="primary" name="key" value="{{ here_key }}" data-indicator="_dl_here" data-attr:disabled="$_dl_here" data-class:busy="$_dl_here" data-on:click="{% if tree_files > 100 %}confirm('Download everything under this folder? It is more than 100 files, one job per album.') && {% endif %}@post('/browse/tree', {contentType: 'form', selector: '#browse-user'})">Download folder · {{ tree_files }} files</button>{% endif %}
     {% if has_files %}<form id="browse-files">

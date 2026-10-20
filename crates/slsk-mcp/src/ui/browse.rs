@@ -36,15 +36,37 @@ pub(super) fn routes() -> Router<UiState> {
 
 type Listing = Arc<Vec<Directory>>;
 
+/// Peers' listings, and this client's own apart from them: its own is
+/// browsed but never downloaded from, so it neither takes a peer's slot nor
+/// answers a download.
 #[derive(Clone, Default)]
-pub(super) struct Cache(Arc<parking_lot::Mutex<Vec<(String, Instant, Listing)>>>);
+pub(super) struct Cache {
+    peers: Arc<parking_lot::Mutex<Vec<(String, Instant, Listing)>>>,
+    own: Arc<parking_lot::Mutex<Option<(Instant, Listing)>>>,
+}
 
 const KEEP: usize = 4;
 const FRESH: Duration = Duration::from_secs(600);
+/// Imports change the library often, so its own listing is read again
+/// sooner; between reads each step through it is a lookup, not a copy of
+/// the share index.
+const OWN_FRESH: Duration = Duration::from_secs(60);
 
 impl Cache {
+    fn own(&self, engine: &slsk_engine::Engine, fresh: bool) -> Listing {
+        let mut c = self.own.lock();
+        match &*c {
+            Some((at, l)) if !fresh && at.elapsed() < OWN_FRESH => l.clone(),
+            _ => {
+                let l: Listing = Arc::new(engine.own_shares());
+                *c = Some((Instant::now(), l.clone()));
+                l
+            }
+        }
+    }
+
     fn get(&self, username: &str) -> Option<Listing> {
-        let mut c = self.0.lock();
+        let mut c = self.peers.lock();
         c.retain(|(_, at, _)| at.elapsed() < FRESH);
         c.iter()
             .find(|(u, ..)| u == username)
@@ -52,7 +74,7 @@ impl Cache {
     }
 
     fn put(&self, username: &str, listing: Listing) {
-        let mut c = self.0.lock();
+        let mut c = self.peers.lock();
         c.retain(|(u, ..)| u != username);
         c.push((username.to_string(), Instant::now(), listing));
         if c.len() > KEEP {
@@ -201,7 +223,11 @@ impl Place {
         } else {
             self.at.len() + 1
         };
-        String::from_utf8_lossy(&path[start..]).replace('\\', "/")
+        let rel = &path[start..];
+        match std::str::from_utf8(rel) {
+            Ok(r) if !r.contains('/') && !r.starts_with(RAW) => r.replace('\\', "/"),
+            _ => format!("{RAW}{}", URL_SAFE_NO_PAD.encode(rel)),
+        }
     }
 
     fn href(&self) -> String {
@@ -261,16 +287,24 @@ impl Place {
     }
 }
 
+/// Marks a relative path the address cannot spell as itself: one that is
+/// not UTF-8 or holds a `/`, given instead as the base64 of its bytes.
+const RAW: &str = "~";
+
 /// A path named relative to `at`, back in the peer's own form.
 fn join(at: &[u8], rel: &str) -> Vec<u8> {
     if rel == "." || rel.is_empty() {
         return at.to_vec();
     }
+    let rel = match rel.strip_prefix(RAW) {
+        Some(b) => URL_SAFE_NO_PAD.decode(b).unwrap_or_default(),
+        None => rel.replace('/', "\\").into_bytes(),
+    };
     let mut out = at.to_vec();
     if !out.is_empty() {
         out.push(b'\\');
     }
-    out.extend_from_slice(rel.replace('/', "\\").as_bytes());
+    out.extend_from_slice(&rel);
     out
 }
 
@@ -300,6 +334,9 @@ struct Nodes<'a> {
     nodes: Vec<Node>,
     /// The address with another page of them, when there is one.
     more: Option<String>,
+    /// Fewer drawn than the page holds, as the tree's other open folders
+    /// used up [`MOST_ROWS`].
+    crowded: bool,
     /// They are the open folder's own, whose files can be ticked.
     top: bool,
     /// This client's own shares, which there is nothing to download from.
@@ -312,7 +349,11 @@ impl Nodes<'_> {
     }
 }
 
-fn tree(p: &Place, dirs: &[Directory], at: &[u8], mine: bool) -> String {
+/// The most rows one tree draws, however many folders are expanded: past
+/// it, an expanded folder asks for others to be collapsed.
+const MOST_ROWS: usize = 5000;
+
+fn tree(p: &Place, dirs: &[Directory], at: &[u8], mine: bool, left: &mut usize) -> String {
     let (children, here) = level(dirs, at);
     let files = here.into_iter().flat_map(|d| {
         d.files.iter().map(|f| {
@@ -327,10 +368,14 @@ fn tree(p: &Place, dirs: &[Directory], at: &[u8], mine: bool) -> String {
             })
         })
     });
-    let shown = super::PAGE as usize * (1 + p.more.get(at).copied().unwrap_or(0));
+    let paged = super::PAGE as usize * (1 + p.more.get(at).copied().unwrap_or(0));
     let total = children.len() + here.map_or(0, |d| d.files.len());
-    let nodes = children
+    let shown = paged.min(total).min(*left);
+    *left -= shown;
+    let folders = children.len();
+    let mut nodes: Vec<Node> = children
         .into_iter()
+        .take(shown)
         .map(|c| {
             Node::Folder(FolderRow {
                 go: p.go(&c.path),
@@ -338,19 +383,19 @@ fn tree(p: &Place, dirs: &[Directory], at: &[u8], mine: bool) -> String {
                 inner: p
                     .open
                     .contains(&c.path)
-                    .then(|| tree(p, dirs, &c.path, mine)),
+                    .then(|| tree(p, dirs, &c.path, mine, left)),
                 name: c.name,
                 key: c.key,
                 files: c.files,
             })
         })
-        .chain(files)
-        .take(shown)
         .collect();
+    nodes.extend(files.take(shown.saturating_sub(folders)));
     Nodes {
         username: &p.username,
         nodes,
-        more: (total > shown).then(|| p.show_more(at)),
+        crowded: shown < paged.min(total),
+        more: (shown == paged && total > paged).then(|| p.show_more(at)),
         top: at == p.at.as_slice(),
         mine,
     }
@@ -421,7 +466,7 @@ fn render(p: &Place, dirs: &[Directory], info: Option<Info>, mine: bool) -> Stri
         has_files: dirs
             .iter()
             .any(|d| d.name.as_bytes() == p.at.as_slice() && !d.files.is_empty()),
-        rows: tree(p, dirs, &p.at, mine),
+        rows: tree(p, dirs, &p.at, mine, &mut { MOST_ROWS }),
         info,
         error: None,
     }
@@ -507,8 +552,7 @@ fn browse_at(s: UiState, q: &BrowseQuery) -> Response {
     };
     let cache = s.browsed.clone();
     if engine.username() == p.username {
-        let listing = Arc::new(engine.own_shares());
-        cache.put(&p.username, listing.clone());
+        let listing = cache.own(&engine, fresh);
         return many(vec![
             here,
             patch(&render(&p, &listing, None, true)),
@@ -805,6 +849,29 @@ mod tests {
     }
 
     #[test]
+    fn a_name_the_address_cannot_spell_goes_as_its_bytes() {
+        let mut p = place("@@m", &["@@m\\a/b"]);
+        p.open.insert(b"@@m\\Bj\xf6rk".to_vec());
+        let q = query(&p.href());
+        assert!(q.open.iter().all(|o| o.starts_with(RAW)));
+        assert_eq!(Place::from_query(&q).unwrap(), p);
+    }
+
+    #[test]
+    fn expanded_folders_share_one_budget_of_rows() {
+        let page = crate::ui::PAGE as usize;
+        let dirs: Vec<Directory> = (0..3)
+            .flat_map(|a| (0..page).map(move |i| dir(&format!("{a}\\{i:05}"), 1)))
+            .collect();
+        let p = place("", &["0", "1", "2"]);
+        let mut left = 3 + 2 * page;
+        let html = tree(&p, &dirs, b"", false, &mut left);
+        assert_eq!(left, 0);
+        assert_eq!(html.matches("class=\"node dir\"").count(), 3 + 2 * page);
+        assert!(html.contains("Collapse other folders"));
+    }
+
+    #[test]
     fn collapsing_a_folder_forgets_what_was_open_under_it() {
         let p = place("", &["A", "A\\B", "AB"]);
         let q = reread(&p.toggle(b"A"));
@@ -834,12 +901,12 @@ mod tests {
             .map(|i| dir(&format!("@@m\\{i:05}"), 1))
             .collect();
         let p = place("@@m", &[]);
-        let html = tree(&p, &dirs, b"@@m", false);
+        let html = tree(&p, &dirs, b"@@m", false, &mut { MOST_ROWS });
         assert_eq!(html.matches("class=\"node dir\"").count(), page);
         assert!(html.contains("Show more"));
         let mut p = p;
         p.more.insert(b"@@m".to_vec(), 1);
-        let html = tree(&p, &dirs, b"@@m", false);
+        let html = tree(&p, &dirs, b"@@m", false, &mut { MOST_ROWS });
         assert_eq!(html.matches("class=\"node dir\"").count(), page + 3);
         assert!(!html.contains("Show more"));
     }
