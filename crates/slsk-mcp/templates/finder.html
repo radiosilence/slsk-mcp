@@ -1,5 +1,5 @@
 <form id="finder" action="/search">
-  <input name="q" value="{{ q }}" data-bind:q placeholder="Artist album" autocomplete="off"{% if tab_search %} autofocus{% endif %}>
+  <input name="q" value="{{ q }}" data-bind:q placeholder="Artist album" autocomplete="off" autofocus>
   <label class="toggle"><input type="checkbox" name="lossless" value="true"{% if lossless %} checked{% endif %} data-bind:lossless> lossless</label>
   <button type="submit" data-attr:disabled="$busy">Search</button>
   <button type="button" class="primary" data-indicator:busy data-attr:disabled="$busy || !$q" data-class:busy="$busy"
