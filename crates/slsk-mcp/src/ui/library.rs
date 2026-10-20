@@ -389,6 +389,23 @@ fn opened(path: &str) -> axum::response::sse::Event {
     super::signals(&serde_json::json!({ "_libalbum": path }).to_string())
 }
 
+#[derive(Template)]
+#[template(path = "pages/library.html")]
+struct Page {
+    q: String,
+    run: String,
+}
+
+/// The page around the list, which it fetches once drawn.
+pub(super) fn page(s: &UiState, q: &str) -> String {
+    Page {
+        q: q.to_string(),
+        run: run_html(s),
+    }
+    .render()
+    .unwrap_or_default()
+}
+
 /// The list the address describes.
 async fn view(State(s): State<UiState>, Query(q): Query<Vec<(String, String)>>) -> Response {
     let filter = Filter::from_fields(&q);
@@ -400,7 +417,7 @@ async fn view(State(s): State<UiState>, Query(q): Query<Vec<(String, String)>>) 
             yield Ok(patch(&album_html(&s, &filter).await));
         }
         yield Ok(opened(&filter.album));
-        yield Ok(super::place("library", &filter.url()));
+        yield Ok(super::place(&filter.url()));
     })
     .into_response()
 }
@@ -414,7 +431,6 @@ async fn find(State(s): State<UiState>, body: Bytes) -> Response {
         patch(r#"<div id="lib-album"></div>"#),
         opened(""),
         super::place(
-            "library",
             &Filter {
                 album: String::new(),
                 ..filter
@@ -555,7 +571,7 @@ async fn album(State(s): State<UiState>, Query(q): Query<Vec<(String, String)>>)
         patch(&album_html(&s, &filter).await),
         patch(r#"<div id="lib-preview"></div>"#),
         opened(&filter.album),
-        super::place("library", &filter.url()),
+        super::place(&filter.url()),
     ])
 }
 
@@ -1668,7 +1684,7 @@ async fn apply(State(s): State<UiState>, Path(action): Path<String>, body: Bytes
                 album_html(&s, &filter).await
             }));
             yield Ok(opened(&filter.album));
-            yield Ok(super::place("library", &filter.url()));
+            yield Ok(super::place(&filter.url()));
         }
         let (done, failed) = {
             let run = s.run.lock();

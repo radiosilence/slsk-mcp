@@ -1,0 +1,10 @@
+<div class="area">
+  <form id="wish-form" class="finder-form" data-indicator="_wishing" data-on:submit__prevent="@post('/wishlist/add', {contentType: 'form', selector: '#wish-form'})">
+    <input name="q" data-bind:_wishq placeholder="Artist album nobody shares yet" autocomplete="off" required>
+    <label class="toggle"><input type="checkbox" name="lossless" value="true" checked> lossless</label>
+    <label class="toggle"><input type="checkbox" name="grab" value="true" checked> grab when found</label>
+    <button type="submit" class="primary" data-attr:disabled="$_wishing" data-class:busy="$_wishing">Add wish</button>
+  </form>
+  <p class="note">Searched in turn, one every few minutes, until something turns up. With grab on, the first good folder found becomes an album.</p>
+  {{ list|safe }}
+</div>

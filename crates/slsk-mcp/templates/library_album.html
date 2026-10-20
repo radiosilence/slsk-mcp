@@ -3,7 +3,7 @@
     <strong class="title">{{ self.title() }}</strong>
     {% if row.spare().is_some() %}<span class="pill spare">spare</span>{% endif %}
     {% if row.kept() %}<span class="pill keep">kept</span>{% endif %}
-    <button type="button" class="quiet" aria-label="Close" data-on:click="document.getElementById('lib-album').replaceChildren(); $_libalbum = ''; $_url = '{{ self.closed() }}'; $_at.library = $_url">Close</button>
+    <button type="button" class="quiet" aria-label="Close" data-on:click="document.getElementById('lib-album').replaceChildren(); $_libalbum = ''; $_url = '{{ self.closed() }}'">Close</button>
   </div>
   <p class="meta">{% if let Some(a) = row.album.album_artist %}{{ a }}{% endif %}{% if let Some(y) = row.album.year %} · {{ y }}{% endif %} · {% if row.album.format.is_empty() %}?{% else %}{{ row.album.format }}{% endif %} · {{ row.album.tracks }} track{% if row.album.tracks != 1 %}s{% endif %}</p>
   <p class="meta path">{{ self.rel(row.album.path) }}</p>

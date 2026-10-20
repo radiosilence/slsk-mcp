@@ -1,0 +1,18 @@
+<div class="area" data-on-interval__duration.4s="@get('/chat?poll=true', {contentType: 'form', selector: '#thread-form'})">
+  {{ thread|safe }}
+  {{ side|safe }}
+  <form id="chat-who" class="finder-form" data-on:submit__prevent="@post('/chat/open', {contentType: 'form', selector: '#chat-who'})">
+    <input name="username" data-bind:_buddy placeholder="Username" autocomplete="off" autocapitalize="off" required>
+    <input name="note" data-bind:_buddynote placeholder="Note (for buddies)" autocomplete="off">
+    <button type="submit" data-indicator="_msgto" data-attr:disabled="$_msgto" data-class:busy="$_msgto">Message</button>
+    <button type="button" data-indicator="_budadd" data-attr:disabled="$_budadd" data-class:busy="$_budadd" data-on:click="@post('/chat/buddy/add', {contentType: 'form', selector: '#chat-who'})">Add buddy</button>
+  </form>
+  <details class="about">
+    <summary>Public rooms</summary>
+    <form id="room-join" class="finder-form" data-indicator="_joining" data-on:submit__prevent="@post('/chat/join', {contentType: 'form', selector: '#room-join'})">
+      <input name="room" placeholder="Room name" autocomplete="off" autocapitalize="off" required>
+      <button type="submit" data-attr:disabled="$_joining" data-class:busy="$_joining">Join</button>
+    </form>
+    {{ rooms|safe }}
+  </details>
+</div>

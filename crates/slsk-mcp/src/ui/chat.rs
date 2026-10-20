@@ -293,6 +293,28 @@ async fn thread_html(app: &App, t: Option<&Thread>) -> String {
     view.render().unwrap_or_default()
 }
 
+#[derive(Template)]
+#[template(path = "pages/chat.html")]
+struct Page {
+    thread: String,
+    side: String,
+    rooms: String,
+}
+
+/// The conversation the address names, if any, and the lists. The thread
+/// is drawn first: drawing a private conversation marks it read, which the
+/// lists then reflect.
+pub(super) async fn page(app: &App, q: &[(String, String)]) -> String {
+    let thread = thread_html(app, Thread::from_fields(q).as_ref()).await;
+    Page {
+        thread,
+        side: side_html(app).await,
+        rooms: room_list_html(app),
+    }
+    .render()
+    .unwrap_or_default()
+}
+
 #[derive(serde::Deserialize)]
 struct Poll {
     #[serde(default)]
@@ -328,7 +350,7 @@ async fn view(State(s): State<UiState>, Query(q): Query<Poll>) -> Response {
     html.push('\n');
     html.push_str(&count_html(&s.app).await);
     match thread.filter(|_| !q.poll) {
-        Some(t) => many(vec![patch(&html), super::place("chat", &t.url())]),
+        Some(t) => many(vec![patch(&html), super::place(&t.url())]),
         None => one(html),
     }
 }
@@ -364,7 +386,7 @@ async fn opened(app: &App, t: &Thread, flash: Option<String>) -> Response {
             flash.unwrap_or_else(|| "<div id=\"flash\"></div>".into())
         )),
         signals(r#"{"_msg":""}"#),
-        super::place("chat", &t.url()),
+        super::place(&t.url()),
     ])
 }
 

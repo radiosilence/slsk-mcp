@@ -6,13 +6,13 @@
   </div>
   <div class="actions">
     <button type="button" class="quiet" name="key" value="{{ here_key }}" data-indicator="_browsing" data-attr:disabled="$_browsing" data-class:busy="$_browsing" data-on:click="@post('/browse?fresh=true', {contentType: 'form', selector: '#browse-user'})">Refresh</button>
-    <a class="button quiet" href="{{ crate::ui::chat_href("pm", username) }}" data-on:click="evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || (evt.preventDefault(), $tab = 'chat', $_msg = '', @get(el.getAttribute('href')))">Message</a>
+    <a class="button quiet" href="{{ crate::ui::chat_href("pm", username) }}">Message</a>
   </div>
   <div class="meta">{{ folders }} folders{% match info %}{% when Some with (i) %} · {{ i.uploads }} uploads · queue {{ i.queue }} · {% if i.free %}<span class="ok">free slot</span>{% else %}no free slot{% endif %}{% when None %}{% endmatch %}</div>
   {% match info %}{% when Some with (i) %}{% if !i.description.is_empty() %}<details class="about"><summary>About</summary><p class="desc">{{ i.description }}</p></details>{% endif %}{% when None %}{% endmatch %}
   <nav class="crumbs">
-    <a class="link" href="{{ crate::ui::browse_href(username, "") }}" data-indicator="_browsing" data-on:click="evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || (evt.preventDefault(), $_browsing || ($tab = 'browse', @get(el.getAttribute('href'))))">top</a>
-    {% for c in crumbs %}<span class="meta">/</span><a class="link" href="{{ crate::ui::browse_href(username, c.key) }}" data-indicator="_browsing" data-on:click="evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || (evt.preventDefault(), $_browsing || ($tab = 'browse', @get(el.getAttribute('href'))))">{{ c.name }}</a>{% endfor %}
+    <a class="link" href="{{ crate::ui::browse_href(username, "") }}" data-indicator="_browsing" data-on:click="evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || (evt.preventDefault(), $_browsing || (@get(el.getAttribute('href'))))">top</a>
+    {% for c in crumbs %}<span class="meta">/</span><a class="link" href="{{ crate::ui::browse_href(username, c.key) }}" data-indicator="_browsing" data-on:click="evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || (evt.preventDefault(), $_browsing || (@get(el.getAttribute('href'))))">{{ c.name }}</a>{% endfor %}
   </nav>
   {% if tree_files > 0 %}
   <div class="actions">
@@ -22,7 +22,7 @@
   {% if !children.is_empty() %}
   <ul class="rows dirs">
   {% for c in children %}
-    <li><a class="link" href="{{ crate::ui::browse_href(username, c.key) }}" data-indicator="_browsing" data-on:click="evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || (evt.preventDefault(), $_browsing || ($tab = 'browse', @get(el.getAttribute('href'))))">{{ c.name }}</a><span class="meta">{{ c.files }} files</span></li>
+    <li><a class="link" href="{{ crate::ui::browse_href(username, c.key) }}" data-indicator="_browsing" data-on:click="evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || (evt.preventDefault(), $_browsing || (@get(el.getAttribute('href'))))">{{ c.name }}</a><span class="meta">{{ c.files }} files</span></li>
   {% endfor %}
   </ul>
   {% endif %}

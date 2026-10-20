@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>slsk</title>
+<title>{{ self.title() }} · slsk</title>
 <meta name="theme-color" content="#101214">
 <link rel="icon" href="/assets/icon-32.png" sizes="32x32">
 <link rel="icon" href="/assets/icon-192.png" sizes="192x192">
@@ -12,118 +12,22 @@
 <script type="module" src="/assets/datastar.js"></script>
 </head>
 <body data-signals="{{ signals }}"
-  data-init="setTimeout(() => { document.querySelector('[data-tab={{ tab }}]')?.click();{% if search %} @post('/search', {contentType: 'form', selector: '#finder'});{% endif %} })"
   data-effect="$_url && $_url != location.pathname + location.search && history.pushState(null, '', $_url)"
   data-on:popstate__window="location.pathname + location.search != $_url && location.reload()">
-<header data-effect="$tab; $settled; $history; @get('/stream')"
-  data-on-interval__duration.20s="@get('/stream')"
-  data-on:visibilitychange__document="!document.hidden && @get('/stream')">
+<header data-effect="$jobs; $history; @get('/stream?page={{ tab }}')"
+  data-on-interval__duration.20s="@get('/stream?page={{ tab }}')"
+  data-on:visibilitychange__document="!document.hidden && @get('/stream?page={{ tab }}')">
   {{ status|safe }}
 </header>
 <nav class="tabs">
-  <a href="/" data-tab="albums" data-class:active="$tab == 'albums'" data-on:click="evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || (evt.preventDefault(), $tab = 'albums', $_url = $_at.albums || '/')">Albums</a>
-  <a href="/uploads" data-tab="uploads" data-class:active="$tab == 'uploads'" data-on:click="evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || (evt.preventDefault(), $tab = 'uploads', $_url = '/uploads')">Uploads {{ up_count|safe }}</a>
-  <a href="/wishlist" data-tab="wishlist" data-class:active="$tab == 'wishlist'" data-indicator="_t_wish" data-class:busy="$_t_wish" data-on:click="evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || (evt.preventDefault(), $tab = 'wishlist', $_url = '/wishlist', @get($_url))">Wishlist</a>
-  <a href="/library" data-tab="library" data-class:active="$tab == 'library'" data-indicator="_t_lib" data-class:busy="$_t_lib" data-on:click="evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || (evt.preventDefault(), $tab = 'library', $_url = $_at.library || '/library', @get($_url))">Library</a>
-  <a href="/browse" data-tab="browse" data-class:active="$tab == 'browse'" data-on:click="evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || (evt.preventDefault(), $tab = 'browse', $_url = $_at.browse || '/browse', $_url.includes('username=') && @get($_url))">Browse</a>
-  <a href="/chat" data-tab="chat" data-class:active="$tab == 'chat'" data-indicator="_t_chat" data-class:busy="$_t_chat" data-on:click="evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || (evt.preventDefault(), $tab = 'chat', $_url = $_at.chat || '/chat', @get($_url))">Chat {{ chat_count|safe }}</a>
-  <a href="/bans" data-tab="bans" data-class:active="$tab == 'bans'" data-indicator="_t_bans" data-class:busy="$_t_bans" data-on:click="evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || (evt.preventDefault(), $tab = 'bans', $_url = '/bans', @get($_url))">Bans</a>
-  <a href="/settings" data-tab="settings" data-class:active="$tab == 'settings'" data-indicator="_t_set" data-class:busy="$_t_set" data-on:click="evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || (evt.preventDefault(), $tab = 'settings', $_url = '/settings', @get($_url))">Settings</a>
-  <a href="/triage" data-tab="triage" data-class:active="$tab == 'triage'" data-indicator="_t_tri" data-class:busy="$_t_tri" data-on:click="evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || (evt.preventDefault(), $tab = 'triage', $_url = $_at.triage || '/triage', @get($_url))">Triage</a>
+{% for p in self.nav() %}
+  <a href="{{ p.href }}"{% if p.active %} class="active" aria-current="page"{% endif %}>{{ p.label }}{% if p.name == "uploads" %} {{ up_count|safe }}{% endif %}{% if p.name == "chat" %} {{ chat_count|safe }}{% endif %}</a>
+{% endfor %}
 </nav>
 <main>
   <form id="act" hidden></form>
   <div id="flash"></div>
-  <div data-show="$tab == 'albums'">
-  <section class="finder">
-    <form id="finder" data-indicator="_searching" data-on:submit__prevent="@post('/search', {contentType: 'form', selector: '#finder'})">
-      <input name="q" data-bind:q placeholder="Artist album" autocomplete="off" autofocus>
-      <label class="toggle"><input type="checkbox" name="lossless" value="true" data-bind:lossless> lossless</label>
-      <button type="submit" data-attr:disabled="$_searching || $busy" data-class:busy="$_searching">Search</button>
-      <button type="button" class="primary" data-indicator:busy data-attr:disabled="$busy || $_searching || !$q" data-class:busy="$busy"
-        data-on:click="@post('/grab', {contentType: 'form', selector: '#finder'})">Grab best</button>
-      <button type="button" class="quiet" data-show="$q" data-attr:disabled="$_searching"
-        data-on:click="$q = ''; $_url = '/'; $_at.albums = '/'; document.getElementById('results').replaceChildren()">Clear</button>
-    </form>
-    <div id="results"></div>
-  </section>
-  {{ jobs|safe }}
-  </div>
-  <div data-show="$tab == 'uploads'">
-    {{ uploads|safe }}
-  </div>
-  <div data-show="$tab == 'wishlist'" class="area">
-    <form id="wish-form" class="finder-form" data-indicator="_wishing" data-on:submit__prevent="@post('/wishlist/add', {contentType: 'form', selector: '#wish-form'})">
-      <input name="q" data-bind:_wishq placeholder="Artist album nobody shares yet" autocomplete="off" required>
-      <label class="toggle"><input type="checkbox" name="lossless" value="true" checked> lossless</label>
-      <label class="toggle"><input type="checkbox" name="grab" value="true" checked> grab when found</label>
-      <button type="submit" class="primary" data-attr:disabled="$_wishing" data-class:busy="$_wishing">Add wish</button>
-    </form>
-    <p class="note">Searched in turn, one every few minutes, until something turns up. With grab on, the first good folder found becomes an album.</p>
-    <div id="wishlist"></div>
-  </div>
-  <div data-show="$tab == 'library'" class="area">
-    <form id="lib-find" class="finder-form" data-indicator="_finding" data-on:submit__prevent="@post('/library/find', {contentType: 'form', selector: '#lib-find'})">
-      <input name="q" data-bind:_libq placeholder="burial, artist:burial, year:1990..1999" autocomplete="off">
-      <select name="since" data-bind:_libsince data-on:change="$_libsince != 'date' && @post('/library/find', {contentType: 'form', selector: '#lib-find'})">
-        <option value="">Imported any time</option>
-        <option value="today">Imported today</option>
-        <option value="week">Imported this week</option>
-        <option value="month">Imported this month</option>
-        <option value="date">Imported since…</option>
-      </select>
-      <input type="date" name="from" data-bind:_libfrom data-show="$_libsince == 'date'" data-on:change="@post('/library/find', {contentType: 'form', selector: '#lib-find'})">
-      <select name="show" data-bind:_libshow data-on:change="@post('/library/find', {contentType: 'form', selector: '#lib-find'})">
-        <option value="">Every album</option>
-        <option value="dups">Held more than once</option>
-        <option value="moves">Not where the rules file them</option>
-      </select>
-      <button type="submit" data-attr:disabled="$_finding" data-class:busy="$_finding">Find</button>
-    </form>
-    {{ run|safe }}
-    <div id="lib-album"></div>
-    <div id="lib-preview"></div>
-    <div id="library"></div>
-  </div>
-  <div data-show="$tab == 'browse'" class="area">
-    <form id="browse-find" class="finder-form" data-indicator="_browsing" data-on:submit__prevent="@post('/browse', {contentType: 'form', selector: '#browse-find'})">
-      <input name="username" placeholder="Username" autocomplete="off" autocapitalize="off" required>
-      <button type="submit" data-attr:disabled="$_browsing" data-class:busy="$_browsing">Browse</button>
-    </form>
-    <div id="browse"><p class="note">Browse someone's shares: type their name, or tap a name in search results, uploads or chat.</p></div>
-  </div>
-  <div data-show="$tab == 'chat'" class="area" data-on-interval__duration.4s="$tab == 'chat' && @get('/chat?poll=true', {contentType: 'form', selector: '#thread-form'})">
-    <div id="thread"><form id="thread-form"><input type="hidden" name="kind" value=""><input type="hidden" name="name" value=""></form></div>
-    <div id="chat-side"></div>
-    <form id="chat-who" class="finder-form" data-on:submit__prevent="@post('/chat/open', {contentType: 'form', selector: '#chat-who'})">
-      <input name="username" data-bind:_buddy placeholder="Username" autocomplete="off" autocapitalize="off" required>
-      <input name="note" data-bind:_buddynote placeholder="Note (for buddies)" autocomplete="off">
-      <button type="submit" data-indicator="_msgto" data-attr:disabled="$_msgto" data-class:busy="$_msgto">Message</button>
-      <button type="button" data-indicator="_budadd" data-attr:disabled="$_budadd" data-class:busy="$_budadd" data-on:click="@post('/chat/buddy/add', {contentType: 'form', selector: '#chat-who'})">Add buddy</button>
-    </form>
-    <details class="about">
-      <summary>Public rooms</summary>
-      <form id="room-join" class="finder-form" data-indicator="_joining" data-on:submit__prevent="@post('/chat/join', {contentType: 'form', selector: '#room-join'})">
-        <input name="room" placeholder="Room name" autocomplete="off" autocapitalize="off" required>
-        <button type="submit" data-attr:disabled="$_joining" data-class:busy="$_joining">Join</button>
-      </form>
-      <ul id="room-list" class="rows"></ul>
-    </details>
-  </div>
-  <div data-show="$tab == 'bans'" class="area">
-    <form id="ban-form" class="finder-form" data-indicator="_banning" data-on:submit__prevent="confirm('Ban this user? They will get nothing more from you.') && @post('/bans/add', {contentType: 'form', selector: '#ban-form'})">
-      <input name="username" data-bind:_banuser placeholder="Username" autocomplete="off" autocapitalize="off" required>
-      <button type="submit" data-attr:disabled="$_banning" data-class:busy="$_banning">Ban</button>
-    </form>
-    <div id="bans"></div>
-  </div>
-  <div data-show="$tab == 'settings'" class="area">
-    <div id="settings"></div>
-  </div>
-  <div data-show="$tab == 'triage'" class="area">
-    <p class="note">Why albums did not land cleanly, by cause, with every example, newest first.</p>
-    <div id="triage"></div>
-  </div>
+  {{ body|safe }}
 </main>
 <footer class="version"><a href="https://github.com/radiosilence/slsk-mcp/releases/tag/v{{ version }}">slsk-mcp {{ version }}</a></footer>
 </body>

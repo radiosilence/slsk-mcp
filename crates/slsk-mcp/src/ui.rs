@@ -1,7 +1,9 @@
 //! The web UI: server-rendered HTML patched over SSE by Datastar.
 //!
-//! One page. A stream pushes the status line and the open tab's jobs or
-//! uploads once a second, each only when it changed; searching streams its own results as peers answer. Every
+//! A page per address, drawn whole on the server around a shared layout;
+//! Datastar patches fragments of it in place. A stream pushes the status
+//! line and the page's own live parts once a second, each only when it
+//! changed; searching streams its own results as peers answer. Every
 //! route but sign-in, the probe and the static assets sits behind the
 //! session layer, which wraps the router whole so a route added later is
 //! protected by construction.
@@ -13,6 +15,7 @@ use std::time::Duration;
 
 use askama::Template;
 use axum::Router;
+use axum::body::Bytes;
 use axum::extract::{Path, Query, Request, State};
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::middleware::Next;
@@ -61,9 +64,9 @@ pub fn router(app: Arc<App>) -> Router {
         browsed: Default::default(),
     };
     let protected = Router::new()
-        .route("/", get(page))
-        // No content of its own to fetch.
-        .route("/uploads", get(page))
+        // Drawn whole by `pages`; nothing fetches a fragment of them.
+        .route("/", get(StatusCode::NOT_FOUND))
+        .route("/uploads", get(StatusCode::NOT_FOUND))
         .route("/stream", get(stream))
         .route("/search", post(search))
         .route("/grab", post(grab))
@@ -82,10 +85,7 @@ pub fn router(app: Arc<App>) -> Router {
         .merge(chat::routes())
         .merge(admin::routes())
         .layer(axum::middleware::from_fn(require_datastar_on_post))
-        .layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            tab_pages,
-        ))
+        .layer(axum::middleware::from_fn_with_state(state.clone(), pages))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             crate::auth::extract::require_session,
@@ -295,39 +295,77 @@ fn percent(done: u64, total: u64) -> u64 {
     (done * 100).checked_div(total).unwrap_or(0).min(100)
 }
 
+/// The pages, in the order the nav lists them: name, address and label.
+const PAGES: &[(&str, &str, &str)] = &[
+    ("albums", "/", "Albums"),
+    ("uploads", "/uploads", "Uploads"),
+    ("wishlist", "/wishlist", "Wishlist"),
+    ("library", "/library", "Library"),
+    ("browse", "/browse", "Browse"),
+    ("chat", "/chat", "Chat"),
+    ("bans", "/bans", "Bans"),
+    ("settings", "/settings", "Settings"),
+    ("triage", "/triage", "Triage"),
+];
+
+/// The layout every page shares: the status line, the nav and the live
+/// stream, around the page's own body.
 #[derive(Template)]
 #[template(path = "page.html")]
 struct Page {
     status: String,
-    jobs: String,
-    uploads: String,
     up_count: String,
     chat_count: String,
-    run: String,
     version: &'static str,
-    /// The tab the address names, open on arrival.
+    /// Which page this is, as `PAGES` names it.
     tab: &'static str,
-    /// The page's starting signals, from the address: the tab, where in it,
-    /// and a search to fill in.
+    /// The page's starting signals, from the address.
     signals: String,
-    /// The address carries an album search; run it again on arrival.
-    search: bool,
+    body: String,
 }
 
-/// Tabs with an address of their own, `/<tab>`. The albums tab is `/`.
-const TABS: &[&str] = &[
-    "uploads", "wishlist", "library", "browse", "chat", "bans", "settings", "triage",
-];
+struct NavItem {
+    name: &'static str,
+    href: &'static str,
+    label: &'static str,
+    active: bool,
+}
 
-/// A browser asking for a tab's address gets the page open on that tab. The
-/// same address fetched by the page itself (`Datastar-Request`) is the
-/// tab's content, and goes on to its own handler.
-async fn tab_pages(State(s): State<UiState>, request: Request, next: Next) -> Response {
+impl Page {
+    fn nav(&self) -> Vec<NavItem> {
+        PAGES
+            .iter()
+            .map(|&(name, href, label)| NavItem {
+                name,
+                href,
+                label,
+                active: name == self.tab,
+            })
+            .collect()
+    }
+    fn title(&self) -> &'static str {
+        PAGES
+            .iter()
+            .find(|p| p.0 == self.tab)
+            .map_or("slsk", |p| p.2)
+    }
+}
+
+#[derive(Template)]
+#[template(path = "pages/albums.html")]
+struct AlbumsPage {
+    q: String,
+    lossless: bool,
+    jobs: String,
+}
+
+/// A browser asking for a page's address gets the whole page. The same
+/// address fetched by the page itself (`Datastar-Request`) is a fragment of
+/// it, and goes on to its own handler.
+async fn pages(State(s): State<UiState>, request: Request, next: Next) -> Response {
     if request.method() == http::Method::GET
         && !request.headers().contains_key("datastar-request")
-        && let Some(tab) = TABS
-            .iter()
-            .find(|t| request.uri().path().strip_prefix('/') == Some(**t))
+        && let Some(&(tab, ..)) = PAGES.iter().find(|p| request.uri().path() == p.1)
     {
         return match render_page(&s, tab, request.uri()).await {
             Ok(html) => html.into_response(),
@@ -335,18 +373,6 @@ async fn tab_pages(State(s): State<UiState>, request: Request, next: Next) -> Re
         };
     }
     next.run(request).await
-}
-
-async fn page(
-    State(s): State<UiState>,
-    uri: http::Uri,
-) -> Result<Html<String>, crate::error::AppError> {
-    let tab = TABS
-        .iter()
-        .find(|t| uri.path().strip_prefix('/') == Some(**t))
-        .copied()
-        .unwrap_or("albums");
-    render_page(&s, tab, &uri).await
 }
 
 /// A user's shares at a folder (the top when `key` is empty).
@@ -371,12 +397,11 @@ fn place_url(path: &str, params: &[(&str, &str)]) -> String {
     }
 }
 
-/// Where `tab` now is, for the address bar (`_url`) and for coming back to
-/// the tab (`_at`). Every action that moves within a tab reports it, so a
-/// reload, a shared link or back and forward return to the same place: the
-/// address is the one the page fetches to draw it.
-fn place(tab: &str, url: &str) -> Event {
-    signals(&serde_json::json!({ "_url": url, "_at": { tab: url } }).to_string())
+/// Where the page now is, for the address bar. Every action that moves
+/// within a page reports it, so a reload, a shared link or back and forward
+/// return to the same place: the address is the one that draws it.
+fn place(url: &str) -> Event {
+    signals(&serde_json::json!({ "_url": url }).to_string())
 }
 
 async fn render_page(
@@ -390,48 +415,54 @@ async fn render_page(
             .into_owned()
             .collect();
     let param = |k: &str| field(&params, k).unwrap_or_default().to_string();
-    let q = if tab == "albums" {
-        param("q")
-    } else {
-        String::new()
+    let q = param("q");
+    let lossless = q.is_empty() || !param("lossless").is_empty();
+    let lib = |k: &str| {
+        if tab == "library" {
+            param(k)
+        } else {
+            String::new()
+        }
     };
     let signals = serde_json::json!({
-        "q": q,
-        "lossless": q.is_empty() || !param("lossless").is_empty(),
+        "q": if tab == "albums" { q.as_str() } else { "" },
+        "lossless": lossless,
         "busy": false,
-        "tab": tab,
-        "settled": PAGE,
+        "jobs": PAGE,
         "history": PAGE,
         "_url": url,
-        "_at": { tab: url },
-        "_libq": if tab == "library" { param("q") } else { String::new() },
-        "_libsince": if tab == "library" { param("since") } else { String::new() },
-        "_libfrom": if tab == "library" { param("from") } else { String::new() },
-        "_libshow": if tab == "library" { param("show") } else { String::new() },
-        "_libalbum": if tab == "library" { param("album") } else { String::new() },
+        "_libq": lib("q"),
+        "_libsince": lib("since"),
+        "_libfrom": lib("from"),
+        "_libshow": lib("show"),
+        "_libalbum": lib("album"),
     })
     .to_string();
-    // Hidden tabs start empty: the stream fills the open one, and drawing
-    // the others first held up a page opened on a tab of its own.
+    let body = match tab {
+        "albums" => AlbumsPage {
+            q,
+            lossless,
+            jobs: jobs_html(&s.app, PAGE).await,
+        }
+        .render()
+        .unwrap_or_default(),
+        "uploads" => uploads_html(&s.app, PAGE).await,
+        "wishlist" => wishlist::page(&s.app).await,
+        "library" => library::page(s, &q),
+        "browse" => browse::page(&param("username")),
+        "chat" => chat::page(&s.app, &params).await,
+        "bans" => admin::bans_page(&s.app).await,
+        "settings" => admin::settings_page(&s.app).await,
+        _ => admin::triage_page(&s.app, &params).await,
+    };
     let page = Page {
         status: status_html(&s.app).await,
-        jobs: if tab == "albums" {
-            jobs_html(&s.app, PAGE).await
-        } else {
-            r#"<div id="jobs" class="jobs"></div>"#.into()
-        },
-        uploads: if tab == "uploads" {
-            uploads_html(&s.app, PAGE).await
-        } else {
-            r#"<div id="uploads" class="uploads"></div>"#.into()
-        },
         up_count: up_count_html(&s.app),
         chat_count: chat::count_html(&s.app).await,
-        run: library::run_html(s),
         version: env!("CARGO_PKG_VERSION"),
         tab,
-        search: !q.is_empty(),
         signals,
+        body,
     };
     Ok(Html(page.render().map_err(anyhow::Error::from)?))
 }
@@ -489,9 +520,12 @@ async fn status_html(app: &App) -> String {
 }
 
 /// Rows shown at first, and added by each "Show more", in the lists that
-/// grow without end: settled jobs and upload history. Rendering every row
-/// made the page heavy enough to crash phone browsers.
+/// grow without end: each kind of job, and upload history. A phone browser
+/// cannot hold many thousands of them.
 const PAGE: i64 = 500;
+
+/// The most rows a page may ask for, whatever its signals say.
+const MOST: i64 = 100_000;
 
 /// A job that landed or was cancelled, as its one line.
 struct Settled {
@@ -539,7 +573,7 @@ struct JobsView {
     underway: Vec<Job>,
     /// Imported, or cancelled by someone: the newest few hundred.
     settled: Vec<Settled>,
-    /// Older settled jobs exist beyond those shown.
+    /// Older jobs exist beyond those shown.
     more: bool,
     /// Queue places by job id, for those waiting in a peer's queue.
     places: HashMap<String, u32>,
@@ -726,14 +760,17 @@ impl JobsView {
     }
 }
 
-/// Every job in hand, and the newest `settled` of those done with.
-async fn jobs_html(app: &App, settled: i64) -> String {
-    let (active, mut done) = crate::db::job_board(&app.db, settled + 1)
+/// The newest `shown` jobs in hand, and the newest `shown` of those done
+/// with.
+async fn jobs_html(app: &App, shown: i64) -> String {
+    let shown = shown.clamp(1, MOST);
+    let (mut active, mut done) = crate::db::job_board(&app.db, shown + 1)
         .await
         .inspect_err(|e| tracing::warn!(error = %e, "could not list jobs"))
         .unwrap_or_default();
-    let more = done.len() as i64 > settled;
-    done.truncate(settled.max(0) as usize);
+    let more = active.len() as i64 > shown || done.len() as i64 > shown;
+    active.truncate(shown as usize);
+    done.truncate(shown as usize);
     let jobs = graphql::job_views(app, active).await.unwrap_or_else(|e| {
         tracing::warn!(error = ?e, "could not show jobs");
         Vec::new()
@@ -885,12 +922,13 @@ async fn uploads_html(app: &App, shown: i64) -> String {
         .and_hms_opt(0, 0, 0)
         .map(|t| t.and_utc())
         .unwrap_or(now);
+    let shown = shown.clamp(1, MOST);
     let mut history = crate::db::recent_uploads(&app.db, shown + 1)
         .await
         .inspect_err(|e| tracing::warn!(error = %e, "could not read upload history"))
         .unwrap_or_default();
     let more = history.len() as i64 > shown;
-    history.truncate(shown.max(0) as usize);
+    history.truncate(shown as usize);
     let today = crate::db::upload_totals(&app.db, midnight)
         .await
         .unwrap_or_default();
@@ -912,30 +950,28 @@ async fn uploads_html(app: &App, shown: i64) -> String {
     .unwrap_or_default()
 }
 
-/// What the page has open, from the signals Datastar sends with the
-/// stream's request.
+/// How many rows of the long lists the page shows, from the signals
+/// Datastar sends with the stream's request.
 #[derive(serde::Deserialize)]
 #[serde(default)]
 struct Shown {
-    tab: String,
-    settled: i64,
+    jobs: i64,
     history: i64,
 }
 
 impl Default for Shown {
     fn default() -> Self {
         Self {
-            tab: "albums".into(),
-            settled: PAGE,
+            jobs: PAGE,
             history: PAGE,
         }
     }
 }
 
-/// Re-render the live parts once a second, sending each only when it
-/// changed, and the jobs and uploads only while their tab is open: morphing
-/// thousands of unchanged rows every second is what made the page crawl.
-/// The page reopens the stream when the tab or the rows shown change.
+/// Re-render the live parts of the page `page` names once a second, sending
+/// each only when it changed: the status line and the nav's badges on every
+/// page, and the jobs, uploads or library run on their own. The page
+/// reopens the stream when the rows it shows change.
 ///
 /// The stream ends itself after a while and the page reopens it on an
 /// interval: a stream can die without either end noticing (a suspended
@@ -946,6 +982,7 @@ async fn stream(
     Query(q): Query<HashMap<String, String>>,
 ) -> impl IntoResponse {
     let app = s.app.clone();
+    let page = q.get("page").cloned().unwrap_or_default();
     let shown: Shown = q
         .get("datastar")
         .and_then(|j| serde_json::from_str(j).ok())
@@ -955,19 +992,14 @@ async fn stream(
         // its head and the albums done since: it lists every album, which
         // in a large run is long.
         let mut run_sent = library::RunSent::default();
-        let mut sent: [String; 5] = Default::default();
+        let mut sent: [String; 4] = Default::default();
         for _ in 0..20 {
             let parts = [
                 status_html(&app).await,
-                if shown.tab == "albums" {
-                    jobs_html(&app, shown.settled).await
-                } else {
-                    String::new()
-                },
-                if shown.tab == "uploads" {
-                    uploads_html(&app, shown.history).await
-                } else {
-                    String::new()
+                match page.as_str() {
+                    "albums" => jobs_html(&app, shown.jobs).await,
+                    "uploads" => uploads_html(&app, shown.history).await,
+                    _ => String::new(),
                 },
                 up_count_html(&app),
                 chat::count_html(&app).await,
@@ -978,8 +1010,10 @@ async fn stream(
                     *last = html;
                 }
             }
-            for e in library::run_events(&s, &mut run_sent) {
-                yield Ok(e);
+            if page == "library" {
+                for e in library::run_events(&s, &mut run_sent) {
+                    yield Ok(e);
+                }
             }
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
@@ -1052,16 +1086,13 @@ async fn search(State(s): State<UiState>, axum::Form(form): axum::Form<SearchFor
         lossless: form.lossless,
         ..Default::default()
     };
-    let here = place(
-        "albums",
-        &place_url(
-            "/",
-            &[
-                ("q", &query),
-                ("lossless", if form.lossless { "1" } else { "" }),
-            ],
-        ),
-    );
+    let here = place(&place_url(
+        "/",
+        &[
+            ("q", &query),
+            ("lossless", if form.lossless { "1" } else { "" }),
+        ],
+    ));
     let rx = match engine.pace().await {
         Ok(()) => engine.search(&query),
         Err(e) => Err(e),
@@ -1110,7 +1141,7 @@ async fn grab(State(s): State<UiState>, axum::Form(form): axum::Form<SearchForm>
         ..Default::default()
     });
     match graphql::grab(&s.app, form.q.trim(), 10, filter, false).await {
-        Ok(_) => done(),
+        Ok(_) => done(&s.app, PAGE).await,
         Err(e) => one(format!(
             r#"<div id="flash" class="flash error">{}</div>"#,
             askama_escape(&e.message)
@@ -1159,6 +1190,7 @@ async fn download(
 async fn job_action(
     State(s): State<UiState>,
     Path((id, action)): Path<(Uuid, String)>,
+    body: Bytes,
 ) -> Response {
     let jobs = &s.app.jobs;
     let result = match action.as_str() {
@@ -1183,28 +1215,42 @@ async fn job_action(
         _ => return StatusCode::NOT_FOUND.into_response(),
     };
     match result {
-        Ok(()) => done(),
+        Ok(()) => done(&s.app, jobs_shown(&body)).await,
         Err(e) => failed(&e),
     }
 }
 
-/// Any earlier error cleared: the change on the card, which the stream
-/// draws within a second, is the confirmation. The stream alone draws the
-/// job list, so it keeps the rows the page asked to see.
-fn done() -> Response {
-    one("<div id=\"flash\"></div>".into())
+/// The job list as it now stands, as many rows as the page shows, and any
+/// earlier error cleared: the change on the card is the confirmation, and
+/// the button stays busy until it is drawn.
+async fn done(app: &App, shown: i64) -> Response {
+    one(format!(
+        "{}\n<div id=\"flash\"></div>",
+        jobs_html(app, shown).await
+    ))
+}
+
+/// How many jobs the page shows, from the signals a JSON request carries.
+fn jobs_shown(body: &[u8]) -> i64 {
+    serde_json::from_slice::<Shown>(body)
+        .unwrap_or_default()
+        .jobs
 }
 
 fn failed(e: &anyhow::Error) -> Response {
     one(flash_err(&format!("{e:#}")))
 }
 
-async fn resolve(State(s): State<UiState>, Path((id, release)): Path<(Uuid, String)>) -> Response {
+async fn resolve(
+    State(s): State<UiState>,
+    Path((id, release)): Path<(Uuid, String)>,
+    body: Bytes,
+) -> Response {
     if Uuid::parse_str(&release).is_err() {
         return StatusCode::BAD_REQUEST.into_response();
     }
     match s.app.jobs.import_soon(id, false, Some(release)).await {
-        Ok(()) => done(),
+        Ok(()) => done(&s.app, jobs_shown(&body)).await,
         Err(e) => failed(&e),
     }
 }
@@ -1234,7 +1280,7 @@ async fn resolve_pasted(
         .import_soon(id, false, Some(release.to_string()))
         .await
     {
-        Ok(()) => done(),
+        Ok(()) => done(&s.app, PAGE).await,
         Err(e) => failed(&e),
     }
 }
@@ -1268,7 +1314,7 @@ async fn cancel_upload(
     if let (Some(e), Some(name)) = (s.app.session.engine(), f.filename) {
         e.cancel_upload(&f.username, &RawStr::from(name));
     }
-    one("<div id=\"flash\"></div>".into())
+    one(uploads_html(&s.app, PAGE).await)
 }
 
 async fn ban(State(s): State<UiState>, axum::Form(f): axum::Form<UserFileForm>) -> Response {
