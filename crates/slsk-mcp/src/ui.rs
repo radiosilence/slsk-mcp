@@ -1037,6 +1037,17 @@ struct SearchForm {
     lossless: bool,
 }
 
+/// A search's view, all of it in the address.
+#[derive(serde::Deserialize)]
+struct SearchQuery {
+    #[serde(default)]
+    q: String,
+    #[serde(default)]
+    lossless: bool,
+    /// How many folders are drawn.
+    shown: Option<usize>,
+}
+
 /// Folders shown at first, and added by each "Show more", in search results.
 /// A generic query is answered with thousands, and a page drawing them all
 /// every second stops responding.
@@ -1101,23 +1112,20 @@ impl ResultsView {
 /// once a second, the first `shown` of them. The search is shared with any of the same words from the
 /// last ten minutes, so reopening or reloading the page, or showing more,
 /// sends nothing to the network.
-async fn search(State(s): State<UiState>, Query(q): Query<HashMap<String, String>>) -> Response {
+async fn search(State(s): State<UiState>, Query(view): Query<SearchQuery>) -> Response {
     let Some(engine) = s.app.session.engine().cloned() else {
         return one(r#"<div id="results" class="note">Sign in to Soulseek first.</div>"#.into());
     };
-    let query = q.get("q").map(|q| q.trim().to_string()).unwrap_or_default();
+    let query = view.q.trim().to_string();
     if query.is_empty() {
         return one(r#"<div id="results"></div>"#.into());
     }
     let filter = Filter {
-        lossless: q.get("lossless").is_some_and(|v| !v.is_empty()),
+        lossless: view.lossless,
         ..Default::default()
     };
     let lossless = if filter.lossless { "true" } else { "" };
-    let found = q
-        .get("shown")
-        .and_then(|n| n.parse::<usize>().ok())
-        .map_or(FOUND, |n| n.clamp(1, MOST as usize));
+    let found = view.shown.map_or(FOUND, |n| n.clamp(1, MOST as usize));
     let next = place_url(
         "/search",
         &[
