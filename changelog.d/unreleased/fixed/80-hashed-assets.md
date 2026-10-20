@@ -1,0 +1,1 @@
+- **Web UI assets are versioned.** The stylesheet and Datastar are linked by a hash of their contents and cached for good, so after an upgrade a browser fetches the new build's copies instead of reusing stale ones.

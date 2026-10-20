@@ -10,13 +10,13 @@
 
 use std::collections::HashMap;
 use std::convert::Infallible;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use askama::Template;
 use axum::Router;
 use axum::body::Bytes;
-use axum::extract::{Path, Query, Request, State};
+use axum::extract::{Path, Query, RawQuery, Request, State};
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -38,6 +38,8 @@ mod admin;
 mod browse;
 mod chat;
 mod library;
+#[cfg(test)]
+mod tests;
 mod wishlist;
 
 #[derive(Clone)]
@@ -96,21 +98,11 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/healthz", get(|| async { "ok" }))
         .route(
             "/assets/datastar.js",
-            get(|| async {
-                (
-                    [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
-                    include_bytes!("../assets/datastar.js").as_slice(),
-                )
-            }),
+            get(|q: RawQuery| async { asset(DATASTAR_JS, "text/javascript; charset=utf-8", q) }),
         )
         .route(
             "/assets/app.css",
-            get(|| async {
-                (
-                    [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
-                    include_bytes!("../assets/app.css").as_slice(),
-                )
-            }),
+            get(|q: RawQuery| async { asset(APP_CSS, "text/css; charset=utf-8", q) }),
         )
         .route(
             "/assets/icon-32.png",
@@ -126,6 +118,38 @@ pub fn router(app: Arc<App>) -> Router {
         )
         .layer(axum::middleware::from_fn(security_headers))
         .with_state(state)
+}
+
+const APP_CSS: &str = include_str!("../assets/app.css");
+const DATASTAR_JS: &str = include_str!("../assets/datastar.js");
+
+/// `path` with a hash of `body`, the asset served there, so a page from a
+/// new build fetches its own stylesheet and script rather than a cached copy
+/// of the previous build's.
+fn versioned(path: &str, body: &str) -> String {
+    let hash = body.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+    });
+    format!("{path}?v={hash:016x}")
+}
+
+static CSS_URL: LazyLock<String> = LazyLock::new(|| versioned("/assets/app.css", APP_CSS));
+static DATASTAR_URL: LazyLock<String> =
+    LazyLock::new(|| versioned("/assets/datastar.js", DATASTAR_JS));
+
+/// A text asset. Requested by its hashed URL (`?v=`), it never changes, so it
+/// is kept for good; a bare URL is rechecked hourly.
+fn asset(body: &'static str, kind: &'static str, query: RawQuery) -> Response {
+    let cache = if query.0.is_some_and(|q| q.starts_with("v=")) {
+        "public, max-age=31536000, immutable"
+    } else {
+        "public, max-age=3600"
+    };
+    (
+        [(header::CONTENT_TYPE, kind), (header::CACHE_CONTROL, cache)],
+        body,
+    )
+        .into_response()
 }
 
 /// Public like the other assets: a browser asks for the icon before anyone signs in.
@@ -342,6 +366,12 @@ impl Page {
                 active: name == self.tab,
             })
             .collect()
+    }
+    fn css(&self) -> &str {
+        &CSS_URL
+    }
+    fn datastar(&self) -> &str {
+        &DATASTAR_URL
     }
     fn title(&self) -> &'static str {
         PAGES

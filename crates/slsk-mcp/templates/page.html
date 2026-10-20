@@ -8,8 +8,8 @@
 <link rel="icon" href="/assets/icon-32.png" sizes="32x32">
 <link rel="icon" href="/assets/icon-192.png" sizes="192x192">
 <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
-<link rel="stylesheet" href="/assets/app.css">
-<script type="module" src="/assets/datastar.js"></script>
+<link rel="stylesheet" href="{{ self.css() }}">
+<script type="module" src="{{ self.datastar() }}"></script>
 </head>
 <body data-signals="{{ signals }}"
   data-effect="$_url && $_url != location.pathname + location.search && history.pushState(null, '', $_url)"
