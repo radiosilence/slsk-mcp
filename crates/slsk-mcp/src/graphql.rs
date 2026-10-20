@@ -1684,7 +1684,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn the_same_words_join_the_earlier_search() {
         let sent = AtomicUsize::new(0);
-        let mut first = search("reuse  Test", 2, &sent).await;
+        let mut first = search("Reuse Test", 2, &sent).await;
         // Asked again while the first is still listening, as a page
         // reopened mid-search does, then once it has finished.
         let mut during = search(" reuse test", 2, &sent).await;
