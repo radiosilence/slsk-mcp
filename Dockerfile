@@ -1,5 +1,7 @@
-# slsk-mcp as a container. CI builds the static musl binary and this image
-# only copies it in, so `docker build .` by hand needs dist/ populated first.
+# slsk-mcp as a container. Packages a binary built outside it: CI builds the
+# static musl binary per architecture (the `linux-build` job) and builds this
+# with dist/ as the context, holding <arch>/slsk-mcp, the same binaries a
+# release attaches. By hand: `docker build -f Dockerfile dist`.
 
 FROM scratch
 
@@ -11,7 +13,7 @@ ARG TARGETARCH
 COPY --from=gcr.io/distroless/static:latest \
      /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 
-COPY dist/slsk-mcp-linux-${TARGETARCH}-musl /slsk-mcp
+COPY ${TARGETARCH}/slsk-mcp /slsk-mcp
 
 EXPOSE 8080 8081
 

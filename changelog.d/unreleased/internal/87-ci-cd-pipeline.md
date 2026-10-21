@@ -1,0 +1,1 @@
+- **One CI/CD pipeline, gated by `Checks`.** `ci.yml` becomes `ci-cd.yml`. Jobs run only for the parts of the repository a change touches, and a single `Checks` job reports the result. The static binaries are built once; the image is assembled from them and pushed by commit, then retagged as `main` and, on a release, with its version once the checks pass.
