@@ -623,7 +623,7 @@ jobs:
     needs: [changes, checks, linux-build, container-release, publish-chart]
     # Every need having run, not merely not failed: a release without one of
     # its parts is not a release.
-    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') && !contains(needs.*.result, 'skipped') && needs.changes.outputs.release == 'true' }}
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.checks.result == 'success' && needs.linux-build.result == 'success' && needs.container-release.result == 'success' && needs.publish-chart.result == 'success' && needs.changes.outputs.release == 'true' }}
     permissions:
       contents: write
     env:
