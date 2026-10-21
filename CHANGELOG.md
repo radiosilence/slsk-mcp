@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.2
+
+### Security
+
+- **Dependencies updated for RustSec advisories.** Fixes rustls (RUSTSEC-2026-0346/0347/0348/0349), rustls-webpki (RUSTSEC-2026-0382) and webpki-root-certs (RUSTSEC-2026-0383).
+
+### Internal
+
+- **One CI/CD pipeline, gated by `Checks`.** `ci.yml` becomes `ci-cd.yml`. Jobs run only for the parts of the repository a change touches, and a single `Checks` job reports the result. The static binaries are built once; the image is assembled from them and pushed by commit, then retagged as `main` and, on a release, with its version once the checks pass.
+- **A release run is no longer cancelled while it waits to move the image tag.** A concurrency group holds one pending job and cancels it when another queues, so release runs now wait in a group of their own.
+
 ## 0.5.1
 
 ### Fixed
