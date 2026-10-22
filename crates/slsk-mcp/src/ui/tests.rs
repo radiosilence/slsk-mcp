@@ -23,7 +23,7 @@ fn only_hashed_asset_urls_are_cached_for_good() {
 mod library {
     use axum::extract::Query;
 
-    use crate::library::AlbumMove;
+    use crate::library::{AlbumMove, by_path};
     use crate::ui::library::*;
 
     #[test]
