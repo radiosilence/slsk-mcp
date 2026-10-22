@@ -461,7 +461,7 @@ impl Jobs {
         let part = self.fetch_file(id);
         let mut file = tokio::fs::File::create(&part).await?;
         let mut received = 0u64;
-        let mut head = Vec::new();
+        let mut head = Vec::<u8>::with_capacity(4);
         while let Some(chunk) = resp
             .chunk()
             .await
