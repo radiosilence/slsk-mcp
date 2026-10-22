@@ -102,7 +102,7 @@ pub(crate) struct JobFile {
 
 #[derive(SimpleObject)]
 pub(crate) struct TriageCause {
-    /// peer_failed, stalled_peer, corrupt_copy, no_audio, requested, untagged, no_candidates,
+    /// peer_failed, url_failed, stalled_peer, corrupt_copy, no_audio, requested, untagged, no_candidates,
     /// incomplete, extra_files, weak_match, lossy_source, upsampled,
     /// mb_unavailable or import_error.
     pub cause: String,
@@ -132,6 +132,9 @@ pub(crate) struct Job {
     pub error: Option<String>,
     pub username: Option<String>,
     pub folder: Option<String>,
+    /// For a job started by `importUrl`, the host its file comes from. The
+    /// URL itself is not given back: download links carry access tokens.
+    pub host: Option<String>,
     /// Other sources that matched the same request, tried if this one fails;
     /// `nextSource` moves to the next one on request.
     pub alternates: usize,
@@ -198,11 +201,16 @@ fn view_of(app: &App, job: db::Job, rows: Vec<db::JobFile>, with_files: bool) ->
             });
         }
     }
-    let (username, folder) = match &job.source.0 {
+    // A fetch from a URL has no files to count until it is unpacked.
+    if let Some((received, size)) = app.jobs.fetched(job.id) {
+        (done, total) = (received, size);
+    }
+    let (username, folder, host) = match &job.source.0 {
         Source::Soulseek {
             username, folder, ..
-        } => (Some(username.clone()), Some(folder.clone())),
-        Source::Files { username } => (Some(username.clone()), None),
+        } => (Some(username.clone()), Some(folder.clone()), None),
+        Source::Files { username } => (Some(username.clone()), None, None),
+        Source::Url { url } => (None, None, Some(crate::jobs::host(url))),
     };
     Job {
         id: ID(job.id.to_string()),
@@ -211,6 +219,7 @@ fn view_of(app: &App, job: db::Job, rows: Vec<db::JobFile>, with_files: bool) ->
         error: job.error,
         username,
         folder,
+        host,
         alternates: job.alternates.0.len(),
         total_bytes: total,
         downloaded_bytes: done,
@@ -1587,6 +1596,19 @@ impl Mutation {
     ) -> Result<Job> {
         let app = app(ctx);
         let job = grab(app, &query, wait_seconds, filter, refetch).await?;
+        job_view(app, job, true).await
+    }
+
+    /// Fetch an album from an http or https URL, such as a Bandcamp
+    /// purchase's download link, and import it as `grab` does: tagged against
+    /// MusicBrainz and filed, or held in `review` or `suspect` for the same
+    /// decisions. The URL serves a zip of the album, which is unpacked, or a
+    /// single audio file. Poll `job(id)` for progress; it ends `imported`,
+    /// `review`, `suspect` or `failed`. There is no other source to fall back
+    /// to, so `nextSource` is refused; `retryJob` fetches the URL again.
+    async fn import_url(&self, ctx: &Context<'_>, url: String) -> Result<Job> {
+        let app = app(ctx);
+        let job = app.jobs.from_url(&url).await?;
         job_view(app, job, true).await
     }
 

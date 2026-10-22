@@ -1,0 +1,1 @@
+- **Albums from a download URL.** `importUrl(url)`, or the link field on the Albums page, fetches an http or https link such as a Bandcamp purchase, unpacks it if it is a zip, and imports it through the same analysis, matching and review as a Soulseek download, so a purchase is checked before it is filed. Only the host is logged or shown, since such links carry access tokens.

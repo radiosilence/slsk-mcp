@@ -83,6 +83,19 @@ tested for interoperability against the `soulseek-rs` client.
    its MusicBrainz ID or URL. For a release MusicBrainz lacks, the files can
    be imported as-is by their own tags when those describe one album.
 
+### From a URL
+
+An album bought elsewhere, such as on Bandcamp, arrives as a download link
+rather than a peer's folder. `importUrl(url)`, or the link field under the
+Albums page's search, fetches it over HTTP into the same place a download
+lands, unpacks it if it is a zip (one folder wrapping everything is
+unwrapped, and an entry naming a path outside the archive refuses it), and
+continues from step 3. The tags are checked and chosen in the same review
+as any other album, so a purchase is not filed until it matches or a person
+has looked at it. There is no other copy to fall back to; a failed fetch is
+retried from the same link. Only the link's host is logged or shown, since
+purchase links carry access tokens, and a fetch is capped at 8 GiB.
+
 ### The transcode check
 
 A lossy encoder low-passes its input, so a FLAC made from an MP3 has a

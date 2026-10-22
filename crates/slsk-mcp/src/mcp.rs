@@ -150,6 +150,10 @@ impl ServerHandler for SlskMcp {
                  MusicBrainz and files it into the library. It returns a job; poll `job(id)` until `status` is \
                  `imported`, `review` or `failed`. Downloads take minutes to hours depending on the peer, so report \
                  progress rather than waiting in a loop.\n\n\
+                 For an album the user has bought, as on Bandcamp, `importUrl(url)` fetches its download link \
+                 (a zip of the album, or one audio file) and imports it the same way, ending in the same \
+                 statuses with the same review actions. It has no other copy to move to, so `nextSource` does \
+                 not apply.\n\n\
                  A job in `review` downloaded fine but the tagger was not sure which release it is. Its `candidates` \
                  are MusicBrainz releases with a distance (0 is perfect); pick the right one, asking the user if it \
                  is not obvious, and call `resolveJob(id, releaseId)`. If no candidate fits these files (wrong \
