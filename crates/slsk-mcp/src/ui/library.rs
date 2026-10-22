@@ -32,7 +32,7 @@ pub(super) fn routes() -> Router<UiState> {
 }
 
 /// Terms that match exactly the albums at `paths`, as alternatives.
-fn by_path<'a>(paths: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+pub(super) fn by_path<'a>(paths: impl IntoIterator<Item = &'a str>) -> Vec<String> {
     let mut query = Vec::new();
     for p in paths {
         if !query.is_empty() {
@@ -56,7 +56,7 @@ pub(super) enum Change {
 }
 
 impl Change {
-    fn of(m: &AlbumMove) -> Self {
+    pub(super) fn of(m: &AlbumMove) -> Self {
         let Some(to) = m.to.as_deref() else {
             return Self::Refused;
         };
@@ -85,7 +85,7 @@ impl Change {
 
 /// Every run of four digits replaced, so paths differing only in a year
 /// compare equal.
-fn without_years(s: &str) -> String {
+pub(super) fn without_years(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut digits = String::new();
     for c in s.chars().chain(std::iter::once('\0')) {
@@ -160,16 +160,16 @@ fn trimmed<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
 
 /// The album an action works on, with the list it was opened from.
 #[derive(serde::Deserialize)]
-struct AlbumQuery {
+pub(super) struct AlbumQuery {
     #[serde(flatten)]
-    filter: Filter,
+    pub(super) filter: Filter,
     #[serde(default)]
-    path: String,
+    pub(super) path: String,
 }
 
 impl Filter {
     /// The filter a posted form carries alongside its other fields.
-    fn from_fields(f: &[(String, String)]) -> Self {
+    pub(super) fn from_fields(f: &[(String, String)]) -> Self {
         use serde::Deserialize as _;
         use serde::de::value::{Error, MapDeserializer};
         let pairs = f.iter().map(|(k, v)| (k.as_str(), v.as_str()));
@@ -178,7 +178,10 @@ impl Filter {
 
     /// The earliest import time the filter admits, in seconds. Days,
     /// weeks (from Monday) and months start at midnight where `now` is.
-    fn since_secs<Tz: chrono::TimeZone>(&self, now: chrono::DateTime<Tz>) -> Option<i64> {
+    pub(super) fn since_secs<Tz: chrono::TimeZone>(
+        &self,
+        now: chrono::DateTime<Tz>,
+    ) -> Option<i64> {
         let tz = now.timezone();
         let day = |d: chrono::NaiveDate| {
             tz.from_local_datetime(&d.and_hms_opt(0, 0, 0)?)
@@ -205,7 +208,7 @@ impl Filter {
 
     /// The query: the search's terms, the import date, then newest first.
     /// A sort in the search comes before the default one.
-    fn terms(&self) -> Vec<String> {
+    pub(super) fn terms(&self) -> Vec<String> {
         let mut terms: Vec<String> = self.q.split_whitespace().map(String::from).collect();
         if let Some(t) = self.since_secs(chrono::Local::now()) {
             terms.push(format!("added:{t}.."));
@@ -214,7 +217,7 @@ impl Filter {
         terms
     }
 
-    fn url(&self) -> String {
+    pub(super) fn url(&self) -> String {
         super::place_url("/library", &self.params())
     }
 
@@ -810,7 +813,7 @@ struct Ask {
 /// A MusicBrainz release id from what was pasted: the id, or a link to the
 /// release or any of its pages. Links to anything else on MusicBrainz are
 /// refused. Discogs ids (`discogs:123`) pass through.
-fn release_id(s: &str) -> Option<String> {
+pub(super) fn release_id(s: &str) -> Option<String> {
     let s = s.trim();
     if s.starts_with("discogs:") {
         return Some(s.to_string());
@@ -929,15 +932,15 @@ impl FileChanges {
     }
 }
 
-struct Lyric {
-    file: String,
-    synced: bool,
-    lines: usize,
-    first: String,
+pub(super) struct Lyric {
+    pub(super) file: String,
+    pub(super) synced: bool,
+    pub(super) lines: usize,
+    pub(super) first: String,
 }
 
 impl Lyric {
-    fn of(l: &sift::PlannedLyrics) -> Self {
+    pub(super) fn of(l: &sift::PlannedLyrics) -> Self {
         let text: Vec<&str> = l
             .text
             .lines()
@@ -1354,7 +1357,10 @@ fn consensus(tracks: &[sift::meta::Track], field: &str) -> (Option<String>, bool
 /// the files disagree on and left blank is left alone; blanking one they
 /// agree on clears it. A number typed as anything but digits is refused,
 /// rather than written as no number at all.
-fn edits_from(tracks: &[sift::meta::Track], form: &[(String, String)]) -> anyhow::Result<TagEdits> {
+pub(super) fn edits_from(
+    tracks: &[sift::meta::Track],
+    form: &[(String, String)],
+) -> anyhow::Result<TagEdits> {
     let raw = |k: &str| {
         form.iter()
             .find(|(n, _)| n == k)
@@ -1847,286 +1853,4 @@ async fn run(
         });
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn change(from: &str, to: Option<&str>) -> Change {
-        Change::of(&AlbumMove {
-            from: from.into(),
-            to: to.map(Into::into),
-            refused: to.is_none().then(|| "collides".into()),
-            files: 1,
-        })
-    }
-
-    #[test]
-    fn a_move_is_named_for_the_least_it_changes() {
-        let from = "/m/Burial/(2007) Untrue [FLAC]";
-        assert_eq!(change(from, Some(from)), Change::FileNames);
-        assert_eq!(
-            change(
-                "/m/Burial/(2007) Untrue_ Remixes [FLAC]",
-                Some("/m/Burial/(2007) Untrue- Remixes [FLAC]")
-            ),
-            Change::Spelling
-        );
-        assert_eq!(
-            change(from, Some("/m/Burial/(2008) Untrue [FLAC]")),
-            Change::Year
-        );
-        assert_eq!(
-            change(
-                "/m/Burial_/(2007) Untrue [FLAC]",
-                Some("/m/Burial-/(2008) Untrue [FLAC]")
-            ),
-            Change::Year
-        );
-        assert_eq!(
-            change(from, Some("/m/Kode9 & Burial/(2007) Untrue [FLAC]")),
-            Change::Tags
-        );
-        assert_eq!(change(from, None), Change::Refused);
-    }
-
-    #[test]
-    fn only_four_digit_runs_count_as_years() {
-        assert_eq!(without_years("(1999) 101 Hits 12345"), "(#) 101 Hits 12345");
-        assert_ne!(
-            without_years("/m/A/(2001) X"),
-            without_years("/m/A/(2001) X 2")
-        );
-    }
-
-    #[test]
-    fn paths_become_exact_alternatives() {
-        assert_eq!(
-            by_path(["/m/a", "/m/b"]),
-            vec!["path:=/m/a", ",", "path:=/m/b"]
-        );
-        let q = sift::library::Query::parse(&by_path(["/m/a, b+", "/m/-c"])).unwrap();
-        assert_eq!(q.sort.len(), 0);
-    }
-
-    fn filter(since: &str, from: &str) -> Filter {
-        Filter {
-            since: since.into(),
-            from: from.into(),
-            ..Default::default()
-        }
-    }
-
-    #[test]
-    fn an_import_date_becomes_a_lower_bound() {
-        // A Sunday afternoon.
-        let now = chrono::DateTime::parse_from_rfc3339("2026-10-18T15:30:00Z")
-            .unwrap()
-            .to_utc();
-        let midnight = now.date_naive().and_hms_opt(0, 0, 0).unwrap().and_utc();
-        assert_eq!(
-            filter("today", "").since_secs(now),
-            Some(midnight.timestamp())
-        );
-        assert_eq!(
-            filter("week", "").since_secs(now),
-            Some(1_791_763_200),
-            "Monday 12 October"
-        );
-        assert_eq!(
-            filter("month", "").since_secs(now),
-            Some(1_790_812_800),
-            "1 October"
-        );
-        assert_eq!(
-            filter("date", "2026-09-01").since_secs(now),
-            Some(1_788_220_800)
-        );
-        assert_eq!(filter("date", "not a date").since_secs(now), None);
-        assert_eq!(filter("", "").since_secs(now), None);
-    }
-
-    #[test]
-    fn the_list_is_newest_first_after_any_sort_asked_for() {
-        let f = Filter {
-            q: "artist:burial year-".into(),
-            ..Default::default()
-        };
-        assert_eq!(
-            f.terms(),
-            ["artist:burial", "year-", "added-", "albumartist+", "album+"]
-        );
-        let q = sift::library::Query::parse(&f.terms()).unwrap();
-        assert_eq!(q.sort[0], ("year".to_string(), false));
-        assert_eq!(q.sort[1], ("added".to_string(), false));
-    }
-
-    #[test]
-    fn the_address_round_trips_the_filter() {
-        let f = Filter {
-            q: "burial".into(),
-            since: "date".into(),
-            from: "2026-09-01".into(),
-            show: "dups".into(),
-            album: "/m/Burial/(2007) Untrue".into(),
-        };
-        let url = f.url();
-        let Query(back) = Query::<Filter>::try_from_uri(&url.parse().unwrap()).unwrap();
-        assert_eq!(back, f);
-        let Query(AlbumQuery { filter, path }) =
-            Query::try_from_uri(&format!("{url}&path=%2Fm%2FX").parse().unwrap()).unwrap();
-        assert_eq!((filter, path.as_str()), (f, "/m/X"));
-    }
-
-    #[test]
-    fn a_form_carries_the_filter_beside_its_other_fields() {
-        let form: Vec<(String, String)> = [("path", "/a"), ("q", " burial "), ("path", "/b")]
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .into();
-        let f = Filter::from_fields(&form);
-        assert_eq!(f.q, "burial");
-        assert_eq!(f.album, "");
-    }
-
-    #[test]
-    fn lyrics_are_summarised_without_their_timestamps() {
-        let l = Lyric::of(&sift::PlannedLyrics {
-            path: "/m/a/01 x.flac".into(),
-            synced: true,
-            text: "[00:01.00] First line\n[00:02.00]\n[00:03.00][00:09.00] Second".into(),
-        });
-        assert_eq!((l.lines, l.first.as_str()), (2, "First line"));
-        assert_eq!(l.file, "01 x.flac");
-    }
-
-    fn track(path: &str, title: &str, album: &str, genre: Option<&str>) -> sift::meta::Track {
-        sift::meta::Track {
-            path: path.into(),
-            title: Some(title.into()),
-            album: Some(album.into()),
-            genre: genre.map(Into::into),
-            ..Default::default()
-        }
-    }
-
-    fn form(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
-        pairs
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect()
-    }
-
-    #[test]
-    fn an_edit_is_only_what_was_typed_differently() {
-        let tracks = [
-            track("/m/a/1.flac", "One", "Monstre", Some("Rock")),
-            track("/m/a/2.flac", "Two", "Monstre", None),
-        ];
-        let edits = edits_from(
-            &tracks,
-            &form(&[
-                ("a-album", "Monster"),
-                // Differs between the files and left blank: untouched.
-                ("a-genre", ""),
-                ("a-label", ""),
-                ("t0-file", "/m/a/1.flac"),
-                ("t0-title", "One"),
-                ("t1-file", "/m/a/2.flac"),
-                ("t1-title", "Two (Live)"),
-            ]),
-        )
-        .unwrap();
-        assert_eq!(
-            edits.album,
-            [("album".to_string(), Some("Monster".to_string()))]
-        );
-        assert_eq!(
-            edits.tracks,
-            [(
-                std::path::PathBuf::from("/m/a/2.flac"),
-                vec![("title".to_string(), Some("Two (Live)".to_string()))]
-            )]
-        );
-        let cleared = edits_from(&tracks, &form(&[("a-album", "")])).unwrap();
-        assert_eq!(cleared.album, [("album".to_string(), None)]);
-
-        let mut credited = tracks[0].clone();
-        credited.artist = Some("A × B".into());
-        credited.artists = vec!["A".into(), "B".into()];
-        let renamed = edits_from(
-            &[credited],
-            &form(&[
-                ("t0-file", "/m/a/1.flac"),
-                ("t0-artist", "A & B"),
-                ("t0-title", " One "),
-            ]),
-        )
-        .unwrap();
-        assert_eq!(
-            renamed.tracks[0].1,
-            [
-                ("artist".to_string(), Some("A & B".to_string())),
-                ("artists".to_string(), None)
-            ],
-            "the list of artists goes with the credit; a title typed with spaces is the same title"
-        );
-    }
-
-    #[test]
-    fn a_release_is_its_id_or_a_link_to_it() {
-        let id = "4c3e0b3c-2f8a-4a4b-9d6e-2a1f3b5c7d9e";
-        assert_eq!(release_id(id).as_deref(), Some(id));
-        assert_eq!(
-            release_id(&format!("https://musicbrainz.org/release/{id}/")).as_deref(),
-            Some(id)
-        );
-        assert_eq!(
-            release_id(&format!(
-                "https://musicbrainz.org/release/{}?tab=x",
-                id.to_uppercase()
-            ))
-            .as_deref(),
-            Some(id)
-        );
-        assert_eq!(
-            release_id(&format!("https://musicbrainz.org/release/{id}/cover-art")).as_deref(),
-            Some(id)
-        );
-        assert_eq!(
-            release_id(&format!("https://musicbrainz.org/release-group/{id}")),
-            None
-        );
-        assert_eq!(
-            release_id(&format!("https://musicbrainz.org/recording/{id}")),
-            None
-        );
-        assert_eq!(release_id("discogs:123").as_deref(), Some("discogs:123"));
-        assert_eq!(release_id("monster"), None);
-    }
-
-    #[test]
-    fn a_number_typed_as_letters_is_refused() {
-        let tracks = [sift::meta::Track {
-            track: Some(1),
-            ..track("/m/a/1.flac", "One", "Monstre", None)
-        }];
-        let typed = |n: &str| {
-            edits_from(
-                &tracks,
-                &form(&[("t0-file", "/m/a/1.flac"), ("t0-track", n)]),
-            )
-        };
-        assert!(typed("A1").is_err());
-        assert!(typed("1/2").is_err());
-        assert_eq!(
-            typed("2").unwrap().tracks[0].1,
-            [("track".to_string(), Some("2".to_string()))]
-        );
-        assert_eq!(
-            typed("").unwrap().tracks[0].1,
-            [("track".to_string(), None)],
-            "a number left blank is cleared"
-        );
-    }
 }

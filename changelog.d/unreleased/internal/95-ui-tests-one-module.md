@@ -1,0 +1,1 @@
+- **UI tests live in one module.** The library and browse tests moved into `src/ui/tests.rs`, matching koan, so both projects keep their UI tests in the same place.
