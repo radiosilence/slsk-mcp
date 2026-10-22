@@ -3,6 +3,7 @@
 //! assistant to drive it.
 
 mod analysis;
+mod art;
 mod auth;
 mod config;
 mod crypto;

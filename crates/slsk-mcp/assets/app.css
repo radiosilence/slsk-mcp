@@ -724,6 +724,11 @@
     display: table;
   }
 
+  .size-32 {
+    width: calc(var(--spacing) * 32);
+    height: calc(var(--spacing) * 32);
+  }
+
   .size-\[18px\] {
     width: 18px;
     height: 18px;
@@ -815,6 +820,10 @@
 
   .grid-cols-\[repeat\(auto-fill\,minmax\(220px\,1fr\)\)\] {
     grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  }
+
+  .flex-col {
+    flex-direction: column;
   }
 
   .flex-nowrap {
@@ -909,6 +918,10 @@
 
   .overflow-x-auto {
     overflow-x: auto;
+  }
+
+  .rounded {
+    border-radius: .25rem;
   }
 
   .rounded-full {
@@ -1014,6 +1027,10 @@
 
   .bg-surface {
     background-color: var(--surface);
+  }
+
+  .object-cover {
+    object-fit: cover;
   }
 
   .p-4 {

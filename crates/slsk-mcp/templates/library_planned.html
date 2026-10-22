@@ -12,6 +12,8 @@
       {% when Body::Reimport with { release, files, missing, untouched, cover, companions } %}{{ release.artist }} — {{ release.title }}{% if let Some(d) = release.date %} ({{ d }}){% endif %} · distance {{ release.distance }} · {{ self.changed(files) }} of {{ files.len() }} files change{% if self.moving(files) %} · moves{% endif %}{% if !missing.is_empty() %} · {{ missing.len() }} missing{% endif %}
       {% when Body::Edit with { files, into } %}{{ self.changed(files) }} of {{ files.len() }} files change{% if let Some(d) = into %} · → {{ d }}{% endif %}
       {% when Body::Bin with { to, keep, reason } %}→ {{ to }}
+      {% when Body::RemoveArt with (r) %}from {{ r.files.len() }} file{% if r.files.len() != 1 %}s{% endif %}
+      {% when Body::SetArt with { set, token } %}{{ set.width }}×{{ set.height }}{% if !set.embedded.is_empty() %} · into {{ set.embedded.len() }} file{% if set.embedded.len() != 1 %}s{% endif %}{% endif %}{% if let Some(f) = set.cover_file %} · {{ f }}{% endif %}
       {% endmatch %}
       </span>
     </summary>
@@ -56,6 +58,13 @@
     {% when Body::Edit with { files, into } %}
     {% if let Some(d) = into %}<p class="text-meta text-muted wrap-anywhere">Re-filed into <span class="wrap-anywhere">{{ d }}</span></p>{% endif %}
     {% include "library_changes.html" %}
+    {% when Body::RemoveArt with (r) %}
+    {% if !r.files.is_empty() %}<p class="text-meta text-muted wrap-anywhere">Pictures taken out of: {{ r.files.join(", ") }}</p>{% endif %}
+    {% when Body::SetArt with { set, token } %}
+    <img src="/library/art/pending/{{ token }}" alt="The new art" class="my-1.5 size-32 rounded border border-rule object-cover">
+    <p class="text-meta text-muted wrap-anywhere">{{ set.mime }}, {{ set.width }}×{{ set.height }}, {{ set.bytes }} bytes{% if set.resized %}, scaled down to the width imports embed{% endif %}</p>
+    {% if !set.embedded.is_empty() %}<p class="text-meta text-muted wrap-anywhere">The only picture embedded in: {{ set.embedded.join(", ") }}</p>{% endif %}
+    {% if let Some(f) = set.cover_file %}<p class="text-meta text-muted wrap-anywhere">Written beside them as {{ f }}{% if !set.binned.is_empty() %}; to the bin: {{ set.binned.join(", ") }}{% endif %}</p>{% endif %}
     {% when Body::Bin with { to, keep, reason } %}
     {% if !reason.is_empty() %}<p class="text-meta text-muted wrap-anywhere">Spare: {{ reason }}. The copy kept is <span class="wrap-anywhere">{{ self.rel(keep) }}</span>.</p>{% endif %}
     {% endmatch %}

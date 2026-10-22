@@ -15,6 +15,8 @@ use sift::library::{Album, Query, Value};
 use sift::manage::{self, Plan};
 use tokio::sync::Mutex;
 
+use crate::art::{self, AlbumArt, ArtRemoved, ArtSet, CoverFile, FileArt, Image, Picture, Target};
+
 pub struct Library {
     /// Answers queries, from the index as last refreshed. Its own
     /// connection, so a read is never queued behind a scan: under SQLite's
@@ -35,6 +37,8 @@ pub struct Library {
     cfg: sift::Config,
     bin: PathBuf,
     tagger: std::sync::Arc<sift::Importer>,
+    /// Fetches album art from a URL.
+    http: reqwest::Client,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -353,6 +357,10 @@ impl Library {
             cfg: tagger.cfg.clone(),
             bin,
             tagger,
+            http: reqwest::Client::builder()
+                .user_agent(concat!("slsk-mcp/", env!("CARGO_PKG_VERSION")))
+                .connect_timeout(std::time::Duration::from_secs(30))
+                .build()?,
         })
     }
 
@@ -1104,4 +1112,254 @@ impl Library {
             },
         ))
     }
+
+    /// The album at `dir`, when the index holds one there. Art is read and
+    /// written only for these, so a path from a request reaches nothing
+    /// else.
+    async fn album_at(&self, dir: &str) -> anyhow::Result<Album> {
+        self.read(&by_path([dir]))
+            .await?
+            .into_iter()
+            .find(|a| a.dir == Path::new(dir))
+            .ok_or_else(|| anyhow::anyhow!("{dir} is not an album in the library"))
+    }
+
+    /// The pictures embedded in each file of the album at `dir`, and the
+    /// cover images beside them.
+    pub async fn art(&self, dir: &str) -> anyhow::Result<AlbumArt> {
+        self.album_at(dir).await?;
+        let tracks = self.tracks(dir).await?;
+        Ok(tokio::task::block_in_place(|| AlbumArt {
+            path: dir.to_string(),
+            files: tracks
+                .iter()
+                .map(|t| {
+                    let (pictures, error) = match sift::meta::pictures(&t.path) {
+                        Ok(p) => (p.into_iter().map(Picture::from).collect(), None),
+                        Err(e) => (Vec::new(), Some(e.to_string())),
+                    };
+                    FileArt {
+                        file: within(dir, &t.path),
+                        pictures,
+                        error,
+                    }
+                })
+                .collect(),
+            cover_files: art::cover_files(&self.cfg.directory, Path::new(dir))
+                .iter()
+                .map(|p| {
+                    let bytes = std::fs::read(p).unwrap_or_default();
+                    let size = art::dimensions(&bytes);
+                    CoverFile {
+                        name: file_name(p),
+                        bytes: bytes.len() as u64,
+                        width: size.map(|(w, _)| w),
+                        height: size.map(|(_, h)| h),
+                    }
+                })
+                .collect(),
+        }))
+    }
+
+    /// The image players show for the album at `dir`: its leading cover
+    /// image, or else the front cover embedded in its first file. Also the
+    /// file it came from, whose change means the image did.
+    pub async fn cover(&self, dir: &str) -> anyhow::Result<Option<(Vec<u8>, PathBuf)>> {
+        let album = self.album_at(dir).await?;
+        let root = &self.cfg.directory;
+        tokio::task::block_in_place(|| {
+            if let Some(p) = art::cover_files(root, &album.dir).into_iter().next() {
+                return Ok(Some((std::fs::read(&p)?, p)));
+            }
+            let mut files: Vec<&Path> =
+                album.items.iter().map(|i| i.track.path.as_path()).collect();
+            files.sort();
+            Ok(files
+                .into_iter()
+                .filter(|p| art::inside(root, p))
+                .find_map(|p| Some((sift::meta::embedded_cover(p)?, p.to_path_buf()))))
+        })
+    }
+
+    /// Fetch an image from `url` and make it ready to write as album art.
+    pub async fn fetch_art(&self, url: &str) -> anyhow::Result<Image> {
+        let bytes = art::fetch(&self.http, url).await?;
+        tokio::task::block_in_place(|| art::prepare(&bytes, &self.cfg))
+    }
+
+    /// `bytes`, uploaded, ready to write as album art.
+    pub fn prepare_art(&self, bytes: &[u8]) -> anyhow::Result<Image> {
+        tokio::task::block_in_place(|| art::prepare(bytes, &self.cfg))
+    }
+
+    /// Remove every picture embedded in the files of the albums at `dirs`;
+    /// cover images beside them are left. Every file is checked writable
+    /// before any is written. With `apply` false, says which files carry
+    /// pictures and changes nothing.
+    pub async fn remove_art(
+        &self,
+        dirs: &[String],
+        apply: bool,
+    ) -> anyhow::Result<Vec<ArtRemoved>> {
+        let _index = if apply {
+            Some(self.write().await?)
+        } else {
+            None
+        };
+        let mut out = Vec::new();
+        let mut writes = Vec::new();
+        for dir in dirs {
+            self.album_at(dir).await?;
+            let tracks = self.tracks(dir).await?;
+            let mut files = Vec::new();
+            for t in tracks {
+                let carries = tokio::task::block_in_place(|| sift::meta::pictures(&t.path))
+                    .map_err(|e| anyhow::anyhow!("{}: {e}", t.path.display()))?;
+                if carries.is_empty() {
+                    continue;
+                }
+                files.push(within(dir, &t.path));
+                if apply {
+                    writable(&t.path)?;
+                }
+                writes.push(t.path);
+            }
+            out.push(ArtRemoved {
+                path: dir.clone(),
+                files,
+                cover_files: art::cover_files(&self.cfg.directory, Path::new(dir))
+                    .iter()
+                    .map(|p| file_name(p))
+                    .collect(),
+            });
+        }
+        if !apply {
+            return Ok(out);
+        }
+        for (i, path) in writes.iter().enumerate() {
+            if let Err(e) = tokio::task::block_in_place(|| sift::meta::remove_pictures(path)) {
+                self.bump();
+                return Err(anyhow::Error::new(e).context(format!(
+                    "removing the art from {}; {i} files before it are already without it",
+                    path.display()
+                )));
+            }
+        }
+        self.bump();
+        tracing::info!(
+            albums = dirs.len(),
+            files = writes.len(),
+            "removed embedded art"
+        );
+        Ok(out)
+    }
+
+    /// Make `image` the art of the album at `dir`: the only picture
+    /// embedded in each file, a cover image beside them, or both, as
+    /// `target` says. Cover images already there move to the bin when a new
+    /// one is written, so players show it. Every file is checked writable
+    /// and every move possible before anything is written. With `apply`
+    /// false, says what would be written and changes nothing.
+    pub async fn set_art(
+        &self,
+        dir: &str,
+        image: &Image,
+        target: Target,
+        apply: bool,
+    ) -> anyhow::Result<ArtSet> {
+        if !target.embed && !target.file {
+            anyhow::bail!("say where the art goes: embedded, a cover file, or both");
+        }
+        let _index = if apply {
+            Some(self.write().await?)
+        } else {
+            None
+        };
+        self.album_at(dir).await?;
+        let tracks = if target.embed {
+            self.tracks(dir).await?
+        } else {
+            Vec::new()
+        };
+        let covers = art::cover_files(&self.cfg.directory, Path::new(dir));
+        let (binned, kept): (Vec<PathBuf>, Vec<PathBuf>) =
+            covers.into_iter().partition(|_| target.file);
+        let moves = binned
+            .iter()
+            .map(|p| {
+                let to = self.bin_destination(&p.to_string_lossy()).map_err(|why| {
+                    anyhow::anyhow!("{} cannot be moved to the bin: {why}", p.display())
+                })?;
+                Ok((p.clone(), to))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let set = ArtSet {
+            path: dir.to_string(),
+            mime: image.mime.to_string(),
+            width: image.width,
+            height: image.height,
+            bytes: image.bytes.len(),
+            resized: image.resized,
+            embedded: tracks.iter().map(|t| within(dir, &t.path)).collect(),
+            cover_file: target.file.then(|| image.file_name().to_string()),
+            binned: binned.iter().map(|p| file_name(p)).collect(),
+            kept: kept.iter().map(|p| file_name(p)).collect(),
+        };
+        if !apply {
+            return Ok(set);
+        }
+        for t in &tracks {
+            writable(&t.path)?;
+        }
+        for (from, to) in &moves {
+            if let Some(parent) = to.parent() {
+                tokio::fs::create_dir_all(parent).await?;
+            }
+            tokio::fs::rename(from, to).await?;
+        }
+        if target.file {
+            let dest = Path::new(dir).join(image.file_name());
+            let part = Path::new(dir).join(format!(".{}.part", image.file_name()));
+            tokio::fs::write(&part, &image.bytes).await?;
+            tokio::fs::rename(&part, &dest).await?;
+        }
+        for (i, t) in tracks.iter().enumerate() {
+            if let Err(e) =
+                tokio::task::block_in_place(|| sift::meta::set_cover(&t.path, &image.bytes))
+            {
+                self.bump();
+                return Err(anyhow::Error::new(e).context(format!(
+                    "embedding the art in {}; {i} files before it already carry it",
+                    t.path.display()
+                )));
+            }
+        }
+        self.bump();
+        tracing::info!(
+            album = dir,
+            embedded = set.embedded.len(),
+            file = ?set.cover_file,
+            binned = set.binned.len(),
+            "set album art"
+        );
+        Ok(set)
+    }
+}
+
+/// `path` relative to the album at `dir`.
+fn within(dir: &str, path: &Path) -> String {
+    path.strip_prefix(dir)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// Refuses a file that cannot be opened for writing, before anything is
+/// written.
+fn writable(path: &Path) -> anyhow::Result<()> {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .map(drop)
+        .map_err(|e| anyhow::anyhow!("{} cannot be written: {e}", path.display()))
 }
