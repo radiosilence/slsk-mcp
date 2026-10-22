@@ -573,6 +573,21 @@ impl Library {
         Ok(dest)
     }
 
+    /// Move the album at `dir` to the bin, whether or not another copy is
+    /// held. Nothing is deleted.
+    pub async fn bin_album(&self, dir: &str) -> anyhow::Result<PathBuf> {
+        let mut index = self.write().await?;
+        let albums = tokio::task::block_in_place(|| index.albums(&Query::parse(&by_path([dir]))?))?;
+        let album = albums
+            .iter()
+            .find(|a| a.dir == Path::new(dir))
+            .ok_or_else(|| anyhow::anyhow!("no longer in the library"))?;
+        let to = manage::bin(&mut index, &self.cfg.directory, &self.bin, album).await?;
+        self.bump();
+        tracing::info!(from = dir, to = %to.display(), "binned an album");
+        Ok(to)
+    }
+
     /// Every artist the library holds an album by: what a collaboration's
     /// credit is split against.
     pub async fn known_artists(&self) -> anyhow::Result<sift::credits::Known> {

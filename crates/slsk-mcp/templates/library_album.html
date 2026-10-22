@@ -18,7 +18,7 @@
     {% if row.refile().is_some() %}<button type="button" data-indicator="_al_refile" data-attr:disabled="$_al_refile" data-class:busy="$_al_refile" data-on:click="@post('/library/preview/refile', {contentType: 'form', selector: '#lib-one'})">Re-file</button>{% endif %}
     <button type="button" data-indicator="_al_credit" data-attr:disabled="$_al_credit" data-class:busy="$_al_credit" data-on:click="@post('/library/preview/credit', {contentType: 'form', selector: '#lib-one'})">Credit artists</button>
     <button type="button" data-indicator="_al_enrich" data-attr:disabled="$_al_enrich" data-class:busy="$_al_enrich" data-on:click="@post('/library/preview/enrich', {contentType: 'form', selector: '#lib-one'})">Enrich</button>
-    {% if row.spare().is_some() %}<button type="button" data-indicator="_al_bin" data-attr:disabled="$_al_bin" data-class:busy="$_al_bin" data-on:click="@post('/library/preview/bin', {contentType: 'form', selector: '#lib-one'})">Bin this copy</button>{% endif %}
+    <button type="button" data-indicator="_al_bin" data-attr:disabled="$_al_bin" data-class:busy="$_al_bin" data-on:click="@post('/library/preview/bin', {contentType: 'form', selector: '#lib-one'})">{% if row.spare().is_some() %}Bin this copy{% else %}Bin{% endif %}</button>
   </div>
   <div id="lib-retag"></div>
   <div id="lib-edit"></div>

@@ -1,0 +1,1 @@
+- **Bin any album from the library.** The album panel always offers Bin, so a superseded copy that duplicate detection misses can still be moved to the bin; albums that are not spare copies preview unticked with a warning.

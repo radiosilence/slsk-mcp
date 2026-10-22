@@ -697,7 +697,7 @@ impl Action {
             Self::Credit => "Credit artists",
             Self::Enrich => "Enrich",
             Self::Reimport => "Re-tag",
-            Self::Bin => "Bin spares",
+            Self::Bin => "Bin",
             Self::Edit => "Edit tags",
         }
     }
@@ -753,7 +753,7 @@ impl Action {
                 "The fields typed, as each file has them and as they would be, and where the new tags file the album."
             }
             Self::Bin => {
-                "Spare copies move to the bin beside the library, out of sight of the shares and the player. Nothing is deleted. Kept copies in the selection stay."
+                "Each album moves to the bin beside the library, out of sight of the shares and the player. Nothing is deleted. Spare copies are ticked; kept and only copies are left for you to tick."
             }
         }
     }
@@ -1215,26 +1215,40 @@ async fn plan_one(
                     .filter(|d| Some(d.as_str()) != std::path::Path::new(&path).strip_prefix(&root).ok().and_then(|p| p.to_str()));
                 p.body = Body::Edit { files, into };
             }
-            Action::Bin => match row.marks.as_ref().and_then(|m| m.dup.as_ref()) {
-                Some(Dup {
-                    keep,
-                    spare: Some(reason),
-                }) => match library.bin_destination(&path) {
+            Action::Bin => {
+                let dup = row.marks.as_ref().and_then(|m| m.dup.as_ref());
+                match library.bin_destination(&path) {
                     Ok(to) => {
                         p.applicable = true;
-                        p.ticked = true;
-                        p.with = Some(keep.clone());
                         p.body = Body::Bin {
                             to: to.to_string_lossy().into_owned(),
-                            keep: keep.clone(),
-                            reason: reason.clone(),
+                            keep: dup.map(|d| d.keep.clone()).unwrap_or_default(),
+                            reason: dup.and_then(|d| d.spare.clone()).unwrap_or_default(),
                         };
+                        match dup {
+                            Some(Dup {
+                                keep,
+                                spare: Some(_),
+                            }) => {
+                                p.ticked = true;
+                                p.with = Some(keep.clone());
+                            }
+                            Some(_) => {
+                                p.note = Some(
+                                    "The copy kept: binning it leaves only the spare.".into(),
+                                )
+                            }
+                            None => {
+                                p.note = Some(
+                                    "The only copy: binning takes it out of the shares and the player."
+                                        .into(),
+                                )
+                            }
+                        }
                     }
                     Err(why) => p.note = Some(format!("Cannot be binned: {why}.")),
-                },
-                Some(_) => p.note = Some("The copy kept; it stays.".into()),
-                None => p.note = Some("Not held twice; nothing to bin.".into()),
-            },
+                }
+            }
         }
         Ok(())
     }
@@ -1805,7 +1819,8 @@ async fn run(
                 }
                 Action::Bin => {
                     let Some(keep) = attached else {
-                        anyhow::bail!("not a spare copy");
+                        let to = library.bin_album(path).await?;
+                        return Ok((format!("→ {}", to.display()), Vec::new(), None));
                     };
                     let sets = library
                         .duplicates(&by_path([keep, path.as_str()]), true)

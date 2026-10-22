@@ -57,7 +57,7 @@
     {% if let Some(d) = into %}<p class="text-meta text-muted wrap-anywhere">Re-filed into <span class="wrap-anywhere">{{ d }}</span></p>{% endif %}
     {% include "library_changes.html" %}
     {% when Body::Bin with { to, keep, reason } %}
-    <p class="text-meta text-muted wrap-anywhere">Spare: {{ reason }}. The copy kept is <span class="wrap-anywhere">{{ self.rel(keep) }}</span>.</p>
+    {% if !reason.is_empty() %}<p class="text-meta text-muted wrap-anywhere">Spare: {{ reason }}. The copy kept is <span class="wrap-anywhere">{{ self.rel(keep) }}</span>.</p>{% endif %}
     {% endmatch %}
   </details>
   {% if let Some(n) = p.note %}<p class="my-0 ml-[30px] basis-full text-meta {% if p.applicable %}text-warn{% else %}text-muted{% endif %}">{{ n }}</p>{% endif %}
