@@ -21,6 +21,7 @@ dashmap = "6.2.1"
 futures-util = "0.3.34"
 http = "1"
 parking_lot = "0.12.5"
+percent-encoding = "2.3.2"
 png = "0.18.1"
 rand = "0.10.3"
 reqwest = { version = "0.13", default-features = false, features = ["json", "form", "rustls", "stream"] }
@@ -44,6 +45,7 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 url = "2.5.8"
 uuid = { version = "1.28.0", features = ["v4", "serde"] }
 zeroize = "1.9.1"
+zip = { version = "9.0.5", default-features = false, features = ["deflate-flate2"] }
 
 [dev-dependencies]
 tokio = { version = "1.54.0", features = ["full", "test-util"] }

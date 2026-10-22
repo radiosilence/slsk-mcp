@@ -4,6 +4,10 @@
 //! match it confidently, or → failed. A folder whose peer fails falls back to
 //! the next folder that matched the same request before giving up.
 //!
+//! A job can also start from a URL rather than a peer: the file is fetched
+//! over HTTP, unpacked if it is a zip, and goes on to import as a download
+//! does. It has no other source to fall back to.
+//!
 //! One loop watches every active job, reading progress from the engine's
 //! memory and writing to the database only when a file changes state.
 
@@ -28,6 +32,8 @@ use crate::session::Session;
 pub mod cause {
     /// Every file failed from the peer, after retries.
     pub const PEER_FAILED: &str = "peer_failed";
+    /// A fetch from a URL failed or was refused.
+    pub const URL_FAILED: &str = "url_failed";
     /// Queued with the peer, nothing received for the stall limit.
     pub const STALLED_PEER: &str = "stalled_peer";
     /// Files that do not parse as audio.
@@ -78,6 +84,22 @@ const SEARCH_WAIT: Duration = Duration::from_secs(15);
 /// before the session has logged in and reached anyone.
 const STARTUP_GRACE: Duration = Duration::from_secs(3 * 60);
 
+/// The most a fetch from a URL may download, and the most its zip may
+/// unpack to: well above a hi-res album, well below a full disk.
+const URL_MAX_BYTES: u64 = 8 << 30;
+/// How long a fetch from a URL may go without a byte before it fails.
+const URL_IDLE: Duration = Duration::from_secs(60);
+/// How long a fetch from a URL may take in all.
+const URL_TIMEOUT: Duration = Duration::from_secs(2 * 3600);
+
+/// A fetch from a URL in progress: bytes received, and the size the server
+/// announced (0 when it did not).
+#[derive(Default)]
+struct Fetched {
+    received: std::sync::atomic::AtomicU64,
+    size: std::sync::atomic::AtomicU64,
+}
+
 pub struct Jobs {
     db: crate::db::Db,
     session: Arc<Session>,
@@ -114,6 +136,9 @@ pub struct Jobs {
     /// their folders last for a day, since cancelling our queue with them
     /// makes them look idle again.
     stalled_peers: std::sync::Mutex<HashMap<String, tokio::time::Instant>>,
+    /// Fetches from URLs in progress, to follow and to stop.
+    fetches: std::sync::Mutex<HashMap<Uuid, (tokio::task::AbortHandle, Arc<Fetched>)>>,
+    http: reqwest::Client,
     wake: Notify,
 }
 
@@ -143,6 +168,14 @@ impl Jobs {
             places: Default::default(),
             started: tokio::time::Instant::now(),
             stalled_peers: Default::default(),
+            fetches: Default::default(),
+            http: reqwest::Client::builder()
+                .user_agent(concat!("slsk-mcp/", env!("CARGO_PKG_VERSION")))
+                .connect_timeout(Duration::from_secs(30))
+                .read_timeout(URL_IDLE)
+                .timeout(URL_TIMEOUT)
+                .build()
+                .expect("HTTP client"),
             wake: Notify::new(),
         })
     }
@@ -289,6 +322,172 @@ impl Jobs {
         Ok(job)
     }
 
+    /// Fetch an album from a URL: a zip of it, as Bandcamp serves a
+    /// purchase, or a single audio file.
+    pub async fn from_url(self: &Arc<Self>, url: &str) -> Result<Job> {
+        let url = check_url(url)?;
+        let id = Uuid::new_v4();
+        let job = Job {
+            id,
+            account: self
+                .session
+                .engine()
+                .map(|e| e.username())
+                .unwrap_or_default(),
+            // Until the server names the file.
+            title: url.host_str().unwrap_or_default().to_string(),
+            source: Json(Source::Url {
+                url: url.to_string(),
+            }),
+            alternates: Json(Vec::new()),
+            status: "downloading".into(),
+            error: None,
+            import_log: None,
+            candidates: None,
+            library_path: None,
+            analysis: None,
+            approved: false,
+            as_is_blocker: None,
+            replaces: false,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+        db::insert_job(&self.db, &job, &[]).await?;
+        self.fetch(id, url.to_string());
+        Ok(job)
+    }
+
+    /// Where a fetch from a URL lands before it is unpacked: beside the
+    /// job's directory, so nothing in the archive can name it.
+    fn fetch_file(&self, id: Uuid) -> PathBuf {
+        self.staging.join(format!("{id}.fetch"))
+    }
+
+    /// Bytes received and announced by a fetch from a URL in progress.
+    pub fn fetched(&self, id: Uuid) -> Option<(u64, u64)> {
+        use std::sync::atomic::Ordering::Relaxed;
+        self.fetches
+            .lock()
+            .expect("fetches")
+            .get(&id)
+            .map(|(_, f)| (f.received.load(Relaxed), f.size.load(Relaxed)))
+    }
+
+    /// Fetch a URL job's file in the background, then import it.
+    fn fetch(self: &Arc<Self>, id: Uuid, url: String) {
+        let fetched = Arc::new(Fetched::default());
+        // Held across the spawn, so the task cannot finish and remove its
+        // entry before it is inserted.
+        let mut fetches = self.fetches.lock().expect("fetches");
+        let (jobs, progress) = (self.clone(), fetched.clone());
+        let task = tokio::spawn(async move {
+            let outcome = jobs.download_url(id, &url, &progress).await;
+            jobs.fetches.lock().expect("fetches").remove(&id);
+            let _ = tokio::fs::remove_file(jobs.fetch_file(id)).await;
+            let to = if outcome.is_ok() {
+                "importing"
+            } else {
+                "failed"
+            };
+            match (
+                outcome,
+                db::move_status(&jobs.db, id, &["downloading"], to).await,
+            ) {
+                (Ok(()), Ok(true)) => {
+                    if let Err(e) = jobs.import(id, None).await {
+                        tracing::warn!(%id, error = %e, "import failed");
+                    }
+                }
+                (Err(e), Ok(true)) => {
+                    let reason = format!("{e:#}");
+                    tracing::info!(%id, host = %host(&url), error = %reason, "fetch failed");
+                    if let Err(e) = db::set_status(&jobs.db, id, "failed", Some(&reason)).await {
+                        tracing::warn!(%id, error = %e, "could not record a failed fetch");
+                    }
+                    if let Ok(Some(job)) = db::job(&jobs.db, id).await {
+                        jobs.event(&job, "failed", Some(cause::URL_FAILED), Some(&reason))
+                            .await;
+                    }
+                }
+                // Cancelled or removed while it ran.
+                (_, Ok(false)) => {}
+                (_, Err(e)) => tracing::warn!(%id, error = %e, "could not record a fetch"),
+            }
+        });
+        fetches.insert(id, (task.abort_handle(), fetched));
+    }
+
+    /// Download `url` into the job's directory, unpacking it if it is a zip,
+    /// and name the job for the file.
+    async fn download_url(&self, id: Uuid, url: &str, fetched: &Fetched) -> Result<()> {
+        use std::sync::atomic::Ordering::Relaxed;
+        use tokio::io::AsyncWriteExt;
+        let url = check_url(url)?;
+        let host = url.host_str().unwrap_or_default().to_string();
+        tracing::info!(job = %id, %host, "fetching from a URL");
+        // Download links carry access tokens: errors name the host only.
+        let mut resp = self
+            .http
+            .get(url.clone())
+            .send()
+            .await
+            .and_then(reqwest::Response::error_for_status)
+            .map_err(|e| anyhow::anyhow!("could not fetch from {host}: {}", e.without_url()))?;
+        let header = |name| {
+            resp.headers()
+                .get(name)
+                .and_then(|v: &http::HeaderValue| v.to_str().ok())
+                .map(str::to_string)
+        };
+        if header(http::header::CONTENT_TYPE).is_some_and(|t| t.starts_with("text/html")) {
+            bail!("{host} answered with a web page, not a file: use the download link itself");
+        }
+        let disposition = header(http::header::CONTENT_DISPOSITION);
+        let size = resp.content_length().unwrap_or(0);
+        if size > URL_MAX_BYTES {
+            bail!("{host} offers {size} bytes, more than the {URL_MAX_BYTES} a fetch may take");
+        }
+        fetched.size.store(size, Relaxed);
+        let name = file_name(disposition.as_deref(), &url).unwrap_or_else(|| "download".into());
+        let title = std::path::Path::new(&name)
+            .file_stem()
+            .map_or(name.clone(), |s| s.to_string_lossy().into_owned());
+        db::set_title(&self.db, id, &title).await?;
+
+        let dir = self.dir(id);
+        // A retry starts again from nothing.
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+        tokio::fs::create_dir_all(&dir).await?;
+        let part = self.fetch_file(id);
+        let mut file = tokio::fs::File::create(&part).await?;
+        let mut received = 0u64;
+        let mut head = Vec::new();
+        while let Some(chunk) = resp
+            .chunk()
+            .await
+            .map_err(|e| anyhow::anyhow!("the fetch from {host} broke off: {}", e.without_url()))?
+        {
+            received += chunk.len() as u64;
+            if received > URL_MAX_BYTES {
+                bail!("{host} sent more than the {URL_MAX_BYTES} bytes a fetch may take");
+            }
+            if head.len() < 4 {
+                head.extend(chunk.iter().take(4 - head.len()));
+            }
+            file.write_all(&chunk).await?;
+            fetched.received.store(received, Relaxed);
+        }
+        file.flush().await?;
+        drop(file);
+        tracing::info!(job = %id, %host, bytes = received, "fetched");
+        if head == b"PK\x03\x04" {
+            tokio::task::spawn_blocking(move || unzip(&part, &dir, URL_MAX_BYTES)).await??;
+        } else {
+            tokio::fs::rename(&part, dir.join(&name)).await?;
+        }
+        Ok(())
+    }
+
     /// (remote path, size, subdirectory relative to the folder)
     async fn listing(
         &self,
@@ -399,8 +598,18 @@ impl Jobs {
                 .expect("stalled peers")
                 .insert(peer, now);
         }
+        let (fetches, downloads): (Vec<_>, Vec<_>) =
+            db::jobs(&self.db, Some("downloading"), 10_000)
+                .await?
+                .into_iter()
+                .partition(|j| matches!(j.source.0, Source::Url { .. }));
+        for job in fetches {
+            if let Source::Url { url } = job.source.0 {
+                self.fetch(job.id, url);
+            }
+        }
         let engine = self.session.require()?.clone();
-        for job in db::jobs(&self.db, Some("downloading"), 10_000).await? {
+        for job in downloads {
             let rows = db::job_files(&self.db, job.id).await?;
             self.start(&engine, job.id, &rows);
         }
@@ -468,7 +677,12 @@ impl Jobs {
         let Some(engine) = self.session.engine().cloned() else {
             return Ok(());
         };
-        let jobs = db::jobs(&self.db, Some("downloading"), 10_000).await?;
+        // A fetch from a URL is followed by its own task.
+        let jobs: Vec<_> = db::jobs(&self.db, Some("downloading"), 10_000)
+            .await?
+            .into_iter()
+            .filter(|j| !matches!(j.source.0, Source::Url { .. }))
+            .collect();
         let ids: Vec<Uuid> = jobs.iter().map(|j| j.id).collect();
         let mut files = db::files_of_jobs(&self.db, &ids).await?;
         // One job's failure is that job's: the rest still move.
@@ -724,13 +938,14 @@ impl Jobs {
     /// logged, never allowed to fail the work it describes.
     async fn event(&self, job: &Job, outcome: &str, cause: Option<&str>, detail: Option<&str>) {
         let peer = match &job.source.0 {
-            Source::Soulseek { username, .. } | Source::Files { username } => username.as_str(),
+            Source::Soulseek { username, .. } | Source::Files { username } => username.clone(),
+            Source::Url { url } => host(url),
         };
         if let Err(e) = db::record_event(
             &self.db,
             job.id,
             &job.title,
-            Some(peer),
+            Some(&peer),
             outcome,
             cause,
             detail,
@@ -1200,13 +1415,14 @@ impl Jobs {
     /// or waiting on a decision, and `remove` is the way to drop it. What
     /// arrived stays, so a retry resumes rather than starts again.
     pub async fn cancel(&self, id: Uuid) -> Result<()> {
-        let engine = self.session.require()?;
         if !db::move_status(&self.db, id, &["downloading"], "cancelled").await? {
             let job = db::job(&self.db, id).await?.context("no such job")?;
             bail!("job is {}; only a downloading job cancels", job.status);
         }
-        for f in db::job_files(&self.db, id).await? {
-            engine.remove_download(&f.peer, &RawStr(f.remote.clone().into()));
+        if let Some(engine) = self.session.engine() {
+            for f in db::job_files(&self.db, id).await? {
+                engine.remove_download(&f.peer, &RawStr(f.remote.clone().into()));
+            }
         }
         self.forget(id);
         Ok(())
@@ -1219,6 +1435,9 @@ impl Jobs {
         self.retried.lock().expect("retried").remove(&id);
         self.stalled.lock().expect("stalled").remove(&id);
         self.places.lock().expect("places").remove(&id);
+        if let Some((task, _)) = self.fetches.lock().expect("fetches").remove(&id) {
+            task.abort();
+        }
     }
 
     /// Drop this copy and download the next source found for the request.
@@ -1230,6 +1449,9 @@ impl Jobs {
                 "job is {}; only review, suspect and failed jobs change source",
                 job.status
             );
+        }
+        if matches!(job.source.0, Source::Url { .. }) {
+            bail!("an album fetched from a URL has no other source; retry it or remove it");
         }
         if job.alternates.0.is_empty() {
             bail!("no other copies were found for this; search again");
@@ -1302,7 +1524,6 @@ impl Jobs {
 
     /// Retry a failed or cancelled job from its current source.
     pub async fn retry(self: &Arc<Self>, id: Uuid) -> Result<()> {
-        let engine = self.session.require()?.clone();
         let job = db::job(&self.db, id).await?.context("no such job")?;
         // Everything arrived and only the import went wrong: import again,
         // rather than fetch the album a second time. In the background, so
@@ -1313,7 +1534,16 @@ impl Jobs {
         match job.status.as_str() {
             "review" | "suspect" => {}
             "failed" if downloaded => {}
-            "failed" | "cancelled" => return self.redownload(&engine, id).await,
+            "failed" | "cancelled" => {
+                return match job.source.0 {
+                    Source::Url { url } => {
+                        db::set_status(&self.db, id, "downloading", None).await?;
+                        self.fetch(id, url);
+                        Ok(())
+                    }
+                    _ => self.redownload(&self.session.require()?.clone(), id).await,
+                };
+            }
             s => bail!("job is {s}; only failed, cancelled, review and suspect jobs retry"),
         }
         self.import_soon(id, false, None).await
@@ -1361,6 +1591,7 @@ impl Jobs {
             }
         }
         let _ = tokio::fs::remove_dir_all(self.dir(id)).await;
+        let _ = tokio::fs::remove_file(self.fetch_file(id)).await;
         let _ = tokio::fs::remove_dir_all(self.spectrograms.join(id.to_string())).await;
         if let Some(job) = db::job(&self.db, id).await? {
             let _ = tokio::fs::remove_dir_all(self.complete_dir(&job)).await;
@@ -1372,5 +1603,256 @@ impl Jobs {
             .await?;
         db::delete_job(&self.db, id).await?;
         Ok(())
+    }
+}
+
+/// A URL a job may fetch: http or https, with a host.
+pub(crate) fn check_url(s: &str) -> Result<url::Url> {
+    let url = url::Url::parse(s.trim()).context("not a URL")?;
+    anyhow::ensure!(
+        matches!(url.scheme(), "http" | "https"),
+        "only http and https URLs can be fetched"
+    );
+    anyhow::ensure!(
+        url.host_str().is_some_and(|h| !h.is_empty()),
+        "the URL names no host"
+    );
+    Ok(url)
+}
+
+/// A URL's host, which is all of it that is logged or shown: download links
+/// carry access tokens.
+pub(crate) fn host(url: &str) -> String {
+    url::Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_string))
+        .unwrap_or_default()
+}
+
+/// The name a fetched file is saved under: the one the server gives in
+/// `Content-Disposition`, else the URL's last path segment, reduced to a
+/// plain file name.
+fn file_name(disposition: Option<&str>, url: &url::Url) -> Option<String> {
+    let decode = |s: &str| {
+        percent_encoding::percent_decode_str(s)
+            .decode_utf8_lossy()
+            .into_owned()
+    };
+    let params: Vec<(String, &str)> = disposition
+        .unwrap_or_default()
+        .split(';')
+        .filter_map(|p| p.split_once('='))
+        .map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim()))
+        .collect();
+    let param = |k: &str| params.iter().find(|(n, _)| n == k).map(|(_, v)| *v);
+    let named = param("filename*")
+        .and_then(|v| v.split_once("''"))
+        .map(|(_, v)| decode(v))
+        .or_else(|| param("filename").map(|v| v.trim_matches('"').to_string()))
+        .or_else(|| url.path_segments()?.next_back().map(decode))?;
+    let name = named.rsplit(['/', '\\']).next().unwrap_or_default();
+    let name = name.replace('\0', "");
+    let name = name.trim().trim_start_matches('.');
+    (!name.is_empty()).then(|| name.to_string())
+}
+
+/// Unpack the zip at `archive` into `dir`. An entry that would land outside
+/// `dir` refuses the archive, as does unpacking more than `limit` bytes. A
+/// single folder holding everything is unwrapped, so the files sit at the
+/// top as a download's do.
+pub(crate) fn unzip(archive: &std::path::Path, dir: &std::path::Path, limit: u64) -> Result<()> {
+    use std::path::Component;
+    let mut zip = zip::ZipArchive::new(std::fs::File::open(archive)?).context("not a zip")?;
+    let mut entries = Vec::new();
+    for i in 0..zip.len() {
+        let entry = zip.by_index(i)?;
+        let Some(path) = entry.enclosed_name() else {
+            bail!("the zip holds a path outside itself: {}", entry.name()?);
+        };
+        // Folders are made as needed; links and Finder's resource forks
+        // are not the album.
+        if entry.is_dir()
+            || entry.is_symlink()
+            || path.components().next() == Some(Component::Normal("__MACOSX".as_ref()))
+        {
+            continue;
+        }
+        entries.push((i, path));
+    }
+    let top = entries.first().and_then(|(_, p)| p.components().next());
+    let wrapped = top.is_some()
+        && entries
+            .iter()
+            .all(|(_, p)| p.components().count() > 1 && p.components().next() == top);
+    let mut left = limit;
+    for (i, path) in &entries {
+        let rel: std::path::PathBuf = path.components().skip(usize::from(wrapped)).collect();
+        let out = dir.join(&rel);
+        if let Some(parent) = out.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let entry = zip.by_index(*i)?;
+        let mut file = std::fs::File::create(&out)?;
+        let n = std::io::copy(&mut std::io::Read::take(entry, left + 1), &mut file)
+            .with_context(|| format!("unpacking {}", rel.display()))?;
+        left = left
+            .checked_sub(n)
+            .with_context(|| format!("the zip unpacks to more than {limit} bytes"))?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+    use std::path::{Path, PathBuf};
+
+    use super::*;
+
+    fn zip_of(files: &[(&str, &[u8])]) -> PathBuf {
+        let path = std::env::temp_dir().join(format!("slsk-zip-{}.zip", Uuid::new_v4()));
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        for (name, body) in files {
+            zip.start_file(*name, opts).unwrap();
+            zip.write_all(body).unwrap();
+        }
+        zip.finish().unwrap();
+        path
+    }
+
+    /// Unpacked into a directory of its own, inside another of its own so
+    /// that an escape is seen.
+    fn unpacked(files: &[(&str, &[u8])], limit: u64) -> (Result<()>, PathBuf) {
+        let dir = std::env::temp_dir()
+            .join(format!("slsk-unzip-{}", Uuid::new_v4()))
+            .join("job");
+        std::fs::create_dir_all(&dir).unwrap();
+        (unzip(&zip_of(files), &dir, limit), dir)
+    }
+
+    fn listing(dir: &Path) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut stack = vec![dir.to_path_buf()];
+        while let Some(d) = stack.pop() {
+            for e in std::fs::read_dir(d).unwrap() {
+                let p = e.unwrap().path();
+                if p.is_dir() {
+                    stack.push(p);
+                } else {
+                    out.push(p.strip_prefix(dir).unwrap().to_string_lossy().into_owned());
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
+    #[test]
+    fn a_zip_unpacks_where_it_is_put() {
+        let (r, dir) = unpacked(
+            &[
+                ("01 One.flac", b"one"),
+                ("cover.jpg", b"img"),
+                ("CD2/01 Two.flac", b"two"),
+            ],
+            1 << 20,
+        );
+        r.unwrap();
+        assert_eq!(
+            listing(&dir),
+            ["01 One.flac", "CD2/01 Two.flac", "cover.jpg"]
+        );
+        assert_eq!(std::fs::read(dir.join("01 One.flac")).unwrap(), b"one");
+    }
+
+    #[test]
+    fn one_folder_holding_everything_is_unwrapped() {
+        let (r, dir) = unpacked(
+            &[
+                ("Burial - Untrue/01 Untitled.flac", b"a"),
+                ("Burial - Untrue/CD2/01 Archangel.flac", b"b"),
+                ("__MACOSX/Burial - Untrue/._01 Untitled.flac", b"fork"),
+            ],
+            1 << 20,
+        );
+        r.unwrap();
+        assert_eq!(listing(&dir), ["01 Untitled.flac", "CD2/01 Archangel.flac"]);
+    }
+
+    #[test]
+    fn a_folder_beside_loose_files_is_kept() {
+        let (r, dir) = unpacked(&[("A/01.flac", b"a"), ("cover.jpg", b"c")], 1 << 20);
+        r.unwrap();
+        assert_eq!(listing(&dir), ["A/01.flac", "cover.jpg"]);
+    }
+
+    #[test]
+    fn a_path_out_of_the_zip_refuses_it() {
+        for name in ["../escape.flac", "/etc/escape.flac", "a/../../escape.flac"] {
+            let (r, dir) = unpacked(&[("01.flac", b"a"), (name, b"x")], 1 << 20);
+            assert!(r.is_err(), "{name} was unpacked");
+            assert!(!dir.parent().unwrap().join("escape.flac").exists());
+            assert!(listing(dir.parent().unwrap()).is_empty());
+        }
+    }
+
+    #[test]
+    fn a_zip_bigger_than_the_limit_is_refused() {
+        let (r, _) = unpacked(&[("01.flac", &[0; 600]), ("02.flac", &[0; 600])], 1000);
+        assert!(r.is_err());
+        let (r, _) = unpacked(&[("01.flac", &[0; 600]), ("02.flac", &[0; 400])], 1000);
+        r.unwrap();
+    }
+
+    #[test]
+    fn only_web_urls_are_fetched() {
+        assert!(check_url(" https://p4.bcbits.com/download/album/x?token=y ").is_ok());
+        assert!(check_url("http://example.com/a.flac").is_ok());
+        for bad in [
+            "file:///etc/passwd",
+            "ftp://example.com/a.zip",
+            "example.com/a.zip",
+            "",
+            "https://",
+        ] {
+            assert!(check_url(bad).is_err(), "{bad} was accepted");
+        }
+        assert_eq!(
+            host("https://p4.bcbits.com/download?token=secret"),
+            "p4.bcbits.com"
+        );
+    }
+
+    #[test]
+    fn a_fetched_file_is_named_by_the_server_then_the_url() {
+        let url =
+            url::Url::parse("https://p4.bcbits.com/download/album/abc%20def.zip?token=t").unwrap();
+        assert_eq!(
+            file_name(
+                Some(
+                    "attachment; filename*=UTF-8''Burial%20-%20Untrue.zip; filename=\"Burial - Untrue.zip\""
+                ),
+                &url
+            )
+            .as_deref(),
+            Some("Burial - Untrue.zip")
+        );
+        assert_eq!(
+            file_name(
+                Some("attachment; filename=\"Kode9 - Escapology.zip\""),
+                &url
+            )
+            .as_deref(),
+            Some("Kode9 - Escapology.zip")
+        );
+        assert_eq!(file_name(None, &url).as_deref(), Some("abc def.zip"));
+        assert_eq!(
+            file_name(Some("attachment; filename=\"../../.ssh/keys\""), &url).as_deref(),
+            Some("keys")
+        );
+        let bare = url::Url::parse("https://example.com/").unwrap();
+        assert_eq!(file_name(None, &bare), None);
     }
 }

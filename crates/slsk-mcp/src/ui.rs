@@ -72,6 +72,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/stream", get(stream))
         .route("/search", get(search))
         .route("/grab", post(grab))
+        .route("/import-url", post(import_url))
         .route("/download", post(download))
         .route("/jobs/{id}/{action}", post(job_action))
         .route("/jobs/{id}/resolve/{release}", post(resolve))
@@ -648,6 +649,18 @@ impl JobsView {
     /// Where the download stands, in the terms that explain a wait: nothing
     /// yet, a place in the peer's queue, or how much has arrived.
     fn progress(&self, j: &Job) -> String {
+        if let Some(host) = &j.host {
+            return match (j.downloaded_bytes, j.total_bytes) {
+                (0, _) => format!("waiting for {host}"),
+                (got, 0) => format!("{} so far", human(got)),
+                _ => format!(
+                    "{} of {} ({}%)",
+                    human(j.downloaded_bytes),
+                    human(j.total_bytes),
+                    self.pct(j)
+                ),
+            };
+        }
         let peer = j.username.as_deref().unwrap_or("the peer");
         match self.places.get(j.id.as_str()) {
             Some(p) if j.downloaded_bytes == 0 => format!("place {p} in {peer}'s queue"),
@@ -1233,6 +1246,18 @@ async fn grab(State(s): State<UiState>, axum::Form(form): axum::Form<SearchForm>
             r#"<div id="flash" class="toast border-bad text-meta text-bad">{}</div>"#,
             askama_escape(&e.message)
         )),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct UrlForm {
+    url: String,
+}
+
+async fn import_url(State(s): State<UiState>, axum::Form(form): axum::Form<UrlForm>) -> Response {
+    match s.app.jobs.from_url(&form.url).await {
+        Ok(_) => done(&s.app, PAGE).await,
+        Err(e) => failed(&e),
     }
 }
 

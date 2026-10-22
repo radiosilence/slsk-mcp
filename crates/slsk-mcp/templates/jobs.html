@@ -10,7 +10,7 @@
       <span class="pill">{{ self.label(j.status) }}</span>
     </div>
     <div class="text-meta text-muted wrap-anywhere">
-      {% match j.username %}{% when Some with (u) %}from {{ u }}{% when None %}{% endmatch %}
+      {% match j.username %}{% when Some with (u) %}from {{ u }}{% when None %}{% match j.host %}{% when Some with (h) %}from {{ h }}{% when None %}{% endmatch %}{% endmatch %}
       {% if j.status == "downloading" %} · {{ self.progress(j) }}{% endif %}
       {% if j.status == "importing" %} · tagging and filing{% endif %}
     </div>
@@ -74,7 +74,7 @@
       <span class="pill">{{ self.label(j.status) }}</span>
     </div>
     <div class="text-meta text-muted wrap-anywhere">
-      {% match j.username %}{% when Some with (u) %}from {{ u }}{% when None %}{% endmatch %}
+      {% match j.username %}{% when Some with (u) %}from {{ u }}{% when None %}{% match j.host %}{% when Some with (h) %}from {{ h }}{% when None %}{% endmatch %}{% endmatch %}
       {% if j.status == "downloading" %} · {{ self.progress(j) }}{% endif %}
       {% if j.status == "importing" %} · tagging and filing{% endif %}
     </div>

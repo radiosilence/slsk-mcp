@@ -323,6 +323,8 @@ pub enum Source {
     },
     /// Files picked individually.
     Files { username: String },
+    /// A file fetched over HTTP: an album as a zip, or a single track.
+    Url { url: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -555,6 +557,18 @@ pub async fn files_of_jobs(
         by_job.entry(f.job_id).or_default().push(f);
     }
     Ok(by_job)
+}
+
+pub async fn set_title(db: &Db, id: Uuid, title: &str) -> Result<()> {
+    let title = title.to_string();
+    db.run(move |c| {
+        c.execute(
+            "UPDATE jobs SET title = ?2 WHERE id = ?1",
+            params![id, title],
+        )?;
+        Ok(())
+    })
+    .await
 }
 
 pub async fn set_status(db: &Db, id: Uuid, status: &str, error: Option<&str>) -> Result<()> {
