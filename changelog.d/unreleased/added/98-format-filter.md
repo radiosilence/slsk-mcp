@@ -1,0 +1,1 @@
+- **Library filter for albums in more than one format.** Lists albums the library also holds in another format, such as an MP3 left behind by a FLAC upgrade, including the pairs duplicate detection misses because their track lists differ.
