@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.0
+
+### Added
+
+- **Per-track and multi-album tag edits for library albums.** `libraryTracks(query)` reads each matching album's file names and current tags, and `editTracks(albums)` applies album-wide and per-file corrections across one or more albums in one call. Every album and file is checked before anything is written, a failed write puts back the files already written, and each album is re-filed afterwards as `modifyAlbums` does. `preview: true` lists every file's change and where each album would go. The web UI's edit form uses the same path, so its edits gain the same checks.
+
+### Fixed
+
+- **A search whose task died no longer blocks identical searches.** A cached search that ended without finishing is replaced by a fresh one instead of answering "channel closed" for ten minutes and leaving the web UI on "Searching…".
+- **`editTracks` tells files on separate discs apart and checks more before writing.** Files are keyed by their path within the album, so `CD1/01.flac` and `CD2/01.flac` no longer collide. A file that changed since it was read, or that cannot be opened for writing, stops the batch before anything is written. A failed write's error says what the undo could not restore. Albums are re-filed in one pass, and an album that cannot be re-filed is reported as refused rather than failing the call. The preview applies the same checks as the write and flags two albums headed for one folder. `libraryTracks` reads at most 50 albums.
+
+### Internal
+
+- **Workflows are linted.** CI runs actionlint, with shellcheck, over `.github/workflows`, and `just check` runs it locally.
+- **UI tests live in one module.** The library and browse tests moved into `src/ui/tests.rs`, matching koan, so both projects keep their UI tests in the same place.
+
 ## 0.5.2
 
 ### Security
