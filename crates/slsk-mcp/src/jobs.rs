@@ -1668,10 +1668,9 @@ pub(crate) fn unzip(archive: &std::path::Path, dir: &std::path::Path, limit: u64
         let entry = zip.by_index(i)?;
         // `enclosed_name` makes an absolute name relative rather than
         // refusing it; a name it had to change is refused here.
-        let Some(path) = entry
-            .enclosed_name()
-            .filter(|p| p.as_path() == std::path::Path::new(entry.name().unwrap_or_default()))
-        else {
+        let Some(path) = entry.enclosed_name().filter(|p| {
+            p.as_path() == std::path::Path::new(entry.name().as_deref().unwrap_or_default())
+        }) else {
             bail!("the zip holds a path outside itself: {}", entry.name()?);
         };
         // Folders are made as needed; links and Finder's resource forks
