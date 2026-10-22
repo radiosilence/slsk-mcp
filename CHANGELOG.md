@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.0
+
+### Added
+
+- **Bin any album from the library.** The album panel always offers Bin, so a superseded copy that duplicate detection misses can still be moved to the bin; albums that are not spare copies preview unticked with a warning.
+- **Library filter for albums in more than one format.** Lists albums the library also holds in another format, such as an MP3 left behind by a FLAC upgrade, including the pairs duplicate detection misses because their track lists differ.
+- **Albums from a download URL.** `importUrl(url)`, or the link field on the Albums page, fetches an http or https link such as a Bandcamp purchase, unpacks it if it is a zip, and imports it through the same analysis, matching and review as a Soulseek download, so a purchase is checked before it is filed. Only the host is logged or shown, since such links carry access tokens.
+
 ## 0.6.0
 
 ### Added
