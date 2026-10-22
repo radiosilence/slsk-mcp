@@ -32,7 +32,7 @@ schemars = "1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.11.1"
-sift = { package = "sift-music", version = "0.8" }
+sift = { package = "sift-music", version = "0.9" }
 slsk-engine = { version = "0.1.0", path = "../slsk-engine" }
 soulseek-rs-lib = "19"
 symphonia = { version = "0.6.1", default-features = false, features = ["flac", "wav", "aiff", "pcm", "alac", "isomp4"] }
