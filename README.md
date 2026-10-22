@@ -166,6 +166,16 @@ the album's MusicBrainz release, or, for an album filed by its own tags, by
 splitting the credit only where every part is an artist the library already
 holds. Separators alone would split bands such as "Earth, Wind & Fire".
 
+Album art can be corrected after import, since a wrong embedded picture is
+otherwise fixed only from a shell on the server. `albumArt` reports the
+pictures in each file and the cover images beside them; the web UI shows the
+cover in the album panel. `removeAlbumArt` strips embedded pictures, and
+`setAlbumArt` (or an upload in the UI) replaces them with one image, scaled
+as imports scale fetched art. Imports embed art and write no cover file, so
+embedding is the default; a cover file is written only when asked for, and
+the cover images it displaces go to the bin, because players such as
+Navidrome show a folder image before embedded art. Both take `preview: true`.
+
 ## Running it
 
 It is a long-running daemon: it holds one Soulseek login, shares the library

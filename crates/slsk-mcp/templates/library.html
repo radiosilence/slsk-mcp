@@ -35,6 +35,7 @@
     <button type="button" data-indicator="_pv_enrich" data-attr:disabled="$_pv_enrich" data-class:busy="$_pv_enrich" data-on:click="@post('/library/preview/enrich', {contentType: 'form', selector: '#lib-sel'}); document.getElementById('lib-preview').scrollIntoView({block: 'start'})">Enrich</button>
     <button type="button" data-indicator="_pv_reimport" data-attr:disabled="$_pv_reimport" data-class:busy="$_pv_reimport" data-on:click="@post('/library/preview/reimport', {contentType: 'form', selector: '#lib-sel'}); document.getElementById('lib-preview').scrollIntoView({block: 'start'})">Re-tag</button>
     <button type="button" data-indicator="_pv_batch" data-attr:disabled="$_pv_batch" data-class:busy="$_pv_batch" data-on:click="@post('/library/edit', {contentType: 'form', selector: '#lib-sel'}); document.getElementById('lib-preview').scrollIntoView({block: 'start'})">Edit tags</button>
+    <button type="button" data-indicator="_pv_unart" data-attr:disabled="$_pv_unart" data-class:busy="$_pv_unart" data-on:click="@post('/library/preview/remove-art', {contentType: 'form', selector: '#lib-sel'}); document.getElementById('lib-preview').scrollIntoView({block: 'start'})">Remove art</button>
     <button type="button" data-show="$_spares > 0" data-indicator="_pv_bin" data-attr:disabled="$_pv_bin" data-class:busy="$_pv_bin" data-on:click="@post('/library/preview/bin', {contentType: 'form', selector: '#lib-sel'}); document.getElementById('lib-preview').scrollIntoView({block: 'start'})">Bin spares</button>
   </div>
 </form>

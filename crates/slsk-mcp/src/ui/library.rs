@@ -18,6 +18,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 
 use super::{UiState, failed, fields, flash_ok, patch, sse};
+use crate::art::{AlbumArt, ArtRemoved, ArtSet, Image, Target};
 use crate::library::{
     AlbumEdit, AlbumMove, CreditWrite, LibraryAlbum, Overview, Preview, TagEdits, by_path,
 };
@@ -29,6 +30,14 @@ pub(super) fn routes() -> Router<UiState> {
         .route("/library/album", get(album))
         .route("/library/album/releases", get(releases))
         .route("/library/album/edit", get(edit_form))
+        .route("/library/album/cover", get(cover))
+        .route(
+            "/library/art/preview",
+            post(art_preview).layer(axum::extract::DefaultBodyLimit::max(
+                crate::art::MAX_BYTES + (1 << 20),
+            )),
+        )
+        .route("/library/art/pending/{token}", get(pending_art))
         .route("/library/edit", post(batch_form))
         .route("/library/preview/{action}", post(preview))
         .route("/library/apply/{action}", post(apply))
@@ -486,9 +495,42 @@ struct AlbumView<'a> {
     filter: &'a Filter,
     row: &'a Row,
     tracks: Vec<sift::meta::Track>,
+    art: Option<AlbumArt>,
+    /// Where its cover is drawn from, when it has one.
+    cover: Option<String>,
 }
 
 impl AlbumView<'_> {
+    /// The pictures embedded in its files, each kind once, with how many
+    /// files carry it.
+    fn embedded(&self) -> Vec<(String, usize)> {
+        let mut out: Vec<(String, usize)> = Vec::new();
+        for f in self.art.iter().flat_map(|a| &a.files) {
+            for p in &f.pictures {
+                let desc = picture(p);
+                match out.iter_mut().find(|(d, _)| *d == desc) {
+                    Some((_, n)) => *n += 1,
+                    None => out.push((desc, 1)),
+                }
+            }
+        }
+        out
+    }
+    /// Files whose pictures could not be read.
+    fn unreadable(&self) -> usize {
+        self.art
+            .iter()
+            .flat_map(|a| &a.files)
+            .filter(|f| f.error.is_some())
+            .count()
+    }
+    fn cover_file(&self, c: &crate::art::CoverFile) -> String {
+        let size = match (c.width, c.height) {
+            (Some(w), Some(h)) => format!(", {w}×{h}"),
+            _ => String::new(),
+        };
+        format!("{}{size}, {}", c.name, super::human(c.bytes))
+    }
     fn rel<'b>(&self, p: &'b str) -> &'b str {
         rel(self.root, p)
     }
@@ -592,6 +634,8 @@ async fn album_html(s: &UiState, filter: &Filter) -> String {
             root: &root,
             filter,
             row: &row,
+            art: s.app.library.art(&row.album.path).await.ok(),
+            cover: cover_url(&s.app.library, &row.album.path).await,
             tracks,
         }
         .render()
@@ -612,6 +656,170 @@ async fn album(State(s): State<UiState>, uri: http::Uri) -> Response {
         opened(&filter.album),
         super::place(&filter.url()),
     ])
+}
+
+/// The address of the album's cover, when it has one, versioned by the
+/// file it comes from so a browser keeps it until the art changes.
+async fn cover_url(library: &crate::library::Library, path: &str) -> Option<String> {
+    let (_, source) = library.cover(path).await.ok()??;
+    let meta = std::fs::metadata(&source).ok()?;
+    let modified = meta
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_nanos();
+    let version = key(&format!("{}:{}:{modified}", source.display(), meta.len()));
+    Some(super::place_url(
+        "/library/album/cover",
+        &[("path", path), ("v", &version)],
+    ))
+}
+
+#[derive(serde::Deserialize)]
+struct CoverQuery {
+    path: String,
+    #[serde(default)]
+    v: String,
+}
+
+/// An album's cover: its leading cover image, or the front cover embedded
+/// in its first file. Only albums the library's index holds are served. A
+/// versioned address names one version of the art, so it is kept for good.
+async fn cover(State(s): State<UiState>, Query(q): Query<CoverQuery>) -> Response {
+    let Ok(Some((bytes, _))) = s.app.library.cover(&q.path).await else {
+        return http::StatusCode::NOT_FOUND.into_response();
+    };
+    image_response(bytes, !q.v.is_empty())
+}
+
+fn image_response(bytes: Vec<u8>, immutable: bool) -> Response {
+    let Some(mime) = crate::art::mime_of(&bytes) else {
+        return http::StatusCode::NOT_FOUND.into_response();
+    };
+    let cache = if immutable {
+        "private, max-age=31536000, immutable"
+    } else {
+        "private, no-cache"
+    };
+    (
+        [
+            (http::header::CONTENT_TYPE, mime),
+            (http::header::CACHE_CONTROL, cache),
+        ],
+        bytes,
+    )
+        .into_response()
+}
+
+/// Album art previewed and not yet applied, by token: what applying writes
+/// is the image the preview showed, not a second fetch of its URL.
+pub(super) type ArtStash = std::sync::Arc<
+    parking_lot::Mutex<HashMap<String, (std::time::Instant, std::sync::Arc<Image>)>>,
+>;
+
+/// How long a previewed image waits to be applied, and how many wait.
+const ART_KEPT: std::time::Duration = std::time::Duration::from_secs(3600);
+pub(super) const ART_HELD: usize = 4;
+
+pub(super) fn stash(art: &ArtStash, image: Image) -> String {
+    let mut held = art.lock();
+    held.retain(|_, (at, _)| at.elapsed() < ART_KEPT);
+    while held.len() >= ART_HELD {
+        let Some(oldest) = held
+            .iter()
+            .min_by_key(|(_, (at, _))| *at)
+            .map(|(k, _)| k.clone())
+        else {
+            break;
+        };
+        held.remove(&oldest);
+    }
+    let token = uuid::Uuid::new_v4().simple().to_string();
+    held.insert(
+        token.clone(),
+        (std::time::Instant::now(), std::sync::Arc::new(image)),
+    );
+    token
+}
+
+pub(super) fn stashed(art: &ArtStash, token: &str) -> Option<std::sync::Arc<Image>> {
+    art.lock()
+        .get(token)
+        .filter(|(at, _)| at.elapsed() < ART_KEPT)
+        .map(|(_, i)| i.clone())
+}
+
+/// An image previewed as an album's new art.
+async fn pending_art(State(s): State<UiState>, Path(token): Path<String>) -> Response {
+    match stashed(&s.art, &token) {
+        Some(image) => image_response(image.bytes.clone(), true),
+        None => http::StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+/// New art for the album open in detail, from an uploaded image or a URL:
+/// read and checked, kept for applying, and previewed as any other action.
+async fn art_preview(
+    State(s): State<UiState>,
+    mut multipart: axum::extract::Multipart,
+) -> Response {
+    let mut form = Vec::new();
+    let mut upload = Vec::new();
+    let read: anyhow::Result<()> = async {
+        while let Some(field) = multipart.next_field().await? {
+            let name = field.name().unwrap_or_default().to_string();
+            if name == "image" {
+                upload = field.bytes().await?.to_vec();
+            } else {
+                let value = field.text().await?;
+                form.push((name, value));
+            }
+        }
+        Ok(())
+    }
+    .await;
+    if let Err(e) = read {
+        return failed(&e);
+    }
+    let url = super::field(&form, "url")
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_string();
+    let image = if !upload.is_empty() {
+        s.app.library.prepare_art(&upload)
+    } else if !url.is_empty() {
+        s.app.library.fetch_art(&url).await
+    } else {
+        Err(anyhow::anyhow!("choose an image file or give its URL"))
+    };
+    match image {
+        Ok(image) => {
+            let token = stash(&s.art, image);
+            form.push(("art".into(), token));
+            previewed(s, Action::SetArt, form).await
+        }
+        Err(e) => failed(&e),
+    }
+}
+
+/// A picture embedded in a file, as a person reads it.
+fn picture(p: &crate::art::Picture) -> String {
+    let kind = match p.kind.as_str() {
+        "CoverFront" => "front cover",
+        "CoverBack" => "back cover",
+        "Other" => "other",
+        k => k,
+    };
+    let mut parts = vec![kind.to_string()];
+    if let Some(m) = &p.mime {
+        parts.push(m.trim_start_matches("image/").to_uppercase());
+    }
+    if let (Some(w), Some(h)) = (p.width, p.height) {
+        parts.push(format!("{w}×{h}"));
+    }
+    parts.push(super::human(p.bytes as u64));
+    parts.join(", ")
 }
 
 #[derive(Template)]
@@ -729,6 +937,10 @@ pub(super) enum Action {
     /// Tags typed by hand: any field of one album's files, or album-wide
     /// fields across several.
     Edit,
+    /// Every picture embedded in the files taken out.
+    RemoveArt,
+    /// An image chosen for one album, as its art.
+    SetArt,
 }
 
 impl Action {
@@ -740,6 +952,8 @@ impl Action {
             "reimport" => Self::Reimport,
             "bin" => Self::Bin,
             "edit" => Self::Edit,
+            "remove-art" => Self::RemoveArt,
+            "set-art" => Self::SetArt,
             _ => return None,
         })
     }
@@ -752,6 +966,8 @@ impl Action {
             Self::Reimport => "reimport",
             Self::Bin => "bin",
             Self::Edit => "edit",
+            Self::RemoveArt => "remove-art",
+            Self::SetArt => "set-art",
         }
     }
 
@@ -763,6 +979,8 @@ impl Action {
             Self::Reimport => "Re-tag",
             Self::Bin => "Bin",
             Self::Edit => "Edit tags",
+            Self::RemoveArt => "Remove art",
+            Self::SetArt => "Set art",
         }
     }
 
@@ -772,6 +990,8 @@ impl Action {
             Self::Credit => "Credit artists on",
             Self::Bin => "Bin",
             Self::Edit => "Edit",
+            Self::RemoveArt => "Remove art from",
+            Self::SetArt => "Set art on",
             _ => self.name(),
         }
     }
@@ -784,6 +1004,8 @@ impl Action {
             Self::Reimport => "Re-tagging",
             Self::Bin => "Binning",
             Self::Edit => "Editing",
+            Self::RemoveArt => "Removing art from",
+            Self::SetArt => "Setting art on",
         }
     }
 
@@ -795,6 +1017,8 @@ impl Action {
             Self::Reimport => "Re-tagged",
             Self::Bin => "Binned",
             Self::Edit => "Edited",
+            Self::RemoveArt => "Removed art from",
+            Self::SetArt => "Set art on",
         }
     }
 
@@ -816,6 +1040,12 @@ impl Action {
             Self::Edit => {
                 "The fields typed, as each file has them and as they would be, and where the new tags file the album. The albums ticked are edited together: if any file cannot be written, none keep the edit."
             }
+            Self::RemoveArt => {
+                "Every picture embedded in each file is taken out; the rest of the tags stay. Cover images in the folder are left, and players show those first."
+            }
+            Self::SetArt => {
+                "The image becomes the only picture embedded in each file, as an import embeds art, scaled down past the largest width imports embed. A cover file is written beside them when asked for, and cover images already there move to the bin."
+            }
             Self::Bin => {
                 "Each album moves to the bin beside the library, out of sight of the shares and the player. Nothing is deleted. Spare copies are ticked; kept and only copies are left for you to tick."
             }
@@ -827,7 +1057,7 @@ impl Action {
     /// preview every album selected.
     fn cap(self) -> Option<usize> {
         match self {
-            Self::Refile | Self::Bin | Self::Edit => None,
+            Self::Refile | Self::Bin | Self::Edit | Self::RemoveArt | Self::SetArt => None,
             Self::Credit | Self::Enrich | Self::Reimport => Some(50),
         }
     }
@@ -861,6 +1091,37 @@ struct Ask {
     /// The tags typed for each album, by path, and its files as they were
     /// read to compare them.
     edits: HashMap<String, (TagEdits, Vec<sift::meta::Track>)>,
+    /// The image previewed as new art, and where it goes.
+    art: Option<(ArtChoice, std::sync::Arc<Image>)>,
+}
+
+/// New art as a preview hands it to applying: the image kept by token, and
+/// where it goes.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(super) struct ArtChoice {
+    pub(super) token: String,
+    pub(super) embed: bool,
+    pub(super) file: bool,
+}
+
+impl ArtChoice {
+    /// The choice the art form makes: embedding unless only a cover file
+    /// is ticked, as imports embed.
+    pub(super) fn from_form(form: &[(String, String)]) -> Option<Self> {
+        let ticked = |k| super::field(form, k).is_some_and(|v| !v.is_empty());
+        Some(Self {
+            token: super::field(form, "art")?.to_string(),
+            embed: ticked("embed"),
+            file: ticked("file"),
+        })
+    }
+
+    fn target(&self) -> Target {
+        Target {
+            embed: self.embed,
+            file: self.file,
+        }
+    }
 }
 
 /// A MusicBrainz release id from what was pasted: the id, or a link to the
@@ -939,6 +1200,11 @@ enum Body {
         to: String,
         keep: String,
         reason: String,
+    },
+    RemoveArt(ArtRemoved),
+    SetArt {
+        set: ArtSet,
+        token: String,
     },
 }
 
@@ -1280,6 +1546,46 @@ async fn plan_one(
                     .filter(|d| Some(d.as_str()) != std::path::Path::new(&path).strip_prefix(&root).ok().and_then(|p| p.to_str()));
                 p.body = Body::Edit { files, into };
             }
+            Action::RemoveArt => {
+                let r = library
+                    .remove_art(std::slice::from_ref(&path), false)
+                    .await?
+                    .pop()
+                    .ok_or_else(|| anyhow::anyhow!("no longer in the library"))?;
+                p.applicable = !r.files.is_empty();
+                p.ticked = p.applicable;
+                p.note = if !p.applicable {
+                    Some("No file carries embedded art.".into())
+                } else if !r.cover_files.is_empty() {
+                    Some(format!(
+                        "Players show the cover image in the folder, which stays: {}.",
+                        r.cover_files.join(", ")
+                    ))
+                } else {
+                    None
+                };
+                p.body = Body::RemoveArt(r);
+            }
+            Action::SetArt => {
+                let Some((choice, image)) = &ask.art else {
+                    p.note = Some("No image chosen.".into());
+                    return Ok(());
+                };
+                let set = library.set_art(&path, image, choice.target(), false).await?;
+                p.applicable = true;
+                p.ticked = true;
+                p.note = (!set.kept.is_empty()).then(|| {
+                    format!(
+                        "Players show the cover image in the folder before embedded art, and it stays: {}. Tick “Cover file” to replace it.",
+                        set.kept.join(", ")
+                    )
+                });
+                p.with = serde_json::to_string(choice).ok();
+                p.body = Body::SetArt {
+                    set,
+                    token: choice.token.clone(),
+                };
+            }
             Action::Bin => {
                 let dup = row.marks.as_ref().and_then(|m| m.dup.as_ref());
                 match library.bin_destination(&path) {
@@ -1333,7 +1639,10 @@ async fn preview(State(s): State<UiState>, Path(action): Path<String>, body: Byt
     let Some(action) = Action::parse(&action) else {
         return failed(&anyhow::anyhow!("no such action"));
     };
-    let form = fields(&body);
+    previewed(s, action, fields(&body)).await
+}
+
+async fn previewed(s: UiState, action: Action, form: Vec<(String, String)>) -> Response {
     let (filter, rows) = match selection(&s, &form).await {
         Ok(r) => r,
         Err(e) => return failed(&e),
@@ -1583,6 +1892,20 @@ async fn ask(
                 ..Default::default()
             })
         }
+        Action::SetArt => {
+            one()?;
+            let choice = ArtChoice::from_form(form)
+                .ok_or_else(|| anyhow::anyhow!("choose an image file or give its URL"))?;
+            if !choice.embed && !choice.file {
+                anyhow::bail!("tick where the art goes: embedded, a cover file, or both");
+            }
+            let image = stashed(&s.art, &choice.token)
+                .ok_or_else(|| anyhow::anyhow!("that image is no longer held; choose it again"))?;
+            Ok(Ask {
+                art: Some((choice, image)),
+                ..Default::default()
+            })
+        }
         _ => Ok(Ask::default()),
     }
 }
@@ -1781,11 +2104,11 @@ async fn apply(State(s): State<UiState>, Path(action): Path<String>, body: Bytes
         };
     }
     let (tx, rx) = tokio::sync::oneshot::channel();
-    let (app, state) = (s.app.clone(), s.run.clone());
+    let (app, state, art) = (s.app.clone(), s.run.clone(), s.art.clone());
     tokio::spawn(async move {
         use futures_util::FutureExt;
         // A panic in the run still frees the slot.
-        match std::panic::AssertUnwindSafe(run(&app, &state, action, &paths, &with))
+        match std::panic::AssertUnwindSafe(run(&app, &state, &art, action, &paths, &with))
             .catch_unwind()
             .await
         {
@@ -1859,6 +2182,7 @@ fn edited(path: String) -> Outcome {
 async fn run(
     app: &crate::App,
     state: &parking_lot::Mutex<LibraryRun>,
+    art: &ArtStash,
     action: Action,
     paths: &[String],
     with: &HashMap<String, String>,
@@ -2006,6 +2330,38 @@ async fn run(
                     }
                 }
                 Action::Edit => unreachable!("edited above"),
+                Action::RemoveArt => {
+                    let r = library
+                        .remove_art(std::slice::from_ref(path), true)
+                        .await?
+                        .pop()
+                        .ok_or_else(|| anyhow::anyhow!("no longer in the library"))?;
+                    (
+                        format!("removed from {} files", r.files.len()),
+                        Vec::new(),
+                        None,
+                    )
+                }
+                Action::SetArt => {
+                    let choice: ArtChoice = attached
+                        .and_then(|c| serde_json::from_str(c).ok())
+                        .ok_or_else(|| anyhow::anyhow!("no image chosen"))?;
+                    let image = stashed(art, &choice.token).ok_or_else(|| {
+                        anyhow::anyhow!("that image is no longer held; choose it again")
+                    })?;
+                    let set = library.set_art(path, &image, choice.target(), true).await?;
+                    let mut parts = Vec::new();
+                    if !set.embedded.is_empty() {
+                        parts.push(format!("embedded in {} files", set.embedded.len()));
+                    }
+                    if let Some(f) = &set.cover_file {
+                        parts.push(format!("written as {f}"));
+                    }
+                    if !set.binned.is_empty() {
+                        parts.push(format!("binned {}", set.binned.join(", ")));
+                    }
+                    (parts.join(" · "), Vec::new(), None)
+                }
                 Action::Bin => {
                     let Some(keep) = attached else {
                         let to = library.bin_album(path).await?;

@@ -196,10 +196,13 @@ impl ServerHandler for SlskMcp {
                  `import -L`. `modifyAlbums(query, changes)` sets one field across whole albums; for \
                  corrections that differ track by track or span several albums, read `libraryTracks(query)` (50 albums at most) for \
                  the file names and current tags, then `editTracks(albums)`, which checks everything before \
-                 writing and changes all or nothing. Every one of these writes takes `preview: true`, which changes nothing and \
+                 writing and changes all or nothing. `albumArt(query)` reports each album's embedded pictures \
+                 and cover images; `removeAlbumArt(query)` strips the embedded ones, and \
+                 `setAlbumArt(path, url)` replaces the art with an image from a URL, embedded as imports do \
+                 (`file: true` also writes a cover image). Every one of these writes takes `preview: true`, which changes nothing and \
                  returns what it would do: the moves, each spare's bin destination, each file's artist \
                  credits and where they come from, every file's edited fields, the genres and lyrics enriching would add (gain is only \
-                 measured when written), the release a re-import would apply. Preview first and show the user \
+                 measured when written), the release a re-import would apply, the art that would be written or removed. Preview first and show the user \
                  before applying to more than one album.\n\n\
                  The client is also a chat client: rooms, private messages (`conversations`, `messages`), \
                  buddies and interests. `sendMessage` and `say` reach real people, so they take two calls: \

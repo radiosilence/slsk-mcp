@@ -330,6 +330,26 @@ pub(crate) struct AlbumTracks {
 }
 
 /// A file's path within the album at `dir`.
+/// The albums `query` matches, for a read of every file they hold: refused
+/// when the query is empty or matches more than a reader should wait for.
+async fn matching_at_most(
+    library: &crate::library::Library,
+    query: &[String],
+) -> Result<Vec<crate::library::LibraryAlbum>> {
+    if query.iter().all(|q| q.trim().is_empty()) {
+        return Err(Error::new("give a query; this reads every file it matches"));
+    }
+    const MOST: usize = 50;
+    let albums = library.albums(query).await?;
+    if albums.len() > MOST {
+        return Err(Error::new(format!(
+            "the query matches {} albums; narrow it to {MOST} or fewer",
+            albums.len()
+        )));
+    }
+    Ok(albums)
+}
+
 fn within(dir: &str, path: &std::path::Path) -> String {
     path.strip_prefix(dir)
         .unwrap_or(path)
@@ -897,20 +917,9 @@ impl Query {
         ctx: &Context<'_>,
         query: Vec<String>,
     ) -> Result<Vec<AlbumTracks>> {
-        if query.iter().all(|q| q.trim().is_empty()) {
-            return Err(Error::new("give a query; this reads every file it matches"));
-        }
-        const MOST: usize = 50;
         let library = &app(ctx).library;
-        let albums = library.albums(&query).await?;
-        if albums.len() > MOST {
-            return Err(Error::new(format!(
-                "the query matches {} albums; narrow it to {MOST} or fewer",
-                albums.len()
-            )));
-        }
         let mut out = Vec::new();
-        for a in albums {
+        for a in matching_at_most(library, &query).await? {
             let tracks = library.tracks(&a.path).await?;
             out.push(AlbumTracks {
                 tracks: tracks
@@ -922,6 +931,23 @@ impl Query {
                     .collect(),
                 path: a.path,
             });
+        }
+        Ok(out)
+    }
+
+    /// The art of each album `query` matches (as for `libraryAlbums`): the
+    /// pictures embedded in every file, with their type, size and
+    /// dimensions, and the cover images in the folder, the one players
+    /// show first leading. Read from the files now.
+    async fn album_art(
+        &self,
+        ctx: &Context<'_>,
+        query: Vec<String>,
+    ) -> Result<Vec<crate::art::AlbumArt>> {
+        let library = &app(ctx).library;
+        let mut out = Vec::new();
+        for a in matching_at_most(library, &query).await? {
+            out.push(library.art(&a.path).await?);
         }
         Ok(out)
     }
@@ -1569,6 +1595,51 @@ impl Mutation {
             album.refused = m.refused;
         }
         Ok(out)
+    }
+
+    /// Remove every picture embedded in the files of the albums `query`
+    /// matches (as for `libraryAlbums`, 50 at most). Cover images in their
+    /// folders are left, and listed: players show those before embedded
+    /// art. `preview: true` writes nothing and lists the files that carry
+    /// pictures: show the user that first.
+    async fn remove_album_art(
+        &self,
+        ctx: &Context<'_>,
+        query: Vec<String>,
+        #[graphql(default)] preview: bool,
+    ) -> Result<Vec<crate::art::ArtRemoved>> {
+        let library = &app(ctx).library;
+        let dirs: Vec<String> = matching_at_most(library, &query)
+            .await?
+            .into_iter()
+            .map(|a| a.path)
+            .collect();
+        Ok(library.remove_art(&dirs, !preview).await?)
+    }
+
+    /// Replace the art of the album at `path` (as `libraryAlbums` gives it)
+    /// with the image at `url`, http or https, a JPEG or PNG of at most
+    /// 32 MiB. It is scaled down past the largest width imports embed.
+    /// `embed` makes it the only picture in every file, as imports do;
+    /// `file` writes it beside them as `cover.jpg` (or `.png`), moving the
+    /// cover images already there to the bin, since players show those
+    /// before embedded art. `preview: true` fetches and checks the image,
+    /// writes nothing, and says what would be written: show the user that
+    /// first.
+    async fn set_album_art(
+        &self,
+        ctx: &Context<'_>,
+        path: String,
+        url: String,
+        #[graphql(default = true)] embed: bool,
+        #[graphql(default)] file: bool,
+        #[graphql(default)] preview: bool,
+    ) -> Result<crate::art::ArtSet> {
+        let library = &app(ctx).library;
+        let image = library.fetch_art(&url).await?;
+        Ok(library
+            .set_art(&path, &image, crate::art::Target { embed, file }, !preview)
+            .await?)
     }
 
     /// Find an album and start fetching the best copy of it. The best copy is

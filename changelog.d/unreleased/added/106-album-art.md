@@ -1,0 +1,1 @@
+- **Album art.** `albumArt`, `removeAlbumArt` and `setAlbumArt` (from a URL), and in the web UI the album's cover, removing embedded art from ticked albums, and setting art from a URL or an upload; embedded as imports embed it, with an optional cover file. All preview first.

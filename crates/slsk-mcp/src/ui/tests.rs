@@ -27,6 +27,45 @@ mod library {
     use crate::ui::library::*;
 
     #[test]
+    fn new_art_goes_where_the_form_ticks() {
+        let form = |pairs: &[(&str, &str)]| -> Vec<(String, String)> {
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        };
+        assert_eq!(
+            ArtChoice::from_form(&form(&[("art", "t"), ("embed", "1")])),
+            Some(ArtChoice {
+                token: "t".into(),
+                embed: true,
+                file: false,
+            })
+        );
+        let both = ArtChoice::from_form(&form(&[("art", "t"), ("embed", "1"), ("file", "1")]));
+        assert_eq!(both.map(|c| (c.embed, c.file)), Some((true, true)));
+        assert_eq!(ArtChoice::from_form(&form(&[("embed", "1")])), None);
+    }
+
+    #[test]
+    fn only_the_latest_previewed_images_are_held() {
+        let art = ArtStash::default();
+        let image = || crate::art::Image {
+            bytes: vec![0xFF, 0xD8, 0xFF],
+            mime: "image/jpeg",
+            width: 1,
+            height: 1,
+            resized: false,
+        };
+        let first = stash(&art, image());
+        assert!(stashed(&art, &first).is_some());
+        let rest: Vec<String> = (0..ART_HELD).map(|_| stash(&art, image())).collect();
+        assert!(stashed(&art, &first).is_none());
+        assert!(rest.iter().all(|t| stashed(&art, t).is_some()));
+        assert!(stashed(&art, "made-up").is_none());
+    }
+
+    #[test]
     fn an_address_that_does_not_parse_is_the_default_view() {
         let f: Filter = crate::ui::query(&"/library?q=a&q=b".parse().unwrap());
         assert_eq!(f, Filter::default());
