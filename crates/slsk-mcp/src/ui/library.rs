@@ -8,7 +8,7 @@
 //! what the person was shown, and goes through the same `Library` calls as
 //! the GraphQL mutations.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use askama::Template;
 use axum::Router;
@@ -133,7 +133,7 @@ pub(super) struct Filter {
     pub(super) since: String,
     #[serde(deserialize_with = "trimmed")]
     pub(super) from: String,
-    /// Empty for every album, `dups` or `moves`.
+    /// Empty for every album, `dups`, `formats` or `moves`.
     #[serde(deserialize_with = "trimmed")]
     pub(super) show: String,
     /// The album open in detail, by path; it does not narrow the list.
@@ -303,15 +303,43 @@ impl Row {
 
 /// The albums the filter admits, newest import first, with their marks.
 async fn listing(s: &UiState, filter: &Filter) -> anyhow::Result<Vec<Row>> {
+    let formats = match filter.show.as_str() {
+        "formats" => in_formats(&s.app.library.albums(&[]).await?),
+        _ => HashSet::new(),
+    };
     Ok(rows(s, &filter.terms())
         .await?
         .into_iter()
         .filter(|r| match filter.show.as_str() {
             "dups" => r.marks.as_ref().is_some_and(|m| m.dup.is_some()),
+            "formats" => formats.contains(&r.album.path),
             "moves" => r.refile().is_some(),
             _ => true,
         })
         .collect())
+}
+
+/// The paths of albums whose artist and title (ignoring edition suffixes)
+/// the library holds in more than one format: a lossy copy left behind by a
+/// lossless upgrade, which `duplicates` misses when the track lists differ.
+pub(super) fn in_formats(albums: &[LibraryAlbum]) -> HashSet<String> {
+    use sift::matching::{base_title, normalise};
+    let mut groups: HashMap<(String, String), Vec<&LibraryAlbum>> = HashMap::new();
+    for a in albums {
+        let (Some(artist), Some(title)) = (&a.album_artist, &a.album) else {
+            continue;
+        };
+        groups
+            .entry((normalise(artist), normalise(&base_title(title))))
+            .or_default()
+            .push(a);
+    }
+    groups
+        .into_values()
+        .filter(|g| g.iter().map(|a| &a.format).collect::<HashSet<_>>().len() > 1)
+        .flatten()
+        .map(|a| a.path.clone())
+        .collect()
 }
 
 /// The albums `terms` matches, with their marks.
