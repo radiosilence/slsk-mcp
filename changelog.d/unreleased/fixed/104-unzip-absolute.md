@@ -1,0 +1,1 @@
+- **URL import refuses zips holding absolute paths.** Such an entry was unpacked inside the job directory under a relative path instead of the archive being refused as malformed.
