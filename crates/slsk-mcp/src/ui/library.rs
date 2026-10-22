@@ -1908,9 +1908,13 @@ async fn run(
             .collect::<anyhow::Result<Vec<_>>>();
         state.lock().current = Some(match paths {
             [one] => one.clone(),
-            _ => format!("{} albums together", paths.len()),
+            _ => "all of them together".into(),
         });
-        match async { library.edit_many(&edits?).await }.await {
+        let edited_all = match edits {
+            Ok(edits) => library.edit_many(&edits).await,
+            Err(e) => Err(e),
+        };
+        match edited_all {
             Ok(moves) => {
                 for m in moves {
                     record(match (m.to, m.refused) {
