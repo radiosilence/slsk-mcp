@@ -260,6 +260,67 @@ pub fn binned_cover(root: &Path, bin: &Path, cover: &Path, at: u64) -> anyhow::R
         .ok_or_else(|| anyhow::anyhow!("no free name in the bin"))
 }
 
+/// Put the new cover written at `part` in place at `dest`, and take the
+/// old covers out of the album into the bin, each `(from, to)` in `moves`.
+/// Each old cover is linked into the bin before the new one takes its
+/// place, so none is lost whichever step fails, and the error says where
+/// things stand.
+pub async fn put_cover(
+    part: &Path,
+    dest: &Path,
+    moves: &[(PathBuf, PathBuf)],
+) -> anyhow::Result<()> {
+    for (from, to) in moves {
+        let kept = async {
+            if let Some(parent) = to.parent() {
+                tokio::fs::create_dir_all(parent).await?;
+            }
+            if tokio::fs::hard_link(from, to).await.is_err() {
+                tokio::fs::copy(from, to).await?;
+            }
+            anyhow::Ok(())
+        }
+        .await;
+        if let Err(e) = kept {
+            return Err(e.context(format!(
+                "keeping {} in the bin; the new cover waits at {} and the old ones are in place",
+                from.display(),
+                part.display()
+            )));
+        }
+    }
+    if let Err(e) = tokio::fs::rename(part, dest).await {
+        return Err(anyhow::Error::new(e).context(format!(
+            "putting the new cover in place; it waits at {} and the old ones are in place, with copies in the bin",
+            part.display()
+        )));
+    }
+    let new = tokio::fs::metadata(dest).await?;
+    for (from, _) in moves {
+        // An old cover the rename replaced (the same name, or the same file
+        // under another case of it) is gone already.
+        let Ok(old) = tokio::fs::metadata(from).await else {
+            continue;
+        };
+        if same_file(&old, &new) {
+            continue;
+        }
+        if let Err(e) = tokio::fs::remove_file(from).await {
+            return Err(anyhow::Error::new(e).context(format!(
+                "taking {} out of the album; the new cover is in place and a copy of the old one is in the bin",
+                from.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn same_file(a: &std::fs::Metadata, b: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    (a.dev(), a.ino()) == (b.dev(), b.ino())
+}
+
 /// Fetch an image from an http or https URL, refusing a web page or
 /// anything over [`MAX_BYTES`]. Only the host is ever named: links to
 /// images can carry access tokens.
@@ -425,6 +486,60 @@ mod tests {
         // Binning the album itself goes to `<bin>/Artist/Album`, still free.
         assert!(!bin.join("Artist/Album").exists());
         assert!(binned_cover(&root, &bin, Path::new("/elsewhere/cover.jpg"), 1).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+        std::fs::remove_dir_all(bin).unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_new_cover_leaves_no_old_one_beside_it() {
+        let root = scratch();
+        let bin = scratch();
+        let album = root.join("Album");
+        std::fs::create_dir_all(&album).unwrap();
+        let old = album.join("Cover.JPG");
+        std::fs::write(&old, b"old").unwrap();
+        // Whether this filesystem tells names apart by case.
+        let folds_case = album.join("cover.jpg").exists();
+        let part = album.join(".cover.jpg.part");
+        std::fs::write(&part, b"new").unwrap();
+        let moves = vec![(old.clone(), binned_cover(&root, &bin, &old, 1).unwrap())];
+        put_cover(&part, &album.join("cover.jpg"), &moves)
+            .await
+            .unwrap();
+        let mut left: Vec<String> = std::fs::read_dir(&album)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        // A case-folding filesystem may keep the old spelling of the name.
+        if folds_case {
+            assert_eq!(left.len(), 1);
+        } else {
+            assert_eq!(left, ["cover.jpg"]);
+        }
+        assert_eq!(std::fs::read(album.join("cover.jpg")).unwrap(), b"new");
+        assert_eq!(std::fs::read(&moves[0].1).unwrap(), b"old");
+        std::fs::remove_dir_all(root).unwrap();
+        std::fs::remove_dir_all(bin).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_cover_of_another_name_goes_to_the_bin() {
+        let root = scratch();
+        let bin = scratch();
+        let album = root.join("Album");
+        std::fs::create_dir_all(&album).unwrap();
+        let old = album.join("folder.jpg");
+        std::fs::write(&old, b"old").unwrap();
+        let part = album.join(".cover.jpg.part");
+        std::fs::write(&part, b"new").unwrap();
+        let moves = vec![(old.clone(), binned_cover(&root, &bin, &old, 1).unwrap())];
+        put_cover(&part, &album.join("cover.jpg"), &moves)
+            .await
+            .unwrap();
+        assert!(!old.exists() && !part.exists());
+        assert_eq!(std::fs::read(album.join("cover.jpg")).unwrap(), b"new");
+        assert_eq!(std::fs::read(&moves[0].1).unwrap(), b"old");
         std::fs::remove_dir_all(root).unwrap();
         std::fs::remove_dir_all(bin).unwrap();
     }

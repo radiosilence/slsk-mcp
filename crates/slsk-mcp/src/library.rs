@@ -1346,54 +1346,11 @@ impl Library {
                 )));
             }
         }
-        if target.file {
-            // Each old cover is linked into the bin before the new one takes
-            // its place, so none is lost whichever step fails.
-            for (from, to) in &moves {
-                let kept = async {
-                    if let Some(parent) = to.parent() {
-                        tokio::fs::create_dir_all(parent).await?;
-                    }
-                    if tokio::fs::hard_link(from, to).await.is_err() {
-                        tokio::fs::copy(from, to).await?;
-                    }
-                    anyhow::Ok(())
-                }
-                .await;
-                if let Err(e) = kept {
-                    self.bump();
-                    return Err(e.context(format!(
-                        "keeping {} in the bin; the art is embedded, the new cover waits at {} and the old ones are in place",
-                        from.display(),
-                        part.display()
-                    )));
-                }
-            }
-            if let Err(e) = tokio::fs::rename(&part, &dest).await {
-                self.bump();
-                return Err(anyhow::Error::new(e).context(format!(
-                    "putting the new cover in place; the art is embedded, the new cover waits at {} and the old ones are in place, with copies in the bin",
-                    part.display()
-                )));
-            }
-            for (from, _) in &moves {
-                // The new cover replaced it, under any case of its name.
-                if from.parent() == dest.parent()
-                    && from
-                        .file_name()
-                        .zip(dest.file_name())
-                        .is_some_and(|(a, b)| a.eq_ignore_ascii_case(b))
-                {
-                    continue;
-                }
-                if let Err(e) = tokio::fs::remove_file(from).await {
-                    self.bump();
-                    return Err(anyhow::Error::new(e).context(format!(
-                        "taking {} out of the album; the new art is in place and a copy of it is in the bin",
-                        from.display()
-                    )));
-                }
-            }
+        if target.file
+            && let Err(e) = art::put_cover(&part, &dest, &moves).await
+        {
+            self.bump();
+            return Err(e.context("the art is embedded"));
         }
         self.bump();
         tracing::info!(
