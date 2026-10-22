@@ -34,6 +34,40 @@ mod library {
         assert_eq!(f.q, "a");
     }
 
+    #[test]
+    fn albums_held_in_more_than_one_format_are_found_across_editions() {
+        let album =
+            |path: &str, artist: &str, title: &str, format: &str| crate::library::LibraryAlbum {
+                path: path.into(),
+                album_artist: Some(artist.into()),
+                album: Some(title.into()),
+                year: None,
+                format: format.into(),
+                tracks: 10,
+                added: None,
+            };
+        let found = in_formats(&[
+            album("/a", "The Dø", "Both Ways Open Jaws", "MP3"),
+            album(
+                "/b",
+                "the dø",
+                "Both Ways Open Jaws (Deluxe Edition)",
+                "FLAC",
+            ),
+            album(
+                "/c",
+                "The Dø",
+                "Both Ways Open Jaws Extended: Live Sessions",
+                "FLAC",
+            ),
+            album("/d", "Burial", "Untrue", "FLAC"),
+            album("/e", "Burial", "Untrue", "FLAC"),
+        ]);
+        let mut found: Vec<_> = found.into_iter().collect();
+        found.sort();
+        assert_eq!(found, ["/a", "/b"]);
+    }
+
     fn change(from: &str, to: Option<&str>) -> Change {
         Change::of(&AlbumMove {
             from: from.into(),

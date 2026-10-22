@@ -12,6 +12,7 @@
     <select class="flex-auto" name="show" data-bind:_libshow data-on:change="@post('/library/find', {contentType: 'form', selector: '#lib-find'})">
       <option value="">Every album</option>
       <option value="dups">Held more than once</option>
+      <option value="formats">In more than one format</option>
       <option value="moves">Not where the rules file them</option>
     </select>
     <button class="flex-auto" type="submit" data-attr:disabled="$_finding" data-class:busy="$_finding">Find</button>
