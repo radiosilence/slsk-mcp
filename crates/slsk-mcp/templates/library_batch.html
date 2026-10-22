@@ -1,0 +1,21 @@
+<div id="lib-preview" class="card">
+  <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5"><strong class="min-w-0 flex-auto wrap-anywhere">Edit tags: {{ rows.len() }} album{% if rows.len() != 1 %}s{% endif %}</strong></div>
+  <form id="lib-batch" data-on:submit__prevent="@post('/library/preview/edit', {contentType: 'form', selector: '#lib-batch'})">
+    <input type="hidden" name="batch" value="1">
+    {% for r in rows %}<input type="hidden" name="path" value="{{ r.album.path }}">{% endfor %}
+    {% include "library_filter.html" %}
+    <p class="my-0.5 text-meta text-muted">What is typed is set on every file of every album; a field left blank is left as each album has it, and one ticked Clear is removed. The preview lists each file's changes first. Changing the album artist clears each file's list of album artists and their MusicBrainz ids; Credit artists splits it again.</p>
+    <div class="my-2 grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2">
+    {% for (field, label) in self.fields() %}
+      <div class="grid gap-0.5 text-meta text-muted">
+        <label for="be-{{ field }}">{{ label }}</label>
+        <div class="flex items-center gap-2"><input id="be-{{ field }}" class="min-w-0 flex-1" name="a-{{ field }}" placeholder="leave as is" autocomplete="off"><label class="flex items-center gap-1"><input type="checkbox" name="clear-{{ field }}" value="1" data-on:change="document.getElementById('be-{{ field }}').disabled = el.checked"> Clear</label></div>
+      </div>
+    {% endfor %}
+    </div>
+    <div class="mt-2.5 flex flex-wrap items-center gap-2">
+      <button type="button" data-indicator="_pv_edit" data-attr:disabled="$_pv_edit" data-class:busy="$_pv_edit" data-on:click="@post('/library/preview/edit', {contentType: 'form', selector: '#lib-batch'})">Preview edit</button>
+      <button type="button" class="quiet" data-on:click="document.getElementById('lib-preview').replaceChildren()">Cancel</button>
+    </div>
+  </form>
+</div>

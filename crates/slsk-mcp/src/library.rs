@@ -781,25 +781,12 @@ impl Library {
         Ok(EditPlan { files, refile })
     }
 
-    /// Write `edits` to the album at `dir`, then re-file it where its new
-    /// tags put it: moved (`to`), left with the reason (`refused`), or in
-    /// place (neither).
-    pub async fn edit(&self, dir: &str, edits: &TagEdits) -> anyhow::Result<AlbumMove> {
-        let mut moves = self
-            .edit_many(&[AlbumEdit {
-                dir: dir.to_string(),
-                edits: edits.clone(),
-                read: None,
-            }])
-            .await?;
-        Ok(moves.remove(0))
-    }
-
-    /// [`Self::edit`] for several albums at once, all or nothing: every album
-    /// and file is checked before anything is written, and if a write fails,
-    /// the files already written get their edited fields back as they read.
-    /// Then the albums are re-filed together; one that cannot be is reported
-    /// as refused, its tags already written.
+    /// Write each album's edits, all or nothing: every album and file is
+    /// checked before anything is written, and if a write fails, the files
+    /// already written get their edited fields back as they read. Then the
+    /// albums are re-filed together where their new tags put them: moved
+    /// (`to`), left with the reason (`refused`), or in place (neither); one
+    /// that cannot be is reported as refused, its tags already written.
     pub async fn edit_many(&self, albums: &[AlbumEdit]) -> anyhow::Result<Vec<AlbumMove>> {
         check_batch(albums)?;
         {

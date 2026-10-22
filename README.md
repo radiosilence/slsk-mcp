@@ -264,7 +264,7 @@ the other, and nothing else to either.
 
 The UI reaches everything GraphQL and MCP do, so a phone is a full client:
 search, albums and uploads, then the wishlist, the library (one list of albums to
-re-file, credit, enrich, re-import or bin), browsing a user's shares, rooms and private messages, bans,
+re-file, credit, enrich, re-import, edit or bin), browsing a user's shares, rooms and private messages, bans,
 settings and triage. Each has its own address, and the server draws that
 page whole around a shared layout, so a link or a reload costs one request
 and nothing for the other pages; Datastar then patches parts of it in place,
