@@ -19,7 +19,9 @@ use axum::routing::{get, post};
 
 use super::{UiState, failed, fields, flash_ok, patch, sse};
 use crate::art::{AlbumArt, ArtRemoved, ArtSet, Image, Target};
-use crate::library::{AlbumMove, CreditWrite, LibraryAlbum, Overview, Preview, TagEdits, by_path};
+use crate::library::{
+    AlbumEdit, AlbumMove, CreditWrite, LibraryAlbum, Overview, Preview, TagEdits, by_path,
+};
 
 pub(super) fn routes() -> Router<UiState> {
     Router::new()
@@ -36,6 +38,7 @@ pub(super) fn routes() -> Router<UiState> {
             )),
         )
         .route("/library/art/pending/{token}", get(pending_art))
+        .route("/library/edit", post(batch_form))
         .route("/library/preview/{action}", post(preview))
         .route("/library/apply/{action}", post(apply))
 }
@@ -891,6 +894,38 @@ async fn edit_form(
     }
 }
 
+#[derive(Template)]
+#[template(path = "library_batch.html")]
+struct BatchView<'a> {
+    filter: &'a Filter,
+    rows: &'a [Row],
+}
+
+impl BatchView<'_> {
+    fn fields(&self) -> Vec<(&'static str, &'static str)> {
+        batch_fields().collect()
+    }
+}
+
+/// Album-wide fields for the albums ticked in the list, set on all of them.
+async fn batch_form(State(s): State<UiState>, body: Bytes) -> Response {
+    let (filter, rows) = match selection(&s, &fields(&body)).await {
+        Ok(r) => r,
+        Err(e) => return failed(&e),
+    };
+    if rows.is_empty() {
+        return failed(&anyhow::anyhow!("nothing selected"));
+    }
+    super::one(
+        BatchView {
+            filter: &filter,
+            rows: &rows,
+        }
+        .render()
+        .unwrap_or_default(),
+    )
+}
+
 /// What can be done to the albums ticked in the list.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Action {
@@ -899,7 +934,8 @@ pub(super) enum Action {
     Enrich,
     Reimport,
     Bin,
-    /// Tags typed by hand, on one album.
+    /// Tags typed by hand: any field of one album's files, or album-wide
+    /// fields across several.
     Edit,
     /// Every picture embedded in the files taken out.
     RemoveArt,
@@ -1002,7 +1038,7 @@ impl Action {
                 "Each album is retagged in place from the MusicBrainz release shown, every field listed as it is and as it would be, and re-filed if its new tags put it elsewhere. Nothing is downloaded. Albums the tagger would not match on its own are left unticked."
             }
             Self::Edit => {
-                "The fields typed, as each file has them and as they would be, and where the new tags file the album."
+                "The fields typed, as each file has them and as they would be, and where the new tags file the album. The albums ticked are edited together: if any file cannot be written, none keep the edit."
             }
             Self::RemoveArt => {
                 "Every picture embedded in each file is taken out; the rest of the tags stay. Cover images in the folder are left, and players show those first."
@@ -1052,8 +1088,9 @@ async fn selection(s: &UiState, form: &[(String, String)]) -> anyhow::Result<(Fi
 #[derive(Default)]
 struct Ask {
     release: Option<String>,
-    /// The tags typed, and the files as they were read to compare them.
-    edits: Option<(TagEdits, Vec<sift::meta::Track>)>,
+    /// The tags typed for each album, by path, and its files as they were
+    /// read to compare them.
+    edits: HashMap<String, (TagEdits, Vec<sift::meta::Track>)>,
     /// The image previewed as new art, and where it goes.
     art: Option<(ArtChoice, std::sync::Arc<Image>)>,
 }
@@ -1473,7 +1510,7 @@ async fn plan_one(
                 };
             }
             Action::Edit => {
-                let Some((edits, tracks)) = &ask.edits else {
+                let Some((edits, tracks)) = ask.edits.get(&path) else {
                     p.note = Some("No tags typed.".into());
                     return Ok(());
                 };
@@ -1635,13 +1672,28 @@ async fn previewed(s: UiState, action: Action, form: Vec<(String, String)>) -> R
             Default::default()
         };
         let mut applicable = 0;
+        // Where each edited album would be filed: the second headed for a
+        // folder is refused when the batch is re-filed.
+        let mut filed: HashMap<String, String> = HashMap::new();
         for (i, row) in rows.iter().take(shown).enumerate() {
             yield Ok(patch(&format!(
                 r#"<p id="pv-progress" class="text-meta text-muted">Working out {} of {shown}: {}</p>"#,
                 i + 1,
                 escape(&title_of(&row.album)),
             )));
-            let p = plan_one(&s, action, row, &known, &ask).await;
+            let mut p = plan_one(&s, action, row, &known, &ask).await;
+            if let Body::Edit { into: into @ Some(_), .. } = &mut p.body {
+                let d = into.clone().unwrap_or_default();
+                match filed.get(&d) {
+                    Some(first) => {
+                        *into = None;
+                        p.note = Some(format!("The tags change, but the album stays where it is: {first} is filed into {d} first."));
+                    }
+                    None => {
+                        filed.insert(d, p.title.clone());
+                    }
+                }
+            }
             applicable += usize::from(p.applicable);
             let html = PlannedView { p: &p, root: &root }.render().unwrap_or_default();
             yield Ok(super::append("#pv-albums", &html));
@@ -1676,6 +1728,12 @@ const ALBUM_FIELDS: &[(&str, &str)] = &[
     ("label", "Label"),
     ("catalognum", "Catalogue number"),
 ];
+
+/// The album-wide fields offered for several albums at once: all but the
+/// album's title, which no two albums share.
+fn batch_fields() -> impl Iterator<Item = (&'static str, &'static str)> {
+    ALBUM_FIELDS.iter().copied().filter(|(f, _)| *f != "album")
+}
 
 /// Fields the edit form offers on each file.
 const TRACK_FIELDS: &[&str] = &["disc", "track", "title", "artist"];
@@ -1748,8 +1806,46 @@ pub(super) fn edits_from(
     Ok(edits)
 }
 
-/// What the form chose for a single album: a release (picked or pasted)
-/// for a re-tag, or typed tags for an edit.
+/// The edits a form for several albums asks of one of them, against its
+/// files as they are now. A field typed is set wherever a file has it
+/// otherwise; a field left blank is left alone, and one ticked to clear is
+/// cleared wherever a file has it.
+pub(super) fn batch_edits_from(
+    tracks: &[sift::meta::Track],
+    form: &[(String, String)],
+) -> anyhow::Result<TagEdits> {
+    let mut edits = TagEdits::default();
+    let mut asked = false;
+    for (field, label) in batch_fields() {
+        let typed = super::field(form, &format!("a-{field}"))
+            .map(str::trim)
+            .unwrap_or_default();
+        let clear = super::field(form, &format!("clear-{field}")).is_some();
+        let value = match (typed.is_empty(), clear) {
+            (true, false) => continue,
+            (false, true) => anyhow::bail!("{label}: type a value or tick Clear, not both"),
+            (true, true) => None,
+            (false, false) => Some(typed.to_string()),
+        };
+        asked = true;
+        if tracks
+            .iter()
+            .all(|t| t.field(field).map(|v| v.trim().to_string()) == value)
+        {
+            continue;
+        }
+        edits.album.push((field.to_string(), value));
+    }
+    if !asked {
+        anyhow::bail!("Type a value or tick Clear for at least one field.");
+    }
+    edits.clear_stale_credits(tracks);
+    Ok(edits)
+}
+
+/// What the form chose: a release (picked or pasted) for re-tagging a
+/// single album, or typed tags for an edit, from the album's form or the
+/// form for several.
 async fn ask(
     s: &UiState,
     action: Action,
@@ -1776,10 +1872,23 @@ async fn ask(
                 ..Default::default()
             })
         }
-        Action::Edit => {
-            let tracks = s.app.library.tracks(one()?).await?;
+        Action::Edit if super::field(form, "batch").is_some() => {
+            let mut edits = HashMap::new();
+            for row in rows {
+                let path = &row.album.path;
+                let tracks = s.app.library.tracks(path).await?;
+                edits.insert(path.clone(), (batch_edits_from(&tracks, form)?, tracks));
+            }
             Ok(Ask {
-                edits: Some((edits_from(&tracks, form)?, tracks)),
+                edits,
+                ..Default::default()
+            })
+        }
+        Action::Edit => {
+            let path = one()?;
+            let tracks = s.app.library.tracks(path).await?;
+            Ok(Ask {
+                edits: HashMap::from([(path.to_string(), (edits_from(&tracks, form)?, tracks))]),
                 ..Default::default()
             })
         }
@@ -2059,6 +2168,17 @@ async fn apply(State(s): State<UiState>, Path(action): Path<String>, body: Bytes
     .into_response()
 }
 
+/// An album whose tags were written where it is.
+fn edited(path: String) -> Outcome {
+    Outcome {
+        path,
+        to: None,
+        ok: true,
+        detail: "tags written in place".into(),
+        problems: Vec::new(),
+    }
+}
+
 async fn run(
     app: &crate::App,
     state: &parking_lot::Mutex<LibraryRun>,
@@ -2092,6 +2212,63 @@ async fn run(
                 });
             })
             .await;
+    }
+    if action == Action::Edit {
+        // One call, so every album is checked before any is written and a
+        // failed write puts back what was already written.
+        let edits = paths
+            .iter()
+            .map(|path| {
+                let edits: TagEdits = with
+                    .get(&key(path))
+                    .and_then(|e| serde_json::from_str(e).ok())
+                    .ok_or_else(|| anyhow::anyhow!("no edits given for {path}"))?;
+                Ok(AlbumEdit {
+                    dir: path.clone(),
+                    edits,
+                    read: None,
+                })
+            })
+            .collect::<anyhow::Result<Vec<_>>>();
+        state.lock().current = Some(match paths {
+            [one] => one.clone(),
+            _ => "all of them together".into(),
+        });
+        let edited_all = match edits {
+            Ok(edits) => library.edit_many(&edits).await,
+            Err(e) => Err(e),
+        };
+        match edited_all {
+            Ok(moves) => {
+                for m in moves {
+                    record(match (m.to, m.refused) {
+                        (Some(to), _) if to != m.from => Outcome {
+                            detail: format!("→ {}", rel(&root, &to)),
+                            to: Some(to),
+                            ..edited(m.from)
+                        },
+                        (_, Some(why)) => Outcome {
+                            detail: "tags written; left where it is".into(),
+                            problems: vec![why.replace(&format!("{root}/"), "")],
+                            ..edited(m.from)
+                        },
+                        _ => edited(m.from),
+                    });
+                }
+            }
+            Err(e) => {
+                for path in paths {
+                    record(Outcome {
+                        path: path.clone(),
+                        to: None,
+                        ok: false,
+                        detail: format!("{e:#}"),
+                        problems: Vec::new(),
+                    });
+                }
+            }
+        }
+        return Ok(());
     }
     let known = match action {
         Action::Credit | Action::Enrich => library.known_artists().await?,
@@ -2152,23 +2329,7 @@ async fn run(
                         (None, None) => (release, r.problems, None),
                     }
                 }
-                Action::Edit => {
-                    let edits: TagEdits = attached
-                        .and_then(|e| serde_json::from_str(e).ok())
-                        .ok_or_else(|| anyhow::anyhow!("no edits given"))?;
-                    let m = library.edit(path, &edits).await?;
-                    match (m.to, m.refused) {
-                        (Some(to), _) if to != *path => {
-                            (format!("→ {}", rel(&root, &to)), Vec::new(), Some(to))
-                        }
-                        (_, Some(why)) => (
-                            "tags written; left where it is".into(),
-                            vec![why.replace(&format!("{root}/"), "")],
-                            None,
-                        ),
-                        _ => ("tags written in place".into(), Vec::new(), None),
-                    }
-                }
+                Action::Edit => unreachable!("edited above"),
                 Action::RemoveArt => {
                     let r = library
                         .remove_art(std::slice::from_ref(path), true)

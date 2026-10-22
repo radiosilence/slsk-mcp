@@ -1,0 +1,1 @@
+- **Edit tags across albums in the web UI.** The library list edits album-wide fields on every ticked album at once, previewed album by album and applied all or nothing, so a shared correction such as an album artist or year is one edit.

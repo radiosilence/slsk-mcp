@@ -328,6 +328,71 @@ mod library {
     }
 
     #[test]
+    fn an_edit_across_albums_sets_what_was_typed_and_clears_what_was_ticked() {
+        let tracks = [
+            sift::meta::Track {
+                album_artist: Some("A × B".into()),
+                album_artists: vec!["A".into(), "B".into()],
+                label: Some("Warp".into()),
+                ..track("/m/a/1.flac", "One", "Monstre", Some("Rock"))
+            },
+            track("/m/a/2.flac", "Two", "Monstre", None),
+        ];
+        let edits = batch_edits_from(
+            &tracks,
+            &form(&[
+                ("a-albumartist", " A & B "),
+                ("a-genre", "Rock"),
+                ("a-date", ""),
+                ("a-label", ""),
+                ("clear-label", "1"),
+                ("clear-catalognum", "1"),
+            ]),
+        )
+        .unwrap();
+        assert_eq!(
+            edits.album,
+            [
+                ("albumartist".to_string(), Some("A & B".to_string())),
+                ("genre".to_string(), Some("Rock".to_string())),
+                ("label".to_string(), None),
+            ],
+            "a genre one file lacks is set; a blank date is left; a catalogue number no file has needs no clearing"
+        );
+        assert_eq!(
+            edits.tracks,
+            [(
+                std::path::PathBuf::from("/m/a/1.flac"),
+                vec![("albumartists".to_string(), None)]
+            )],
+            "the list of album artists goes with the retyped album artist"
+        );
+
+        let same = batch_edits_from(&tracks, &form(&[("a-album", "Other"), ("a-genre", "")]));
+        assert!(
+            same.is_err(),
+            "the album title is not offered, so nothing was asked"
+        );
+        assert!(
+            batch_edits_from(
+                &tracks,
+                &form(&[("a-label", "Ninja"), ("clear-label", "1")])
+            )
+            .is_err()
+        );
+        let agreed = sift::meta::Track {
+            genre: Some("Rock".into()),
+            ..tracks[1].clone()
+        };
+        assert!(
+            batch_edits_from(&[agreed], &form(&[("a-genre", "Rock")]))
+                .unwrap()
+                .is_empty(),
+            "a value every file has already is no edit"
+        );
+    }
+
+    #[test]
     fn a_release_is_its_id_or_a_link_to_it() {
         let id = "4c3e0b3c-2f8a-4a4b-9d6e-2a1f3b5c7d9e";
         assert_eq!(release_id(id).as_deref(), Some(id));
