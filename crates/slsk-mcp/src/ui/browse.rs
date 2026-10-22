@@ -92,13 +92,13 @@ pub(super) struct Child {
     pub(super) key: String,
     pub(super) name: String,
     /// Files in it and every folder under it.
-    files: usize,
+    pub(super) files: usize,
 }
 
 /// The folders directly under `at` (the top level when empty), and `at`
 /// itself when the peer listed it. Peers list only the folders holding
 /// files, so intermediate folders are inferred from the paths below them.
-fn level<'a>(dirs: &'a [Directory], at: &[u8]) -> (Vec<Child>, Option<&'a Directory>) {
+pub(super) fn level<'a>(dirs: &'a [Directory], at: &[u8]) -> (Vec<Child>, Option<&'a Directory>) {
     let mut prefix = at.to_vec();
     if !prefix.is_empty() {
         prefix.push(b'\\');
@@ -177,11 +177,11 @@ struct Info {
 /// `.` for the open folder itself in `more`), which keeps the address
 /// readable and lets it survive a move up or down.
 #[derive(Clone, Debug, Default, PartialEq)]
-struct Place {
-    username: String,
-    at: Vec<u8>,
-    open: BTreeSet<Vec<u8>>,
-    more: BTreeMap<Vec<u8>, usize>,
+pub(super) struct Place {
+    pub(super) username: String,
+    pub(super) at: Vec<u8>,
+    pub(super) open: BTreeSet<Vec<u8>>,
+    pub(super) more: BTreeMap<Vec<u8>, usize>,
 }
 
 /// `path` lies below `dir`, at any depth.
@@ -193,7 +193,7 @@ fn under(path: &[u8], dir: &[u8]) -> bool {
 }
 
 impl Place {
-    fn from_query(q: &BrowseQuery) -> anyhow::Result<Self> {
+    pub(super) fn from_query(q: &BrowseQuery) -> anyhow::Result<Self> {
         let username = q.username.trim().to_string();
         if username.is_empty() {
             anyhow::bail!("Say whose shares to browse.");
@@ -230,7 +230,7 @@ impl Place {
         }
     }
 
-    fn href(&self) -> String {
+    pub(super) fn href(&self) -> String {
         let key = key(&self.at);
         let mut params = vec![("username", self.username.clone()), ("key", key)];
         params.extend(self.open.iter().map(|p| ("open", self.rel(p))));
@@ -243,7 +243,7 @@ impl Place {
 
     /// The same tree with `path` expanded, or collapsed along with every
     /// folder and page under it.
-    fn toggle(&self, path: &[u8]) -> String {
+    pub(super) fn toggle(&self, path: &[u8]) -> String {
         let mut p = self.clone();
         if !p.open.remove(path) {
             p.open.insert(path.to_vec());
@@ -264,7 +264,7 @@ impl Place {
     /// `target` as the open folder. What was expanded below it stays
     /// expanded, and going up leaves the way back down expanded, as Finder
     /// does; pages shown start again.
-    fn go(&self, target: &[u8]) -> String {
+    pub(super) fn go(&self, target: &[u8]) -> String {
         let mut open: BTreeSet<Vec<u8>> = self.open.clone();
         if under(&self.at, target) {
             open.insert(self.at.clone());
@@ -289,7 +289,7 @@ impl Place {
 
 /// Marks a relative path the address cannot spell as itself: one that is
 /// not UTF-8 or holds a `/`, given instead as the base64 of its bytes.
-const RAW: &str = "~";
+pub(super) const RAW: &str = "~";
 
 /// A path named relative to `at`, back in the peer's own form.
 fn join(at: &[u8], rel: &str) -> Vec<u8> {
@@ -350,9 +350,15 @@ impl Nodes {
 
 /// The most rows one tree draws, however many folders are expanded: past
 /// it, an expanded folder asks for others to be collapsed.
-const MOST_ROWS: usize = 5000;
+pub(super) const MOST_ROWS: usize = 5000;
 
-fn tree(p: &Place, dirs: &[Directory], at: &[u8], mine: bool, left: &mut usize) -> String {
+pub(super) fn tree(
+    p: &Place,
+    dirs: &[Directory],
+    at: &[u8],
+    mine: bool,
+    left: &mut usize,
+) -> String {
     let (children, here) = level(dirs, at);
     let files = here.into_iter().flat_map(|d| {
         d.files.iter().map(|f| {
@@ -519,9 +525,9 @@ pub(super) struct BrowseQuery {
     #[serde(default)]
     key: String,
     #[serde(default)]
-    open: Vec<String>,
+    pub(super) open: Vec<String>,
     #[serde(default)]
-    more: Vec<String>,
+    pub(super) more: Vec<String>,
     #[serde(default)]
     fresh: Option<String>,
 }
@@ -655,7 +661,10 @@ fn parent(path: &[u8]) -> &[u8] {
 /// Every folder at or under `at` that holds files, grouped into albums: a
 /// disc folder ("CD1") belongs to its parent, and its name becomes the
 /// file's subdirectory so same-named tracks on different discs stay apart.
-fn albums(dirs: &[Directory], at: &[u8]) -> BTreeMap<Vec<u8>, Vec<(RawStr, u64, String)>> {
+pub(super) fn albums(
+    dirs: &[Directory],
+    at: &[u8],
+) -> BTreeMap<Vec<u8>, Vec<(RawStr, u64, String)>> {
     let mut prefix = at.to_vec();
     if !prefix.is_empty() {
         prefix.push(b'\\');
@@ -738,187 +747,4 @@ async fn download_tree(State(s): State<UiState>, body: Bytes) -> Response {
         _ => format!("Downloading {count} albums"),
     };
     one(flash_ok(&msg))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use slsk_engine::slsk_proto::peer::FileEntry;
-
-    fn dir(name: &str, files: usize) -> Directory {
-        Directory {
-            name: RawStr::from(name.to_string()),
-            files: (0..files)
-                .map(|i| FileEntry {
-                    name: RawStr::from(format!("{i}.flac")),
-                    size: 1,
-                    extension: "flac".into(),
-                    attrs: Vec::new(),
-                })
-                .collect(),
-        }
-    }
-
-    #[test]
-    fn a_level_lists_folders_below_it_including_unlisted_ones() {
-        let dirs = vec![
-            dir("@@music\\A\\One", 2),
-            dir("@@music\\A\\Two", 3),
-            dir("@@music\\B", 1),
-            dir("@@other\\C\\D", 4),
-        ];
-        let (top, here) = level(&dirs, b"");
-        assert!(here.is_none());
-        assert_eq!(
-            top.iter()
-                .map(|c| (c.name.as_str(), c.files))
-                .collect::<Vec<_>>(),
-            vec![("@@music", 6), ("@@other", 4)]
-        );
-        let (music, _) = level(&dirs, b"@@music");
-        assert_eq!(
-            music.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
-            vec!["A", "B"]
-        );
-        let (below_b, here) = level(&dirs, b"@@music\\B");
-        assert!(below_b.is_empty());
-        assert_eq!(here.map(|d| d.files.len()), Some(1));
-        // A sibling whose name starts the same is not beneath it.
-        let (a, _) = level(
-            &[dir("@@music\\A", 1), dir("@@music\\AB\\x", 1)],
-            b"@@music\\A",
-        );
-        assert!(a.is_empty());
-    }
-
-    #[test]
-    fn a_tree_downloads_as_albums_with_discs_kept_together() {
-        let dirs = vec![
-            dir("@@music\\A\\One", 2),
-            dir("@@music\\A\\Two\\CD1", 3),
-            dir("@@music\\A\\Two\\CD2", 3),
-            dir("@@music\\AB", 1),
-        ];
-        let a = albums(&dirs, b"@@music\\A");
-        assert_eq!(
-            a.iter()
-                .map(|(k, v)| (String::from_utf8_lossy(k).into_owned(), v.len()))
-                .collect::<Vec<_>>(),
-            vec![
-                ("@@music\\A\\One".to_string(), 2),
-                ("@@music\\A\\Two".to_string(), 6)
-            ]
-        );
-        let two = &a[b"@@music\\A\\Two".as_slice()];
-        assert_eq!(two[0].2, "CD1");
-        assert_eq!(two[5].2, "CD2");
-        // A disc folder opened directly is its own album.
-        let cd = albums(&dirs, b"@@music\\A\\Two\\CD1");
-        assert_eq!(cd.len(), 1);
-        assert_eq!(cd.values().next().unwrap()[0].2, "");
-        assert_eq!(albums(&dirs, b"").len(), 3);
-    }
-
-    fn place(at: &str, open: &[&str]) -> Place {
-        Place {
-            username: "u".into(),
-            at: at.as_bytes().to_vec(),
-            open: open.iter().map(|o| o.as_bytes().to_vec()).collect(),
-            more: BTreeMap::new(),
-        }
-    }
-
-    fn query(href: &str) -> BrowseQuery {
-        Query::try_from_uri(&href.parse().unwrap()).unwrap().0
-    }
-
-    fn reread(href: &str) -> Place {
-        Place::from_query(&query(href)).unwrap()
-    }
-
-    #[test]
-    fn the_address_names_expanded_folders_relative_to_the_open_one() {
-        let mut p = place("@@music\\A", &["@@music\\A\\One", "@@music\\A\\One\\CD1"]);
-        p.more.insert(b"@@music\\A".to_vec(), 2);
-        let q = query(&p.href());
-        assert_eq!(q.open, vec!["One", "One/CD1"]);
-        assert_eq!(q.more, vec![".", "."]);
-        assert_eq!(Place::from_query(&q).unwrap(), p);
-    }
-
-    #[test]
-    fn a_name_the_address_cannot_spell_goes_as_its_bytes() {
-        let mut p = place("@@m", &["@@m\\a/b"]);
-        p.open.insert(b"@@m\\Bj\xf6rk".to_vec());
-        let q = query(&p.href());
-        assert!(q.open.iter().all(|o| o.starts_with(RAW)));
-        assert_eq!(Place::from_query(&q).unwrap(), p);
-    }
-
-    #[test]
-    fn expanded_folders_share_one_budget_of_rows() {
-        let page = crate::ui::PAGE as usize;
-        let dirs: Vec<Directory> = (0..3)
-            .flat_map(|a| (0..page).map(move |i| dir(&format!("{a}\\{i:05}"), 1)))
-            .collect();
-        let p = place("", &["0", "1", "2"]);
-        let mut left = 3 + 2 * page;
-        let html = tree(&p, &dirs, b"", false, &mut left);
-        assert_eq!(left, 0);
-        assert_eq!(html.matches("aria-expanded=").count(), 3 + 2 * page);
-        assert!(html.contains("Collapse other folders"));
-    }
-
-    #[test]
-    fn collapsing_a_folder_forgets_what_was_open_under_it() {
-        let p = place("", &["A", "A\\B", "AB"]);
-        let q = reread(&p.toggle(b"A"));
-        assert_eq!(q, place("", &["AB"]));
-        let q = reread(&p.toggle(b"C"));
-        assert!(q.open.contains(b"C".as_slice()));
-    }
-
-    #[test]
-    fn moving_keeps_what_is_open_below_and_the_way_back_down() {
-        let p = place("A\\B", &["A\\B\\C", "A\\B\\C\\D"]);
-        // Down: what was open below the new folder stays open.
-        let down = reread(&p.go(b"A\\B\\C"));
-        assert_eq!(down, place("A\\B\\C", &["A\\B\\C\\D"]));
-        // Up: the folder left, and everything open in it, stays expanded.
-        let up = reread(&p.go(b""));
-        assert_eq!(up, place("", &["A", "A\\B", "A\\B\\C", "A\\B\\C\\D"]));
-        // Sideways: nothing open elsewhere follows.
-        let side = reread(&p.go(b"X"));
-        assert_eq!(side, place("X", &[]));
-    }
-
-    #[test]
-    fn a_long_folder_is_drawn_a_page_at_a_time() {
-        let page = crate::ui::PAGE as usize;
-        let dirs: Vec<Directory> = (0..page + 3)
-            .map(|i| dir(&format!("@@m\\{i:05}"), 1))
-            .collect();
-        let p = place("@@m", &[]);
-        let html = tree(&p, &dirs, b"@@m", false, &mut { MOST_ROWS });
-        assert_eq!(html.matches("aria-expanded=").count(), page);
-        assert!(html.contains("Show more"));
-        let mut p = p;
-        p.more.insert(b"@@m".to_vec(), 1);
-        let html = tree(&p, &dirs, b"@@m", false, &mut { MOST_ROWS });
-        assert_eq!(html.matches("aria-expanded=").count(), page + 3);
-        assert!(!html.contains("Show more"));
-    }
-
-    #[test]
-    fn crumbs_lead_back_up() {
-        let c = crumbs(b"@@music\\A\\One");
-        assert_eq!(
-            c.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
-            vec!["@@music", "A", "One"]
-        );
-        assert_eq!(
-            URL_SAFE_NO_PAD.decode(&c[1].key).unwrap(),
-            b"@@music\\A".to_vec()
-        );
-    }
 }

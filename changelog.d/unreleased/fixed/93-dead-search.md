@@ -1,0 +1,1 @@
+- **A search whose task died no longer blocks identical searches.** A cached search that ended without finishing is replaced by a fresh one instead of answering "channel closed" for ten minutes and leaving the web UI on "Searching…".

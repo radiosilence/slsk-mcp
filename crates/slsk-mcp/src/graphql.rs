@@ -1095,9 +1095,13 @@ where
     static SEARCHES: std::sync::LazyLock<
         parking_lot::Mutex<std::collections::HashMap<String, Search>>,
     > = std::sync::LazyLock::new(Default::default);
-    // Answers stand in for ten minutes from when the listening ended.
-    let fresh =
-        |at: &Instant, listens: u64| at.elapsed() < SEARCH_REUSE + Duration::from_secs(listens);
+    // Answers stand in for ten minutes from when the listening ended. A
+    // search whose task ended without finishing, as a panic does, answers
+    // nobody and is replaced.
+    let fresh = |at: &Instant, listens: u64, heard: &watch::Receiver<Heard>| {
+        at.elapsed() < SEARCH_REUSE + Duration::from_secs(listens)
+            && (heard.has_changed().is_ok() || heard.borrow().done)
+    };
     let key = query.trim().to_lowercase();
     let wait = wait.clamp(1, 30);
     let (tx, heard) = watch::channel(Heard::default());
@@ -1106,12 +1110,12 @@ where
         // A shorter listen hears fewer peers, so it stands in only for one
         // as short or shorter.
         if let Some((at, listens, heard)) = searches.get(&key)
-            && fresh(at, *listens)
+            && fresh(at, *listens, heard)
             && *listens >= wait
         {
             return heard.clone();
         }
-        searches.retain(|_, (at, listens, _)| fresh(at, *listens));
+        searches.retain(|_, (at, listens, heard)| fresh(at, *listens, heard));
         searches.insert(key.clone(), (Instant::now(), wait, heard.clone()));
     }
     // It listens to the end whoever is still watching: what it hears is
@@ -1982,6 +1986,21 @@ mod tests {
         assert_eq!(refused.error.as_deref(), Some("no searches left this hour"));
         finished(&mut hear("over budget", 1, quiet(sent.clone()))).await;
         assert_eq!(sent.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_search_whose_task_died_is_replaced() {
+        let sent = Arc::new(AtomicUsize::new(0));
+        let mut dead = hear("panics", 1, || async {
+            if true {
+                panic!("search task died");
+            }
+            Ok(tokio::sync::mpsc::channel(1).1)
+        });
+        assert!(dead.wait_for(|h| h.done).await.is_err());
+        let heard = finished(&mut search("panics", 1, &sent)).await;
+        assert_eq!(sent.load(Ordering::SeqCst), 1);
+        assert_eq!(heard.responses.len(), 1);
     }
 
     #[test]
