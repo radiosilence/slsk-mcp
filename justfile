@@ -2,6 +2,7 @@
 
 # What CI checks: format, lint with warnings as errors, tests, the Pulumi package.
 check:
+    actionlint
     git diff --quiet Cargo.lock || { echo 'Cargo.lock has uncommitted changes'; exit 1; }
     cargo fmt --all -- --check
     cargo clippy --workspace --all-targets --locked -- -D warnings

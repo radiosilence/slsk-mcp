@@ -1,0 +1,1 @@
+- **Workflows are linted.** CI runs actionlint, with shellcheck, over `.github/workflows` and `.github/actions`, and `just check` runs it locally.

@@ -2,6 +2,8 @@
 # rustfmt and clippy are not in the minimal profile.
 rust = { version = "1", components = "rustfmt,clippy" }
 just = "latest"
+"aqua:rhysd/actionlint" = "1.7.12"
+"aqua:koalaman/shellcheck" = "0.11.0"
 lefthook = "latest"
 node = "24"
 # Compiles crates/slsk-mcp/styles/ into the committed assets/app.css (`just css`).
