@@ -101,6 +101,32 @@ impl TagEdits {
         }
         out
     }
+
+    /// A credit typed by hand no longer matches the file's list of artists
+    /// and their ids, so those are cleared; Credit artists splits it again.
+    pub fn clear_stale_credits(&mut self, tracks: &[sift::meta::Track]) {
+        for t in tracks {
+            let all = self.for_file(&t.path);
+            let edits_field = |f: &str| all.iter().any(|(n, _)| n == f);
+            let mut clear = Vec::new();
+            if edits_field("artist") && !t.artists.is_empty() && !edits_field("artists") {
+                clear.push(("artists".to_string(), None));
+            }
+            if edits_field("albumartist")
+                && !t.album_artists.is_empty()
+                && !edits_field("albumartists")
+            {
+                clear.push(("albumartists".to_string(), None));
+            }
+            if clear.is_empty() {
+                continue;
+            }
+            match self.tracks.iter_mut().find(|(p, _)| *p == t.path) {
+                Some((_, c)) => c.extend(clear),
+                None => self.tracks.push((t.path.clone(), clear)),
+            }
+        }
+    }
 }
 
 /// What a hand edit would change. See [`Library::edit_plan`].
@@ -709,28 +735,88 @@ impl Library {
     /// tags put it: moved (`to`), left with the reason (`refused`), or in
     /// place (neither).
     pub async fn edit(&self, dir: &str, edits: &TagEdits) -> anyhow::Result<AlbumMove> {
-        check_editable(edits)?;
+        let mut moves = self.edit_many(&[(dir.to_string(), edits.clone())]).await?;
+        Ok(moves.remove(0))
+    }
+
+    /// [`Self::edit`] for several albums at once, all or nothing: every album
+    /// and file is checked before anything is written, and if a write fails,
+    /// the files already written get their edited fields back as they read.
+    /// Albums are re-filed only once every file is written, one move each.
+    pub async fn edit_many(&self, edits: &[(String, TagEdits)]) -> anyhow::Result<Vec<AlbumMove>> {
+        for (i, (dir, e)) in edits.iter().enumerate() {
+            check_editable(e)?;
+            if edits[..i].iter().any(|(d, _)| d == dir) {
+                anyhow::bail!("{dir} is given more than once");
+            }
+        }
         {
             let _index = self.write().await?;
-            for t in self.tagger.tracks(Path::new(dir)).await? {
-                let changes = edits.for_file(&t.path);
-                if changes.is_empty() {
-                    continue;
+            let mut writes = Vec::new();
+            for (dir, e) in edits {
+                if self.read(&[format!("path:={dir}")]).await?.is_empty() {
+                    anyhow::bail!("{dir} is not an album in the library");
                 }
-                tokio::task::block_in_place(|| sift::meta::set(&t.path, &changes))?;
+                let tracks = self.tagger.tracks(Path::new(dir)).await?;
+                if let Some((p, _)) = e
+                    .tracks
+                    .iter()
+                    .find(|(p, _)| !tracks.iter().any(|t| &t.path == p))
+                {
+                    anyhow::bail!("{} is not a file of {dir}", p.display());
+                }
+                for t in tracks {
+                    let changes = e.for_file(&t.path);
+                    if changes.is_empty() {
+                        continue;
+                    }
+                    if std::fs::metadata(&t.path)?.permissions().readonly() {
+                        anyhow::bail!("{} is read-only", t.path.display());
+                    }
+                    let undo: Vec<_> = changes
+                        .iter()
+                        .map(|(f, _)| (f.clone(), t.field(f)))
+                        .collect();
+                    writes.push((t.path, changes, undo));
+                }
+            }
+            for (i, (path, changes, _)) in writes.iter().enumerate() {
+                let Err(e) = tokio::task::block_in_place(|| sift::meta::set(path, changes)) else {
+                    continue;
+                };
+                let mut stuck = Vec::new();
+                for (p, _, undo) in writes[..i].iter().rev() {
+                    if let Err(u) = tokio::task::block_in_place(|| sift::meta::set(p, undo)) {
+                        tracing::error!(file = %p.display(), error = %u, "could not undo an edit");
+                        stuck.push(p.display().to_string());
+                    }
+                }
+                self.bump();
+                let outcome = if stuck.is_empty() {
+                    "nothing was changed".to_string()
+                } else {
+                    format!("these keep the edit: {}", stuck.join(", "))
+                };
+                return Err(
+                    anyhow::Error::new(e).context(format!("writing {}; {outcome}", path.display()))
+                );
             }
             self.bump();
         }
-        tracing::info!(dir, edits = ?edits, "edited tags");
-        let mut moved = None;
-        self.refile_each(&[format!("path:={dir}")], |m| moved = Some(m))
-            .await?;
-        Ok(moved.unwrap_or(AlbumMove {
-            from: dir.to_string(),
-            to: None,
-            refused: None,
-            files: 0,
-        }))
+        tracing::info!(edits = ?edits, "edited tags");
+        let mut out = Vec::new();
+        for (dir, _) in edits {
+            let mut moved = None;
+            self.refile_each(&[format!("path:={dir}")], |m| moved = Some(m))
+                .await?;
+            out.push(moved.unwrap_or(AlbumMove {
+                from: dir.clone(),
+                to: None,
+                refused: None,
+                files: 0,
+            }));
+        }
+        Ok(out)
     }
 
     /// How the album at `dir` lines up against one release. Changes nothing.

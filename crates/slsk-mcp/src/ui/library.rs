@@ -1399,27 +1399,7 @@ fn edits_from(tracks: &[sift::meta::Track], form: &[(String, String)]) -> anyhow
             edits.tracks.push((t.path.clone(), changes));
         }
     }
-    // A credit typed by hand no longer matches the file's list of artists
-    // and their ids, so those are cleared; Credit artists splits it again.
-    for t in tracks {
-        let all = edits.for_file(&t.path);
-        let edits_field = |f: &str| all.iter().any(|(n, _)| n == f);
-        let mut clear = Vec::new();
-        if edits_field("artist") && !t.artists.is_empty() && !edits_field("artists") {
-            clear.push(("artists".to_string(), None));
-        }
-        if edits_field("albumartist") && !t.album_artists.is_empty() && !edits_field("albumartists")
-        {
-            clear.push(("albumartists".to_string(), None));
-        }
-        if clear.is_empty() {
-            continue;
-        }
-        match edits.tracks.iter_mut().find(|(p, _)| *p == t.path) {
-            Some((_, c)) => c.extend(clear),
-            None => edits.tracks.push((t.path.clone(), clear)),
-        }
-    }
+    edits.clear_stale_credits(tracks);
     Ok(edits)
 }
 
