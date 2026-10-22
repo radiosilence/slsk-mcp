@@ -1057,8 +1057,8 @@ impl Action {
     /// preview every album selected.
     fn cap(self) -> Option<usize> {
         match self {
-            Self::Refile | Self::Bin | Self::Edit | Self::RemoveArt | Self::SetArt => None,
-            Self::Credit | Self::Enrich | Self::Reimport => Some(50),
+            Self::Refile | Self::Bin | Self::Edit | Self::SetArt => None,
+            Self::Credit | Self::Enrich | Self::Reimport | Self::RemoveArt => Some(50),
         }
     }
 }

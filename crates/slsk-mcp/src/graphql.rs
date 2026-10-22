@@ -329,7 +329,6 @@ pub(crate) struct AlbumTracks {
     pub tracks: Vec<FileTags>,
 }
 
-/// A file's path within the album at `dir`.
 /// The albums `query` matches, for a read of every file they hold: refused
 /// when the query is empty or matches more than a reader should wait for.
 async fn matching_at_most(
@@ -350,6 +349,7 @@ async fn matching_at_most(
     Ok(albums)
 }
 
+/// A file's path within the album at `dir`.
 fn within(dir: &str, path: &std::path::Path) -> String {
     path.strip_prefix(dir)
         .unwrap_or(path)
@@ -1619,10 +1619,11 @@ impl Mutation {
 
     /// Replace the art of the album at `path` (as `libraryAlbums` gives it)
     /// with the image at `url`, http or https, a JPEG or PNG of at most
-    /// 32 MiB. It is scaled down past the largest width imports embed.
+    /// 32 MiB. It is scaled down past the largest width imports embed, and
+    /// re-encoded as JPEG if it would otherwise embed more than 5 MiB.
     /// `embed` makes it the only picture in every file, as imports do;
     /// `file` writes it beside them as `cover.jpg` (or `.png`), moving the
-    /// cover images already there to the bin, since players show those
+    /// cover images already there to the bin's `.art` folder, since players show those
     /// before embedded art. `preview: true` fetches and checks the image,
     /// writes nothing, and says what would be written: show the user that
     /// first.
@@ -1636,6 +1637,7 @@ impl Mutation {
         #[graphql(default)] preview: bool,
     ) -> Result<crate::art::ArtSet> {
         let library = &app(ctx).library;
+        library.album_at(&path).await?;
         let image = library.fetch_art(&url).await?;
         Ok(library
             .set_art(&path, &image, crate::art::Target { embed, file }, !preview)

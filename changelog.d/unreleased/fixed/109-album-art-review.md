@@ -1,0 +1,1 @@
+- **Album art fixes.** Replacing a cover twice, or binning an album whose cover was replaced, no longer fails on a path the bin already holds; old covers leave the album only once the new art is in place; files that cannot be read or link outside the library are refused before anything is written; art over 5 MiB is re-encoded or refused.
