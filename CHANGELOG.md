@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.8.0
+
+### Added
+
+- **Edit tags across albums in the web UI.** The library list edits album-wide fields on every ticked album at once, previewed album by album and applied all or nothing, so a shared correction such as an album artist or year is one edit.
+- **Album art.** `albumArt`, `removeAlbumArt` and `setAlbumArt` (from a URL), and in the web UI the album's cover, removing embedded art from ticked albums, and setting art from a URL or an upload; embedded as imports embed it, with an optional cover file. All preview first.
+
+### Fixed
+
+- **URL import refuses zips holding absolute paths.** Such an entry was unpacked inside the job directory under a relative path instead of the archive being refused as malformed.
+- **Album art fixes.** Replacing a cover twice, or binning an album whose cover was replaced, no longer fails on a path the bin already holds; old covers leave the album only once the new art is in place; files that cannot be read or link outside the library are refused before anything is written; art over 5 MiB is re-encoded or refused.
+
+### Internal
+
+- **sift-music 0.9.** Brings the API for reading and replacing embedded art, which library art editing builds on.
+
 ## 0.7.0
 
 ### Added
