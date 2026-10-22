@@ -15,6 +15,10 @@ const COVER_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png"];
 /// The most an image fetched or uploaded may be: well above any scan of a
 /// sleeve, well below what would strain memory, since it is held whole.
 pub const MAX_BYTES: usize = 32 << 20;
+/// The most art written as it came may be. A larger image within the
+/// width imports embed is re-encoded as JPEG, and refused if that is still
+/// larger: every file carries its own copy.
+pub const MAX_KEPT: usize = 5 << 20;
 /// How long fetching an image may take in all.
 const FETCH_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -205,13 +209,55 @@ pub fn prepare(bytes: &[u8], cfg: &sift::Config) -> anyhow::Result<Image> {
         .ok_or_else(|| anyhow::anyhow!("not a JPEG or PNG image"))?;
     let (width, height) =
         dimensions(&prepared.bytes).ok_or_else(|| anyhow::anyhow!("the image cannot be read"))?;
+    if prepared.bytes.len() <= MAX_KEPT {
+        return Ok(Image {
+            bytes: prepared.bytes,
+            mime,
+            width,
+            height,
+            resized: prepared.resized,
+        });
+    }
+    let mut out = Vec::new();
+    image::load_from_memory(&prepared.bytes)?
+        .to_rgb8()
+        .write_with_encoder(image::codecs::jpeg::JpegEncoder::new_with_quality(
+            &mut out,
+            cfg.art_quality.clamp(1, 100),
+        ))?;
+    anyhow::ensure!(
+        out.len() <= MAX_KEPT,
+        "the image is {} bytes even as a JPEG, more than the {MAX_KEPT} embedded art may be; use a smaller one",
+        out.len()
+    );
     Ok(Image {
-        bytes: prepared.bytes,
-        mime,
+        bytes: out,
+        mime: "image/jpeg",
         width,
         height,
-        resized: prepared.resized,
+        resized: true,
     })
+}
+
+/// Where a cover image replaced in the album at `dir` goes: under the
+/// bin's `.art`, by the album's path and the time, so it never takes the
+/// place binning the album itself would use, and a second replacement
+/// never meets the first.
+pub fn binned_cover(root: &Path, bin: &Path, cover: &Path, at: u64) -> anyhow::Result<PathBuf> {
+    let rel = cover
+        .parent()
+        .and_then(|d| d.strip_prefix(root).ok())
+        .ok_or_else(|| anyhow::anyhow!("{} is not under the library", cover.display()))?;
+    let dir = bin.join(".art").join(rel);
+    let stem = cover.file_stem().unwrap_or_default().to_string_lossy();
+    let ext = cover.extension().unwrap_or_default().to_string_lossy();
+    (0..)
+        .map(|n| match n {
+            0 => dir.join(format!("{stem}.{at}.{ext}")),
+            n => dir.join(format!("{stem}.{at}-{n}.{ext}")),
+        })
+        .find(|p| !p.exists())
+        .ok_or_else(|| anyhow::anyhow!("no free name in the bin"))
 }
 
 /// Fetch an image from an http or https URL, refusing a web page or
@@ -326,6 +372,61 @@ mod tests {
         let large = prepare(&png(400, 400), &cfg).unwrap();
         assert_eq!((large.width, large.height, large.resized), (100, 100, true));
         assert_eq!((large.mime, large.file_name()), ("image/jpeg", "cover.jpg"));
+    }
+
+    #[test]
+    fn a_large_image_within_the_width_is_re_encoded() {
+        // Noise, so PNG cannot compress it below the cap.
+        let mut seed = 1u32;
+        let img = image::RgbImage::from_fn(1500, 1500, |_, _| {
+            seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12345);
+            let b = seed.to_le_bytes();
+            image::Rgb([b[1], b[2], b[3]])
+        });
+        let mut bytes = Vec::new();
+        image::DynamicImage::ImageRgb8(img)
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        assert!(bytes.len() > MAX_KEPT);
+        let cfg = sift::Config {
+            art_max_width: 0,
+            art_quality: 50,
+            ..Default::default()
+        };
+        let image = prepare(&bytes, &cfg).unwrap();
+        assert_eq!(
+            (image.mime, image.width, image.resized),
+            ("image/jpeg", 1500, true)
+        );
+        assert!(image.bytes.len() <= MAX_KEPT);
+    }
+
+    #[test]
+    fn replaced_covers_never_meet_each_other_or_the_album_in_the_bin() {
+        let root = scratch();
+        let bin = scratch();
+        let album = root.join("Artist/Album");
+        std::fs::create_dir_all(&album).unwrap();
+        let mut binned = Vec::new();
+        for _ in 0..2 {
+            let cover = album.join("cover.jpg");
+            std::fs::write(&cover, b"old").unwrap();
+            let to = binned_cover(&root, &bin, &cover, 1_700_000_000).unwrap();
+            std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+            std::fs::rename(&cover, &to).unwrap();
+            binned.push(to);
+        }
+        assert_ne!(binned[0], binned[1]);
+        assert!(binned.iter().all(|p| p.exists()));
+        assert!(binned[0].starts_with(bin.join(".art/Artist/Album")));
+        // Binning the album itself goes to `<bin>/Artist/Album`, still free.
+        assert!(!bin.join("Artist/Album").exists());
+        assert!(binned_cover(&root, &bin, Path::new("/elsewhere/cover.jpg"), 1).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+        std::fs::remove_dir_all(bin).unwrap();
     }
 
     #[test]

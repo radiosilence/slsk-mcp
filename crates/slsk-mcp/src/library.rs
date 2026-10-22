@@ -1103,7 +1103,7 @@ impl Library {
     /// The album at `dir`, when the index holds one there. Art is read and
     /// written only for these, so a path from a request reaches nothing
     /// else.
-    async fn album_at(&self, dir: &str) -> anyhow::Result<Album> {
+    pub async fn album_at(&self, dir: &str) -> anyhow::Result<Album> {
         self.read(&by_path([dir]))
             .await?
             .into_iter()
@@ -1121,9 +1121,16 @@ impl Library {
             files: tracks
                 .iter()
                 .map(|t| {
-                    let (pictures, error) = match sift::meta::pictures(&t.path) {
-                        Ok(p) => (p.into_iter().map(Picture::from).collect(), None),
-                        Err(e) => (Vec::new(), Some(e.to_string())),
+                    let (pictures, error) = if !art::inside(&self.cfg.directory, &t.path) {
+                        (
+                            Vec::new(),
+                            Some("links outside the library; not read".into()),
+                        )
+                    } else {
+                        match sift::meta::pictures(&t.path) {
+                            Ok(p) => (p.into_iter().map(Picture::from).collect(), None),
+                            Err(e) => (Vec::new(), Some(e.to_string())),
+                        }
                     };
                     FileArt {
                         file: within(dir, &t.path),
@@ -1200,6 +1207,11 @@ impl Library {
             let tracks = self.tracks(dir).await?;
             let mut files = Vec::new();
             for t in tracks {
+                anyhow::ensure!(
+                    art::inside(&self.cfg.directory, &t.path),
+                    "{} links outside the library; nothing was changed",
+                    t.path.display()
+                );
                 let carries = tokio::task::block_in_place(|| sift::meta::pictures(&t.path))
                     .map_err(|e| anyhow::anyhow!("{}: {e}", t.path.display()))?;
                 if carries.is_empty() {
@@ -1243,10 +1255,12 @@ impl Library {
 
     /// Make `image` the art of the album at `dir`: the only picture
     /// embedded in each file, a cover image beside them, or both, as
-    /// `target` says. Cover images already there move to the bin when a new
-    /// one is written, so players show it. Every file is checked writable
-    /// and every move possible before anything is written. With `apply`
-    /// false, says what would be written and changes nothing.
+    /// `target` says. Cover images already there go to the bin when a new
+    /// one is written, so players show it, but only once the new art is in
+    /// place: every file is read and checked writable first, then the new
+    /// cover is written aside, the art embedded, the cover put in place,
+    /// and the old ones binned. With `apply` false, says what would be
+    /// written and changes nothing.
     pub async fn set_art(
         &self,
         dir: &str,
@@ -1263,22 +1277,35 @@ impl Library {
             None
         };
         self.album_at(dir).await?;
+        let root = &self.cfg.directory;
         let tracks = if target.embed {
             self.tracks(dir).await?
         } else {
             Vec::new()
         };
-        let covers = art::cover_files(&self.cfg.directory, Path::new(dir));
+        // A preview refuses what applying would, before anything is written.
+        for t in &tracks {
+            anyhow::ensure!(
+                art::inside(root, &t.path),
+                "{} links outside the library; nothing was changed",
+                t.path.display()
+            );
+            tokio::task::block_in_place(|| sift::meta::pictures(&t.path)).map_err(|e| {
+                anyhow::anyhow!(
+                    "{} cannot be read: {e}; nothing was changed",
+                    t.path.display()
+                )
+            })?;
+        }
+        let covers = art::cover_files(root, Path::new(dir));
         let (binned, kept): (Vec<PathBuf>, Vec<PathBuf>) =
             covers.into_iter().partition(|_| target.file);
+        let at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
         let moves = binned
             .iter()
-            .map(|p| {
-                let to = self.bin_destination(&p.to_string_lossy()).map_err(|why| {
-                    anyhow::anyhow!("{} cannot be moved to the bin: {why}", p.display())
-                })?;
-                Ok((p.clone(), to))
-            })
+            .map(|p| Ok((p.clone(), art::binned_cover(root, &self.bin, p, at)?)))
             .collect::<anyhow::Result<Vec<_>>>()?;
         let set = ArtSet {
             path: dir.to_string(),
@@ -1296,29 +1323,76 @@ impl Library {
             return Ok(set);
         }
         for t in &tracks {
-            writable(&t.path)?;
+            writable(&t.path).map_err(|e| e.context("nothing was changed"))?;
         }
-        for (from, to) in &moves {
-            if let Some(parent) = to.parent() {
-                tokio::fs::create_dir_all(parent).await?;
-            }
-            tokio::fs::rename(from, to).await?;
-        }
+        let dest = Path::new(dir).join(image.file_name());
+        let part = Path::new(dir).join(format!(".{}.part", image.file_name()));
         if target.file {
-            let dest = Path::new(dir).join(image.file_name());
-            let part = Path::new(dir).join(format!(".{}.part", image.file_name()));
-            tokio::fs::write(&part, &image.bytes).await?;
-            tokio::fs::rename(&part, &dest).await?;
+            tokio::fs::write(&part, &image.bytes).await.map_err(|e| {
+                anyhow::anyhow!("the album folder cannot be written: {e}; nothing was changed")
+            })?;
         }
         for (i, t) in tracks.iter().enumerate() {
             if let Err(e) =
                 tokio::task::block_in_place(|| sift::meta::set_cover(&t.path, &image.bytes))
             {
                 self.bump();
+                if target.file {
+                    let _ = tokio::fs::remove_file(&part).await;
+                }
                 return Err(anyhow::Error::new(e).context(format!(
-                    "embedding the art in {}; {i} files before it already carry it",
+                    "embedding the art in {}; {i} files before it already carry it, and the cover images are as they were",
                     t.path.display()
                 )));
+            }
+        }
+        if target.file {
+            // Each old cover is linked into the bin before the new one takes
+            // its place, so none is lost whichever step fails.
+            for (from, to) in &moves {
+                let kept = async {
+                    if let Some(parent) = to.parent() {
+                        tokio::fs::create_dir_all(parent).await?;
+                    }
+                    if tokio::fs::hard_link(from, to).await.is_err() {
+                        tokio::fs::copy(from, to).await?;
+                    }
+                    anyhow::Ok(())
+                }
+                .await;
+                if let Err(e) = kept {
+                    self.bump();
+                    return Err(e.context(format!(
+                        "keeping {} in the bin; the art is embedded, the new cover waits at {} and the old ones are in place",
+                        from.display(),
+                        part.display()
+                    )));
+                }
+            }
+            if let Err(e) = tokio::fs::rename(&part, &dest).await {
+                self.bump();
+                return Err(anyhow::Error::new(e).context(format!(
+                    "putting the new cover in place; the art is embedded, the new cover waits at {} and the old ones are in place, with copies in the bin",
+                    part.display()
+                )));
+            }
+            for (from, _) in &moves {
+                // The new cover replaced it, under any case of its name.
+                if from.parent() == dest.parent()
+                    && from
+                        .file_name()
+                        .zip(dest.file_name())
+                        .is_some_and(|(a, b)| a.eq_ignore_ascii_case(b))
+                {
+                    continue;
+                }
+                if let Err(e) = tokio::fs::remove_file(from).await {
+                    self.bump();
+                    return Err(anyhow::Error::new(e).context(format!(
+                        "taking {} out of the album; the new art is in place and a copy of it is in the bin",
+                        from.display()
+                    )));
+                }
             }
         }
         self.bump();
