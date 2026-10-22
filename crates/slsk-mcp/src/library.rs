@@ -289,6 +289,41 @@ pub struct AlbumMove {
     pub files: usize,
 }
 
+/// One album's edits for [`Library::edit_many`].
+#[derive(Debug)]
+pub struct AlbumEdit {
+    pub dir: String,
+    pub edits: TagEdits,
+    /// The files as the edits were worked out from, when they were: a file
+    /// that reads differently by the time it is written is refused rather
+    /// than written over.
+    pub read: Option<Vec<sift::meta::Track>>,
+}
+
+/// Every album's edits name only editable fields, and no album is given
+/// twice.
+pub fn check_batch(albums: &[AlbumEdit]) -> anyhow::Result<()> {
+    for (i, a) in albums.iter().enumerate() {
+        check_editable(&a.edits)?;
+        if albums[..i].iter().any(|b| b.dir == a.dir) {
+            anyhow::bail!("{} is given more than once", a.dir);
+        }
+    }
+    Ok(())
+}
+
+/// Terms that match exactly the albums at `paths`, as alternatives.
+pub fn by_path<'a>(paths: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    let mut query = Vec::new();
+    for p in paths {
+        if !query.is_empty() {
+            query.push(",".to_string());
+        }
+        query.push(format!("path:={p}"));
+    }
+    query
+}
+
 /// Edits only name fields `meta::set` writes.
 fn check_editable(edits: &TagEdits) -> anyhow::Result<()> {
     let all = edits
@@ -735,30 +770,37 @@ impl Library {
     /// tags put it: moved (`to`), left with the reason (`refused`), or in
     /// place (neither).
     pub async fn edit(&self, dir: &str, edits: &TagEdits) -> anyhow::Result<AlbumMove> {
-        let mut moves = self.edit_many(&[(dir.to_string(), edits.clone())]).await?;
+        let mut moves = self
+            .edit_many(&[AlbumEdit {
+                dir: dir.to_string(),
+                edits: edits.clone(),
+                read: None,
+            }])
+            .await?;
         Ok(moves.remove(0))
     }
 
     /// [`Self::edit`] for several albums at once, all or nothing: every album
     /// and file is checked before anything is written, and if a write fails,
     /// the files already written get their edited fields back as they read.
-    /// Albums are re-filed only once every file is written, one move each.
-    pub async fn edit_many(&self, edits: &[(String, TagEdits)]) -> anyhow::Result<Vec<AlbumMove>> {
-        for (i, (dir, e)) in edits.iter().enumerate() {
-            check_editable(e)?;
-            if edits[..i].iter().any(|(d, _)| d == dir) {
-                anyhow::bail!("{dir} is given more than once");
-            }
-        }
+    /// Then the albums are re-filed together; one that cannot be is reported
+    /// as refused, its tags already written.
+    pub async fn edit_many(&self, albums: &[AlbumEdit]) -> anyhow::Result<Vec<AlbumMove>> {
+        check_batch(albums)?;
         {
             let _index = self.write().await?;
+            // Each file to write: its changes, the fields as they read, and
+            // whether writing them drops MusicBrainz artist ids an undo
+            // cannot put back.
             let mut writes = Vec::new();
-            for (dir, e) in edits {
+            for a in albums {
+                let dir = &a.dir;
                 if self.read(&[format!("path:={dir}")]).await?.is_empty() {
                     anyhow::bail!("{dir} is not an album in the library");
                 }
                 let tracks = self.tagger.tracks(Path::new(dir)).await?;
-                if let Some((p, _)) = e
+                if let Some((p, _)) = a
+                    .edits
                     .tracks
                     .iter()
                     .find(|(p, _)| !tracks.iter().any(|t| &t.path == p))
@@ -766,57 +808,92 @@ impl Library {
                     anyhow::bail!("{} is not a file of {dir}", p.display());
                 }
                 for t in tracks {
-                    let changes = e.for_file(&t.path);
+                    let changes = a.edits.for_file(&t.path);
                     if changes.is_empty() {
                         continue;
                     }
-                    if std::fs::metadata(&t.path)?.permissions().readonly() {
-                        anyhow::bail!("{} is read-only", t.path.display());
+                    if let Some(read) = &a.read
+                        && read
+                            .iter()
+                            .find(|r| r.path == t.path)
+                            .is_none_or(|r| !sift::meta::diff(r, &t).is_empty())
+                    {
+                        anyhow::bail!(
+                            "{} changed since it was read; read it again",
+                            t.path.display()
+                        );
                     }
+                    std::fs::OpenOptions::new()
+                        .write(true)
+                        .open(&t.path)
+                        .map_err(|e| {
+                            anyhow::anyhow!("{} cannot be written: {e}", t.path.display())
+                        })?;
                     let undo: Vec<_> = changes
                         .iter()
                         .map(|(f, _)| (f.clone(), t.field(f)))
                         .collect();
-                    writes.push((t.path, changes, undo));
+                    let drops_ids = changes.iter().any(|(f, _)| {
+                        (f == "artists" && !t.mb_artist_ids.is_empty())
+                            || (f == "albumartists" && !t.mb_album_artist_ids.is_empty())
+                    });
+                    writes.push((t.path, changes, undo, drops_ids));
                 }
             }
-            for (i, (path, changes, _)) in writes.iter().enumerate() {
+            for (i, (path, changes, ..)) in writes.iter().enumerate() {
                 let Err(e) = tokio::task::block_in_place(|| sift::meta::set(path, changes)) else {
                     continue;
                 };
                 let mut stuck = Vec::new();
-                for (p, _, undo) in writes[..i].iter().rev() {
+                for (p, _, undo, _) in writes[..i].iter().rev() {
                     if let Err(u) = tokio::task::block_in_place(|| sift::meta::set(p, undo)) {
                         tracing::error!(file = %p.display(), error = %u, "could not undo an edit");
                         stuck.push(p.display().to_string());
                     }
                 }
                 self.bump();
-                let outcome = if stuck.is_empty() {
-                    "nothing was changed".to_string()
+                let mut outcome = if i == 0 {
+                    "nothing was written".to_string()
+                } else if stuck.is_empty() {
+                    "the files already written were put back as they read".to_string()
                 } else {
                     format!("these keep the edit: {}", stuck.join(", "))
                 };
+                if writes[..i].iter().any(|w| w.3) {
+                    outcome.push_str(
+                        "; MusicBrainz artist ids cleared with a credit list were not restored",
+                    );
+                }
                 return Err(
                     anyhow::Error::new(e).context(format!("writing {}; {outcome}", path.display()))
                 );
             }
             self.bump();
         }
-        tracing::info!(edits = ?edits, "edited tags");
-        let mut out = Vec::new();
-        for (dir, _) in edits {
-            let mut moved = None;
-            self.refile_each(&[format!("path:={dir}")], |m| moved = Some(m))
-                .await?;
-            out.push(moved.unwrap_or(AlbumMove {
-                from: dir.clone(),
-                to: None,
-                refused: None,
-                files: 0,
-            }));
-        }
-        Ok(out)
+        tracing::info!(albums = ?albums, "edited tags");
+        let dirs: Vec<&str> = albums.iter().map(|a| a.dir.as_str()).collect();
+        let mut moves = Vec::new();
+        let refiled = self
+            .refile_each(&by_path(dirs.iter().copied()), |m| moves.push(m))
+            .await;
+        Ok(dirs
+            .into_iter()
+            .map(|dir| {
+                moves
+                    .iter()
+                    .position(|m| m.from == dir)
+                    .map(|i| moves.swap_remove(i))
+                    .unwrap_or_else(|| AlbumMove {
+                        from: dir.to_string(),
+                        to: None,
+                        refused: refiled
+                            .as_ref()
+                            .err()
+                            .map(|e| format!("tags written; not re-filed: {e:#}")),
+                        files: 0,
+                    })
+            })
+            .collect())
     }
 
     /// How the album at `dir` lines up against one release. Changes nothing.

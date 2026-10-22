@@ -18,7 +18,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 
 use super::{UiState, failed, fields, flash_ok, patch, sse};
-use crate::library::{AlbumMove, CreditWrite, LibraryAlbum, Overview, Preview, TagEdits};
+use crate::library::{AlbumMove, CreditWrite, LibraryAlbum, Overview, Preview, TagEdits, by_path};
 
 pub(super) fn routes() -> Router<UiState> {
     Router::new()
@@ -29,18 +29,6 @@ pub(super) fn routes() -> Router<UiState> {
         .route("/library/album/edit", get(edit_form))
         .route("/library/preview/{action}", post(preview))
         .route("/library/apply/{action}", post(apply))
-}
-
-/// Terms that match exactly the albums at `paths`, as alternatives.
-fn by_path<'a>(paths: impl IntoIterator<Item = &'a str>) -> Vec<String> {
-    let mut query = Vec::new();
-    for p in paths {
-        if !query.is_empty() {
-            query.push(",".to_string());
-        }
-        query.push(format!("path:={p}"));
-    }
-    query
 }
 
 /// What a re-file would change, from the album's directory and the one the

@@ -131,9 +131,10 @@ file. `modifyAlbums` corrects tags on albums already filed (beets' `modify`,
 `field=value`) and re-files what the change moves, so a credit settled wrongly
 at import can be fixed later without touching the server by hand. Corrections
 that differ per track, or span several albums, go through `editTracks` in one
-call, keyed by the file names `libraryTracks` reads: every album and file is
-checked before anything is written, and a write that fails puts back the files
-already written, so a batch never lands half done.
+call, keyed by each file's path within its album as `libraryTracks` reads it.
+Every album and file is checked before anything is written, including that no
+file changed since it was read; a write that fails puts back the fields
+already written, except MusicBrainz artist ids cleared with a credit list.
 
 Each import is followed by what beets' `replaygain`, `lastgenre` and `lyrics`
 plugins add: loudness normalisation for players, genres from MusicBrainz, and

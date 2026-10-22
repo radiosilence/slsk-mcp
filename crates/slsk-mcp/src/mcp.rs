@@ -190,7 +190,7 @@ impl ServerHandler for SlskMcp {
                  release, about a second each: scope it to an artist or album, as for `enrichLibrary`. \
                  `reimportAlbums(query)` matches albums against MusicBrainz again and retags them, as beets' \
                  `import -L`. `modifyAlbums(query, changes)` sets one field across whole albums; for \
-                 corrections that differ track by track or span several albums, read `libraryTracks(query)` for \
+                 corrections that differ track by track or span several albums, read `libraryTracks(query)` (50 albums at most) for \
                  the file names and current tags, then `editTracks(albums)`, which checks everything before \
                  writing and changes all or nothing. Every one of these writes takes `preview: true`, which changes nothing and \
                  returns what it would do: the moves, each spare's bin destination, each file's artist \

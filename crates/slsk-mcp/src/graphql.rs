@@ -311,15 +311,26 @@ impl From<TagEdits> for sift::Edits {
     }
 }
 
-/// A library album's files, read from the files now.
+/// A library album's files, read from the files now. Each `file` is its
+/// path within the album's folder (`CD2/01 Intro.flac` on a disc in a
+/// folder of its own), the name `editTracks` takes.
 #[derive(SimpleObject)]
 pub(crate) struct AlbumTracks {
     pub path: String,
     pub tracks: Vec<FileTags>,
 }
 
+/// A file's path within the album at `dir`.
+fn within(dir: &str, path: &std::path::Path) -> String {
+    path.strip_prefix(dir)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .into_owned()
+}
+
 /// Edits to one library album for `editTracks`: the album at `path`, and
-/// fields as in `TagEdits`. An empty string clears a field.
+/// fields as in `TagEdits`, with each `file` as `libraryTracks` names it.
+/// An empty string clears a field.
 #[derive(async_graphql::InputObject)]
 pub(crate) struct AlbumEdits {
     pub path: String,
@@ -348,11 +359,7 @@ impl AlbumEdits {
         for e in &self.edits.tracks {
             let t = tracks
                 .iter()
-                .find(|t| {
-                    t.path
-                        .file_name()
-                        .is_some_and(|n| n.to_string_lossy() == e.file)
-                })
+                .find(|t| within(&self.path, &t.path) == e.file)
                 .ok_or_else(|| {
                     Error::new(format!("{} has no file named {:?}", self.path, e.file))
                 })?;
@@ -884,13 +891,27 @@ impl Query {
         if query.iter().all(|q| q.trim().is_empty()) {
             return Err(Error::new("give a query; this reads every file it matches"));
         }
+        const MOST: usize = 50;
         let library = &app(ctx).library;
+        let albums = library.albums(&query).await?;
+        if albums.len() > MOST {
+            return Err(Error::new(format!(
+                "the query matches {} albums; narrow it to {MOST} or fewer",
+                albums.len()
+            )));
+        }
         let mut out = Vec::new();
-        for a in library.albums(&query).await? {
+        for a in albums {
             let tracks = library.tracks(&a.path).await?;
             out.push(AlbumTracks {
+                tracks: tracks
+                    .into_iter()
+                    .map(|t| FileTags {
+                        file: within(&a.path, &t.path),
+                        ..FileTags::from(t)
+                    })
+                    .collect(),
                 path: a.path,
-                tracks: tracks.into_iter().map(FileTags::from).collect(),
             });
         }
         Ok(out)
@@ -1473,7 +1494,7 @@ impl Mutation {
         #[graphql(default)] preview: bool,
     ) -> Result<Vec<EditedAlbum>> {
         let library = &app(ctx).library;
-        let mut out = Vec::new();
+        let mut out: Vec<EditedAlbum> = Vec::new();
         let mut edits = Vec::new();
         for a in &albums {
             let tracks = library.tracks(&a.path).await?;
@@ -1482,13 +1503,21 @@ impl Mutation {
             let (to, refused) = match plan.refile {
                 crate::library::Preview::InPlace => (None, None),
                 crate::library::Preview::Refused(why) => (None, Some(why)),
-                crate::library::Preview::Moves(moves) => (
-                    moves
+                crate::library::Preview::Moves(moves) => {
+                    let to = moves
                         .first()
                         .and_then(|(_, to)| to.parent())
-                        .map(|p| p.to_string_lossy().into_owned()),
-                    None,
-                ),
+                        .map(|p| p.to_string_lossy().into_owned());
+                    // Each album is planned on its own; the second of two
+                    // headed for one folder would be refused when it moves.
+                    match out.iter().find(|o| o.to.is_some() && o.to == to) {
+                        Some(first) => (
+                            None,
+                            Some(format!("{} is filed there first in this batch", first.path)),
+                        ),
+                        None => (to, None),
+                    }
+                }
             };
             out.push(EditedAlbum {
                 path: a.path.clone(),
@@ -1497,10 +1526,7 @@ impl Mutation {
                     .into_iter()
                     .filter(|(_, c)| !c.is_empty())
                     .map(|(p, c)| FileEdit {
-                        file: p
-                            .file_name()
-                            .map(|n| n.to_string_lossy().into_owned())
-                            .unwrap_or_default(),
+                        file: within(&a.path, &p),
                         changes: c
                             .into_iter()
                             .map(|c| FieldChange {
@@ -1514,8 +1540,13 @@ impl Mutation {
                 to,
                 refused,
             });
-            edits.push((a.path.clone(), e));
+            edits.push(crate::library::AlbumEdit {
+                dir: a.path.clone(),
+                edits: e,
+                read: Some(tracks),
+            });
         }
+        crate::library::check_batch(&edits)?;
         if preview {
             return Ok(out);
         }
@@ -2022,6 +2053,22 @@ mod tests {
                 ),
             ]
         );
+        let on_disc = [sift::meta::Track {
+            path: "/m/a/CD2/01.flac".into(),
+            title: Some("One".into()),
+            ..Default::default()
+        }];
+        let by_folder = AlbumEdits {
+            path: "/m/a".into(),
+            edits: TagEdits {
+                tracks: vec![TrackEditInput {
+                    title: Some("Uno".into()),
+                    ..track("CD2/01.flac")
+                }],
+                ..Default::default()
+            },
+        };
+        assert_eq!(by_folder.against(&on_disc).unwrap().tracks.len(), 1);
         let missing = AlbumEdits {
             path: "/m/a".into(),
             edits: TagEdits {
