@@ -1666,7 +1666,11 @@ pub(crate) fn unzip(archive: &std::path::Path, dir: &std::path::Path, limit: u64
     let mut entries = Vec::new();
     for i in 0..zip.len() {
         let entry = zip.by_index(i)?;
-        let Some(path) = entry.enclosed_name() else {
+        // `enclosed_name` strips a leading root from a name rather than
+        // refusing it; a name it had to change is refused here.
+        let Some(path) = entry.enclosed_name().filter(|p| {
+            p.as_path() == std::path::Path::new(entry.name().as_deref().unwrap_or_default())
+        }) else {
             bail!("the zip holds a path outside itself: {}", entry.name()?);
         };
         // Folders are made as needed; links and Finder's resource forks
