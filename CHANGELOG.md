@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.1
+
+### Fixed
+
+- **Files with invalid ID3v2 lyrics languages can be edited.** Setting or removing art and every tag write failed on MP3s whose lyrics or comment frames carry a language of zero bytes; sift-music 0.9.2 repairs the language before writing.
+
 ## 0.8.0
 
 ### Added
