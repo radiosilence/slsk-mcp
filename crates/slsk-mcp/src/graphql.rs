@@ -228,7 +228,7 @@ fn view_of(app: &App, job: db::Job, rows: Vec<db::JobFile>, with_files: bool) ->
     }
 }
 
-/// A file in a job and the tags it carries now.
+/// A file in a job or a library album and the tags it carries now.
 #[derive(SimpleObject)]
 pub(crate) struct FileTags {
     /// The name to use in `TagEdits.tracks.file`.
@@ -309,6 +309,98 @@ impl From<TagEdits> for sift::Edits {
                 .collect(),
         }
     }
+}
+
+/// A library album's files, read from the files now.
+#[derive(SimpleObject)]
+pub(crate) struct AlbumTracks {
+    pub path: String,
+    pub tracks: Vec<FileTags>,
+}
+
+/// Edits to one library album for `editTracks`: the album at `path`, and
+/// fields as in `TagEdits`. An empty string clears a field.
+#[derive(async_graphql::InputObject)]
+pub(crate) struct AlbumEdits {
+    pub path: String,
+    #[graphql(flatten)]
+    pub edits: TagEdits,
+}
+
+impl AlbumEdits {
+    /// The fields that differ from what `tracks`, the album's files as just
+    /// read, carry now, keyed by each file's path.
+    fn against(&self, tracks: &[sift::meta::Track]) -> Result<crate::library::TagEdits> {
+        let value = |v: &str| (!v.is_empty()).then(|| v.to_string());
+        let mut out = crate::library::TagEdits::default();
+        let album = [
+            ("album", &self.edits.album),
+            ("albumartist", &self.edits.album_artist),
+            ("date", &self.edits.date),
+        ];
+        for (field, v) in album {
+            if let Some(v) = v
+                && tracks.iter().any(|t| t.field(field) != value(v))
+            {
+                out.album.push((field.to_string(), value(v)));
+            }
+        }
+        for e in &self.edits.tracks {
+            let t = tracks
+                .iter()
+                .find(|t| {
+                    t.path
+                        .file_name()
+                        .is_some_and(|n| n.to_string_lossy() == e.file)
+                })
+                .ok_or_else(|| {
+                    Error::new(format!("{} has no file named {:?}", self.path, e.file))
+                })?;
+            let fields = [
+                ("title", e.title.clone()),
+                ("artist", e.artist.clone()),
+                ("track", e.track.map(|n| n.to_string())),
+                ("disc", e.disc.map(|n| n.to_string())),
+            ];
+            let changes: Vec<_> = fields
+                .into_iter()
+                .filter_map(|(field, v)| {
+                    let v = v?;
+                    (t.field(field) != value(&v)).then(|| (field.to_string(), value(&v)))
+                })
+                .collect();
+            if !changes.is_empty() {
+                out.tracks.push((t.path.clone(), changes));
+            }
+        }
+        out.clear_stale_credits(tracks);
+        Ok(out)
+    }
+}
+
+/// What `editTracks` changes, or with `preview`, would change, in one album.
+#[derive(SimpleObject)]
+pub(crate) struct EditedAlbum {
+    pub path: String,
+    /// Each file the edit changes, and how.
+    pub files: Vec<FileEdit>,
+    /// Where the edited tags file the album; absent when it stays.
+    pub to: Option<String>,
+    /// Why the album stays where it is although its tags file it elsewhere.
+    pub refused: Option<String>,
+}
+
+#[derive(SimpleObject)]
+pub(crate) struct FileEdit {
+    pub file: String,
+    pub changes: Vec<FieldChange>,
+}
+
+#[derive(SimpleObject)]
+pub(crate) struct FieldChange {
+    pub field: String,
+    pub old: Option<String>,
+    pub new: Option<String>,
 }
 
 /// A job's files against one release. `pairs` are matched file and track;
@@ -779,6 +871,29 @@ impl Query {
         #[graphql(default)] query: Vec<String>,
     ) -> Result<Vec<crate::library::LibraryAlbum>> {
         Ok(app(ctx).library.albums(&query).await?)
+    }
+
+    /// The files of each album `query` matches (as for `libraryAlbums`) and
+    /// the tags they carry, read from the files now: the evidence for an
+    /// edit, and the file names `editTracks` refers to.
+    async fn library_tracks(
+        &self,
+        ctx: &Context<'_>,
+        query: Vec<String>,
+    ) -> Result<Vec<AlbumTracks>> {
+        if query.iter().all(|q| q.trim().is_empty()) {
+            return Err(Error::new("give a query; this reads every file it matches"));
+        }
+        let library = &app(ctx).library;
+        let mut out = Vec::new();
+        for a in library.albums(&query).await? {
+            let tracks = library.tracks(&a.path).await?;
+            out.push(AlbumTracks {
+                path: a.path,
+                tracks: tracks.into_iter().map(FileTags::from).collect(),
+            });
+        }
+        Ok(out)
     }
 
     /// Albums held more than once, each with the copy to keep and why the
@@ -1341,6 +1456,77 @@ impl Mutation {
         Ok(moves)
     }
 
+    /// Correct tags that differ track by track, on one album or several:
+    /// album-wide fields and per-file ones keyed by the names
+    /// `libraryTracks` gives, as for `importAsIs`. Every album and file is
+    /// checked before anything is written, and the edit is all or nothing.
+    /// Then each album is re-filed where its new tags put it, as for
+    /// `modifyAlbums`; a move onto an existing album is refused and
+    /// reported. Retyping an artist clears that file's list of credited
+    /// artists, which `creditArtists` can split again. `preview: true`
+    /// writes nothing and lists every file's change and where each album
+    /// would go: show the user that first.
+    async fn edit_tracks(
+        &self,
+        ctx: &Context<'_>,
+        albums: Vec<AlbumEdits>,
+        #[graphql(default)] preview: bool,
+    ) -> Result<Vec<EditedAlbum>> {
+        let library = &app(ctx).library;
+        let mut out = Vec::new();
+        let mut edits = Vec::new();
+        for a in &albums {
+            let tracks = library.tracks(&a.path).await?;
+            let e = a.against(&tracks)?;
+            let plan = library.edit_plan(&a.path, &tracks, &e).await?;
+            let (to, refused) = match plan.refile {
+                crate::library::Preview::InPlace => (None, None),
+                crate::library::Preview::Refused(why) => (None, Some(why)),
+                crate::library::Preview::Moves(moves) => (
+                    moves
+                        .first()
+                        .and_then(|(_, to)| to.parent())
+                        .map(|p| p.to_string_lossy().into_owned()),
+                    None,
+                ),
+            };
+            out.push(EditedAlbum {
+                path: a.path.clone(),
+                files: plan
+                    .files
+                    .into_iter()
+                    .filter(|(_, c)| !c.is_empty())
+                    .map(|(p, c)| FileEdit {
+                        file: p
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default(),
+                        changes: c
+                            .into_iter()
+                            .map(|c| FieldChange {
+                                field: c.field.to_string(),
+                                old: c.old,
+                                new: c.new,
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+                to,
+                refused,
+            });
+            edits.push((a.path.clone(), e));
+        }
+        if preview {
+            return Ok(out);
+        }
+        let moves = library.edit_many(&edits).await?;
+        for (album, m) in out.iter_mut().zip(moves) {
+            album.to = m.to.filter(|to| *to != album.path);
+            album.refused = m.refused;
+        }
+        Ok(out)
+    }
+
     /// Find an album and start fetching the best copy of it. The best copy is
     /// lossless (unless `filter.lossless` is false and nothing lossless
     /// exists), from a peer with a free slot, and mentions every word of the
@@ -1765,5 +1951,84 @@ mod tests {
         assert_eq!(refused.error.as_deref(), Some("no searches left this hour"));
         finished(&mut hear("over budget", 1, quiet(sent.clone()))).await;
         assert_eq!(sent.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn album_edits_are_only_what_differs() {
+        let tracks = [
+            sift::meta::Track {
+                path: "/m/a/01.flac".into(),
+                title: Some("One".into()),
+                artist: Some("A & B".into()),
+                artists: vec!["A".into(), "B".into()],
+                album: Some("Album".into()),
+                track: Some(1),
+                ..Default::default()
+            },
+            sift::meta::Track {
+                path: "/m/a/02.flac".into(),
+                title: Some("Two".into()),
+                album: Some("Albun".into()),
+                track: Some(3),
+                ..Default::default()
+            },
+        ];
+        let track = |file: &str| TrackEditInput {
+            file: file.into(),
+            title: None,
+            artist: None,
+            track: None,
+            disc: None,
+        };
+        let edits = AlbumEdits {
+            path: "/m/a".into(),
+            edits: TagEdits {
+                album: Some("Album".into()),
+                date: Some(String::new()),
+                tracks: vec![
+                    TrackEditInput {
+                        title: Some("One".into()),
+                        artist: Some("A and B".into()),
+                        ..track("01.flac")
+                    },
+                    TrackEditInput {
+                        track: Some(2),
+                        ..track("02.flac")
+                    },
+                ],
+                ..Default::default()
+            },
+        };
+        let e = edits.against(&tracks).unwrap();
+        // The files disagree on the album, so it is set on both; no file has
+        // a date, so clearing it is no change.
+        assert_eq!(
+            e.album,
+            vec![("album".to_string(), Some("Album".to_string()))]
+        );
+        assert_eq!(
+            e.tracks,
+            vec![
+                (
+                    "/m/a/01.flac".into(),
+                    vec![
+                        ("artist".to_string(), Some("A and B".to_string())),
+                        ("artists".to_string(), None),
+                    ]
+                ),
+                (
+                    "/m/a/02.flac".into(),
+                    vec![("track".to_string(), Some("2".to_string()))]
+                ),
+            ]
+        );
+        let missing = AlbumEdits {
+            path: "/m/a".into(),
+            edits: TagEdits {
+                tracks: vec![track("03.flac")],
+                ..Default::default()
+            },
+        };
+        assert!(missing.against(&tracks).is_err());
     }
 }

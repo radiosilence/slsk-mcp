@@ -189,9 +189,12 @@ impl ServerHandler for SlskMcp {
                  alone for albums filed before, reading no audio but asking MusicBrainz once per album with a \
                  release, about a second each: scope it to an artist or album, as for `enrichLibrary`. \
                  `reimportAlbums(query)` matches albums against MusicBrainz again and retags them, as beets' \
-                 `import -L`. Every one of these writes takes `preview: true`, which changes nothing and \
+                 `import -L`. `modifyAlbums(query, changes)` sets one field across whole albums; for \
+                 corrections that differ track by track or span several albums, read `libraryTracks(query)` for \
+                 the file names and current tags, then `editTracks(albums)`, which checks everything before \
+                 writing and changes all or nothing. Every one of these writes takes `preview: true`, which changes nothing and \
                  returns what it would do: the moves, each spare's bin destination, each file's artist \
-                 credits and where they come from, the genres and lyrics enriching would add (gain is only \
+                 credits and where they come from, every file's edited fields, the genres and lyrics enriching would add (gain is only \
                  measured when written), the release a re-import would apply. Preview first and show the user \
                  before applying to more than one album.\n\n\
                  The client is also a chat client: rooms, private messages (`conversations`, `messages`), \
