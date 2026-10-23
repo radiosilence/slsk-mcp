@@ -55,6 +55,7 @@ jobs:
       web: ${{ steps.filter.outputs.web }}
       package: ${{ steps.filter.outputs.package }}
       docker: ${{ steps.filter.outputs.docker }}
+      deps: ${{ steps.filter.outputs.deps }}
       release: ${{ steps.filter.outputs.release }}
       version: ${{ steps.filter.outputs.version }}
     steps:
@@ -83,7 +84,7 @@ jobs:
         # in a condition, and no grep exits early (`-q`) on a pipe whose
         # writer would then fail.
         run: |
-          rust=true web=true package=true docker=true release=false
+          rust=true web=true package=true docker=true deps=true release=false
           version_of() { sed -n 's/^version = "\(.*\)"/\1/p' | head -1; }
           base=HEAD^1
           if [ "$EVENT" = "push" ]; then
@@ -156,12 +157,17 @@ jobs:
             if [ "$EVENT" = "pull_request" ] || [ "$rust" = false ]; then
               touches '^Dockerfile$|^Cargo\.lock$|^\.github/' || docker=false
             fi
+            if [ "$EVENT" = "pull_request" ]; then
+              # A new advisory can land on any day; main audits every push.
+              touches '^Cargo\.lock$|Cargo\.toml$|^\.cargo/|^\.github/' || deps=false
+            fi
           fi
           {
             echo "rust=$rust"
             echo "web=$web"
             echo "package=$package"
             echo "docker=$docker"
+            echo "deps=$deps"
             echo "release=$release"
             echo "version=$version"
           } | tee -a "$GITHUB_OUTPUT"
@@ -266,6 +272,27 @@ jobs:
         with:
           toolchain: stable
       - run: cargo fmt --all -- --check
+
+  audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.deps == 'true'
+    timeout-minutes: 15
+    # Blocking. The advisories already in the lockfile are acknowledged in
+    # .cargo/audit.toml so this fails on anything new.
+    #
+    # The action reports through a GitHub check run, an API write, which the
+    # workflow's read-only token does not allow. Naming any permission drops
+    # the rest to none, so `contents: read` is spelled out.
+    permissions:
+      contents: read
+      checks: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: rustsec/audit-check@858dc40f52ca2b8570b7a997c1c4e35c6fc9a432 # main, post-v2.0.0: node24 runtime
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
   chart:
     name: Chart
@@ -462,7 +489,7 @@ jobs:
     name: Checks
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: [changes, actionlint, make-room, test, lint, format, chart, changelog, css, version, linux-build, container]
+    needs: [changes, actionlint, make-room, test, lint, format, audit, chart, changelog, css, version, linux-build, container]
     if: always()
     steps:
       - env:
