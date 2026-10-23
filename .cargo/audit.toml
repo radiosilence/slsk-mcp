@@ -1,0 +1,15 @@
+# Advisories present in the current lockfile, acknowledged so that `cargo audit`
+# still fails on anything new. Remove an entry once its cause is gone; an
+# ignore that outlives its cause is worse than no gate at all.
+[advisories]
+ignore = [
+    # basic-toml, unmaintained. Held by askama_derive 0.16.1, askama's latest
+    # release. Drop this when askama moves off it.
+    "RUSTSEC-2026-0374",
+    # paste, unmaintained. A proc-macro held by lofty, through slsk-engine and
+    # sift-music.
+    "RUSTSEC-2024-0436",
+    # unsafe-libyaml, unmaintained. Held by serde_yaml_ng 0.10.0, its latest
+    # release, through sift-music.
+    "RUSTSEC-2024-0449",
+]
