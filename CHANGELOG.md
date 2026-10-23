@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.2
+
+### Security
+
+- **Dependency audit.** CI fails on any new RustSec advisory, and the lockfile moves past two: tokio 1.54.1 (a race in `tokio::time::Interval`) and ctutils 0.4.5 (non-constant-time comparisons).
+
 ## 0.8.1
 
 ### Fixed
