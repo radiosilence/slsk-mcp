@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.3
+
+### Security
+
+- Update sift to 0.9.3
+
 ## 0.8.2
 
 ### Security
