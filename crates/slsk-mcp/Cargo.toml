@@ -21,7 +21,7 @@ dashmap = "6.2.1"
 futures-util = "0.3.34"
 http = "1"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
-parking_lot = "0.12.5"
+parking_lot = "0.13.0"
 percent-encoding = "2.3.2"
 png = "0.18.1"
 rand = "0.10.3"
