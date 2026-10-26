@@ -1,0 +1,1 @@
+- **`binAlbums` bins whole albums.** Over GraphQL and MCP, the albums a query matches move to the bin whether or not another copy is held, as the web UI's Bin action does; `preview: true` lists where each would go.
