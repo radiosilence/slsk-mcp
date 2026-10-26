@@ -184,7 +184,8 @@ impl ServerHandler for SlskMcp {
                  The library itself: `libraryAlbums(query)` lists albums with beets' query syntax, one term per \
                  list element (`[\"artist:burial\", \"year:2000..2010\"]`). `duplicates` names albums held more than \
                  once, the copy to keep and why the others are spare; `binDuplicates(query)` moves the spares to a \
-                 bin beside the library, deleting nothing. `refilePlan` lists albums not where the current naming \
+                 bin beside the library, deleting nothing; `binAlbums(query)` bins whole albums the user \
+                 no longer wants, after a `preview: true` shown to them. `refilePlan` lists albums not where the current naming \
                  rules would put them; `refile(query)` moves them. Show the user a plan before acting on more than \
                  a handful of albums: moving files can cost the player its play counts. Every import gets \
                  ReplayGain, genres and lyrics automatically; `enrichLibrary(query)` adds them to albums \
