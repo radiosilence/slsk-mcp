@@ -81,6 +81,8 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/jobs/{id}/resolve/{release}", post(resolve))
         .route("/jobs/{id}/release", post(resolve_pasted))
         .route("/jobs/{id}/spectrogram/{n}", get(spectrogram))
+        .route("/jobs/{id}/files", get(job_files))
+        .route("/jobs/{id}/compare/{release}", get(job_compare))
         .route("/uploads/cancel", post(cancel_upload))
         .route("/ban", post(ban))
         .route("/account", post(account))
@@ -693,6 +695,50 @@ impl JobsView {
         status_label(status)
     }
 
+    /// What was fetched, as the peer named it: the folder and the one above,
+    /// which is usually the artist. The query that found it otherwise.
+    fn heading(&self, j: &Job) -> String {
+        let Some(folder) = j.folder.as_deref() else {
+            return j.title.clone();
+        };
+        let parts: Vec<_> = folder
+            .rsplit(['\\', '/'])
+            .filter(|p| !p.is_empty())
+            .take(2)
+            .collect();
+        match parts.as_slice() {
+            [album, parent] => format!("{parent} / {album}"),
+            [album] => album.to_string(),
+            _ => j.title.clone(),
+        }
+    }
+
+    /// The client-only signal that shows a job's files.
+    fn open_sig(&self, j: &Job) -> String {
+        format!("_files_{}", j.id.as_str().replace('-', ""))
+    }
+
+    fn file_progress(&self, f: &graphql::JobFile) -> String {
+        if let Some(e) = &f.error {
+            return format!("{} · {e}", f.state);
+        }
+        match f.state.as_str() {
+            "completed" => human(f.size),
+            _ if f.bytes == 0 => f.state.clone(),
+            _ => format!(
+                "{} of {} ({}%)",
+                human(f.bytes),
+                human(f.size),
+                percent(f.bytes, f.size)
+            ),
+        }
+    }
+
+    /// The query that started the job, when the heading shows something else.
+    fn asked<'a>(&self, j: &'a Job) -> Option<&'a str> {
+        j.folder.as_ref().map(|_| j.title.as_str())
+    }
+
     /// Why an import as-is would be refused, when it has been checked and
     /// would be.
     fn as_is_blocked<'a>(&self, j: &'a Job) -> Option<&'a str> {
@@ -839,10 +885,12 @@ async fn jobs_html(app: &App, shown: i64) -> String {
     let more = active.len() as i64 > shown || done.len() as i64 > shown;
     active.truncate(shown as usize);
     done.truncate(shown as usize);
-    let jobs = graphql::job_views(app, active).await.unwrap_or_else(|e| {
-        tracing::warn!(error = ?e, "could not show jobs");
-        Vec::new()
-    });
+    let jobs = graphql::job_views(app, active, true)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = ?e, "could not show jobs");
+            Vec::new()
+        });
     let places = jobs
         .iter()
         .filter_map(|j| {
@@ -1414,6 +1462,132 @@ async fn spectrogram(State(s): State<UiState>, Path((id, n)): Path<(Uuid, u32)>)
             .into_response(),
         Err(_) => StatusCode::NOT_FOUND.into_response(),
     }
+}
+
+/// A job's files and the tags they carry, read when its card asks: the
+/// evidence for a choice, which the card itself does not hold.
+#[derive(Template)]
+#[template(path = "job_files.html")]
+struct JobFiles {
+    id: Uuid,
+    error: Option<String>,
+    /// Each album the tags name, with a MusicBrainz search for it.
+    albums: Vec<(String, String)>,
+    tracks: Vec<sift::meta::Track>,
+}
+
+impl JobFiles {
+    fn position(&self, t: &sift::meta::Track) -> String {
+        match (t.disc, t.track) {
+            (Some(d), Some(n)) if t.disc_total.unwrap_or(d) > 1 => format!("{d}-{n}"),
+            (_, Some(n)) => n.to_string(),
+            _ => "?".into(),
+        }
+    }
+    fn length(&self, t: &sift::meta::Track) -> String {
+        let s = t.duration.as_secs();
+        format!("{}:{:02}", s / 60, s % 60)
+    }
+    fn quality(&self, t: &sift::meta::Track) -> String {
+        let mut q = t.format.clone();
+        if let Some(b) = t.bit_depth {
+            q += &format!(" {b}-bit");
+        }
+        if let Some(r) = t.sample_rate {
+            q += &format!(" {} kHz", f64::from(r) / 1000.0);
+        }
+        q
+    }
+    fn name(&self, t: &sift::meta::Track) -> String {
+        t.path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned()
+    }
+}
+
+async fn job_files(State(s): State<UiState>, Path(id): Path<Uuid>) -> Response {
+    let (tracks, error) = match s.app.jobs.tracks(id).await {
+        Ok(mut t) => {
+            t.sort_by_key(|t| (t.disc, t.track, t.path.clone()));
+            (t, None)
+        }
+        Err(e) => (Vec::new(), Some(format!("Couldn't read the files: {e:#}"))),
+    };
+    let mut albums: Vec<(String, String)> = Vec::new();
+    for t in &tracks {
+        let artist = t.album_artist.as_ref().or(t.artist.as_ref());
+        let shown = match (artist, &t.album) {
+            (Some(a), Some(b)) => format!("{a} — {b}"),
+            (None, Some(b)) => b.clone(),
+            _ => continue,
+        };
+        if albums.iter().any(|(s, _)| *s == shown) {
+            continue;
+        }
+        let query = [artist.cloned(), t.album.clone()]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let search = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("query", &query)
+            .append_pair("type", "release")
+            .append_pair("method", "indexed")
+            .finish();
+        albums.push((shown, format!("https://musicbrainz.org/search?{search}")));
+    }
+    let html = JobFiles {
+        id,
+        error,
+        albums,
+        tracks,
+    }
+    .render()
+    .unwrap_or_default();
+    many(vec![insert(&format!("#files-{id}"), "replace", &html)])
+}
+
+/// A job's files against one release, track by track, as beets shows a
+/// match before it is taken.
+#[derive(Template)]
+#[template(path = "job_compare.html")]
+struct JobCompare {
+    id: String,
+    error: Option<String>,
+    cmp: Option<sift::Comparison>,
+}
+
+impl JobCompare {
+    fn dist(&self, d: &f64) -> String {
+        format!("{d:.2}")
+    }
+    fn delta(&self, d: &f64) -> String {
+        format!("{d:+.0}s")
+    }
+}
+
+async fn job_compare(
+    State(s): State<UiState>,
+    Path((id, release)): Path<(Uuid, String)>,
+) -> Response {
+    if Uuid::parse_str(&release).is_err() {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    let (cmp, error) = match s.app.jobs.compare(id, &release).await {
+        Ok(c) => (Some(c), None),
+        Err(e) => (None, Some(format!("Couldn't compare: {e:#}"))),
+    };
+    let id = format!("{id}-{release}");
+    let html = JobCompare {
+        id: id.clone(),
+        error,
+        cmp,
+    }
+    .render()
+    .unwrap_or_default();
+    many(vec![insert(&format!("#cmp-{id}"), "replace", &html)])
 }
 
 #[derive(serde::Deserialize)]

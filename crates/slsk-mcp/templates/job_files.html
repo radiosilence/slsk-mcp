@@ -1,0 +1,12 @@
+<div id="files-{{ id }}" class="mt-1.5">
+{% if let Some(e) = error %}<p class="text-meta text-bad wrap-anywhere">{{ e }}</p>{% endif %}
+{% for (album, search) in albums %}<p class="my-1 text-meta"><span class="text-muted">Tagged as</span> {{ album }} · <a href="{{ search }}" target="_blank" rel="noopener">search MusicBrainz</a></p>{% endfor %}
+<ul class="grid gap-1.5">
+{% for t in tracks %}
+  <li class="min-w-0">
+    <div class="wrap-anywhere"><span class="text-meta text-muted">{{ self.position(t) }}</span> {% if let Some(title) = t.title %}{{ title }}{% else %}<span class="text-bad">no title</span>{% endif %}{% if let Some(a) = t.artist %} <span class="text-muted">— {{ a }}</span>{% endif %}</div>
+    <div class="text-meta text-muted wrap-anywhere">{{ self.length(t) }} · {{ self.quality(t) }} · {{ self.name(t) }}</div>
+  </li>
+{% endfor %}
+</ul>
+</div>
