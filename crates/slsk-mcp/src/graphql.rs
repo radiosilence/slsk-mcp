@@ -161,15 +161,15 @@ pub(crate) async fn job_view(app: &App, job: db::Job, with_files: bool) -> Resul
     Ok(view_of(app, job, rows, with_files))
 }
 
-/// Jobs for a list, without their files: one query for every job's files.
-pub(crate) async fn job_views(app: &App, jobs: Vec<db::Job>) -> Result<Vec<Job>> {
+/// Jobs for a list: one query for every job's files.
+pub(crate) async fn job_views(app: &App, jobs: Vec<db::Job>, with_files: bool) -> Result<Vec<Job>> {
     let ids: Vec<_> = jobs.iter().map(|j| j.id).collect();
     let mut files = db::files_of_jobs(&app.db, &ids).await?;
     Ok(jobs
         .into_iter()
         .map(|j| {
             let rows = files.remove(&j.id).unwrap_or_default();
-            view_of(app, j, rows, false)
+            view_of(app, j, rows, with_files)
         })
         .collect())
 }
@@ -717,6 +717,7 @@ impl Query {
         job_views(
             app,
             db::jobs(&app.db, status.as_deref(), first.clamp(1, 500)).await?,
+            false,
         )
         .await
     }

@@ -713,6 +713,27 @@ impl JobsView {
         }
     }
 
+    /// The client-only signal that shows a job's files.
+    fn open_sig(&self, j: &Job) -> String {
+        format!("_files_{}", j.id.as_str().replace('-', ""))
+    }
+
+    fn file_progress(&self, f: &graphql::JobFile) -> String {
+        if let Some(e) = &f.error {
+            return format!("{} · {e}", f.state);
+        }
+        match f.state.as_str() {
+            "completed" => human(f.size),
+            _ if f.bytes == 0 => f.state.clone(),
+            _ => format!(
+                "{} of {} ({}%)",
+                human(f.bytes),
+                human(f.size),
+                percent(f.bytes, f.size)
+            ),
+        }
+    }
+
     /// The query that started the job, when the heading shows something else.
     fn asked<'a>(&self, j: &'a Job) -> Option<&'a str> {
         j.folder.as_ref().map(|_| j.title.as_str())
@@ -864,10 +885,12 @@ async fn jobs_html(app: &App, shown: i64) -> String {
     let more = active.len() as i64 > shown || done.len() as i64 > shown;
     active.truncate(shown as usize);
     done.truncate(shown as usize);
-    let jobs = graphql::job_views(app, active).await.unwrap_or_else(|e| {
-        tracing::warn!(error = ?e, "could not show jobs");
-        Vec::new()
-    });
+    let jobs = graphql::job_views(app, active, true)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = ?e, "could not show jobs");
+            Vec::new()
+        });
     let places = jobs
         .iter()
         .filter_map(|j| {
@@ -1537,10 +1560,10 @@ struct JobCompare {
 }
 
 impl JobCompare {
-    fn dist(&self, d: f64) -> String {
+    fn dist(&self, d: &f64) -> String {
         format!("{d:.2}")
     }
-    fn delta(&self, d: f64) -> String {
+    fn delta(&self, d: &f64) -> String {
         format!("{d:+.0}s")
     }
 }

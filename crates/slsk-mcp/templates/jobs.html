@@ -80,15 +80,26 @@
 {% for j in underway %}
   <article id="job-{{ j.id.as_str() }}" class="card {{ j.status }}" data-class:busy="${{ self.sig(j) }}">
     <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
-      <strong class="min-w-0 flex-auto wrap-anywhere">{{ j.title }}</strong>
+      <strong class="min-w-0 flex-auto wrap-anywhere" title="{% match j.folder %}{% when Some with (f) %}{{ f }}{% when None %}{% endmatch %}">{{ self.heading(j) }}</strong>
       <span class="pill">{{ self.label(j.status) }}</span>
     </div>
     <div class="text-meta text-muted wrap-anywhere">
-      {% match j.username %}{% when Some with (u) %}from {{ u }}{% when None %}{% match j.host %}{% when Some with (h) %}from {{ h }}{% when None %}{% endmatch %}{% endmatch %}
+      {% match self.asked(j) %}{% when Some with (q) %}asked for “{{ q }}” · {% when None %}{% endmatch %}{% match j.username %}{% when Some with (u) %}from {{ u }}{% when None %}{% match j.host %}{% when Some with (h) %}from {{ h }}{% when None %}{% endmatch %}{% endmatch %}
       {% if j.status == "downloading" %} · {{ self.progress(j) }}{% endif %}
       {% if j.status == "importing" %} · tagging and filing{% endif %}
     </div>
     {% if j.status == "downloading" %}<progress max="100" value="{{ self.pct(j) }}">{{ self.pct(j) }}%</progress>{% endif %}
+    {% if !j.files.is_empty() %}{% let open = self.open_sig(j) %}
+    <button type="button" class="quiet mt-1.5 px-2 py-0.5 text-meta" data-on:click="${{ open }} = !${{ open }}" data-text="(${{ open }} ? '▾ ' : '▸ ') + '{{ j.files.len() }} files'">▸ {{ j.files.len() }} files</button>
+    <ul class="mt-1 grid gap-1 text-meta" data-show="${{ open }}">
+      {% for f in j.files %}
+      <li class="flex min-w-0 flex-wrap items-baseline gap-x-2">
+        <span class="min-w-0 flex-[1_1_60%] wrap-anywhere{% if f.state == "completed" %} text-muted{% endif %}">{{ f.name }}</span>
+        <span class="{% if f.error.is_some() %}text-bad{% else %}text-muted{% endif %}">{{ self.file_progress(f) }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% endif %}
     {% match self.ask(j) %}{% when Some with (a) %}<p class="mt-2 mb-0.5">{{ a }}</p>{% when None %}{% endmatch %}
     {% match j.error %}{% when Some with (e) %}<p class="my-0.5 text-meta {% if j.status == "failed" %}text-bad{% else %}text-muted{% endif %} wrap-anywhere">{{ e }}</p>{% when None %}{% endmatch %}
     {% if !j.analysis.is_empty() && (j.status == "suspect" || j.status == "review") %}

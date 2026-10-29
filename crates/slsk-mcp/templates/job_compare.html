@@ -8,7 +8,7 @@
     <span class="text-meta text-muted">{{ p.disc }}-{{ p.position }}</span>
     <span class="wrap-anywhere">{{ p.title }}</span>
     {% if p.title_distance > 0.0 %}<span class="text-meta text-warn wrap-anywhere">file says {% if let Some(f) = p.file_title %}{{ f }}{% else %}{{ p.file }}{% endif %}</span>{% endif %}
-    {% if let Some(d) = p.length_delta_secs %}{% if d.abs() >= 2.0 %}<span class="text-meta {% if d.abs() >= 10.0 %}text-bad{% else %}text-warn{% endif %}">{{ self.delta(*d) }}</span>{% endif %}{% endif %}
+    {% if let Some(d) = p.length_delta_secs %}{% if d.abs() >= 2.0 %}<span class="text-meta {% if d.abs() >= 10.0 %}text-bad{% else %}text-warn{% endif %}">{{ self.delta(d) }}</span>{% endif %}{% endif %}
   </li>
 {% endfor %}
 {% for m in c.missing %}
