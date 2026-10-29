@@ -648,6 +648,10 @@
     margin-block: calc(var(--spacing) * .5);
   }
 
+  .my-1 {
+    margin-block: var(--spacing);
+  }
+
   .my-1\.5 {
     margin-block: calc(var(--spacing) * 1.5);
   }

@@ -1,0 +1,22 @@
+<div id="cmp-{{ id }}" class="mt-1.5">
+{% if let Some(e) = error %}<p class="text-meta text-bad wrap-anywhere">{{ e }}</p>{% endif %}
+{% if let Some(c) = cmp %}
+<p class="my-1 text-meta text-muted">album {{ self.dist(c.parts.album) }} · artist {{ self.dist(c.parts.artist) }} · titles {{ self.dist(c.parts.titles) }} · lengths {{ self.dist(c.parts.lengths) }} · <a href="https://musicbrainz.org/release/{{ c.release.id }}" target="_blank" rel="noopener">MusicBrainz</a></p>
+<ul class="grid gap-1">
+{% for p in c.pairs %}
+  <li class="flex min-w-0 flex-wrap items-baseline gap-x-2">
+    <span class="text-meta text-muted">{{ p.disc }}-{{ p.position }}</span>
+    <span class="wrap-anywhere">{{ p.title }}</span>
+    {% if p.title_distance > 0.0 %}<span class="text-meta text-warn wrap-anywhere">file says {% if let Some(f) = p.file_title %}{{ f }}{% else %}{{ p.file }}{% endif %}</span>{% endif %}
+    {% if let Some(d) = p.length_delta_secs %}{% if d.abs() >= 2.0 %}<span class="text-meta {% if d.abs() >= 10.0 %}text-bad{% else %}text-warn{% endif %}">{{ self.delta(*d) }}</span>{% endif %}{% endif %}
+  </li>
+{% endfor %}
+{% for m in c.missing %}
+  <li class="flex min-w-0 flex-wrap items-baseline gap-x-2 text-bad"><span class="text-meta">{{ m.disc }}-{{ m.position }}</span><span class="wrap-anywhere">{{ m.title }}</span><span class="text-meta">no file</span></li>
+{% endfor %}
+{% for x in c.extra %}
+  <li class="flex min-w-0 flex-wrap items-baseline gap-x-2 text-warn"><span class="wrap-anywhere">{{ x }}</span><span class="text-meta">not on this release</span></li>
+{% endfor %}
+</ul>
+{% endif %}
+</div>
