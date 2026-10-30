@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.6
+
+### Added
+
+- **Split artist credits on a separator you type.** Credit artists, in the web UI and as `creditArtists(separator:)`, splits each credit on the separator given, for collaborations whose artists the library holds nothing else by; the automatic split needs every part to be a known artist and leaves those whole.
+- **Imported albums link to their library page.** Each entry under "In your library" opens the album it was filed as.
+
 ## 0.8.5
 
 ### Fixed
