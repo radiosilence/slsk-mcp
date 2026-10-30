@@ -1296,6 +1296,8 @@ struct PlanView<'a> {
     filter: &'a Filter,
     selected: usize,
     shown: usize,
+    /// The separator credits are split on, carried to applying.
+    split: &'a str,
 }
 
 #[derive(Template)]
@@ -1434,7 +1436,7 @@ async fn plan_one(
                     Some(c) => p.note = Some(c.problems.join("; ")),
                     None => {
                         p.note = Some(
-                            "Nothing to credit: already credited, one artist, or a credit neither a release nor the library's artists split."
+                            "Nothing to credit: already credited, one artist, or a credit neither a release nor the library's artists split. Type the separator its artists are joined by to split on it."
                                 .into(),
                         )
                     }
@@ -1658,11 +1660,12 @@ async fn previewed(s: UiState, action: Action, form: Vec<(String, String)>) -> R
     sse(async_stream::stream! {
         let selected = rows.len();
         let shown = action.cap().map_or(selected, |c| selected.min(c));
-        let shell = PlanView { action, filter: &filter, selected, shown };
+        let split = super::field(&form, "split").unwrap_or_default().trim().to_string();
+        let shell = PlanView { action, filter: &filter, selected, shown, split: &split };
         yield Ok(patch(&shell.render().unwrap_or_default()));
         let known = if matches!(action, Action::Credit | Action::Enrich) {
             match s.app.library.known_artists().await {
-                Ok(k) => k,
+                Ok(k) => k.splitting_on(&split),
                 Err(e) => {
                     yield Ok(patch(&super::flash_err(&format!("{e:#}"))));
                     return;
@@ -2105,10 +2108,11 @@ async fn apply(State(s): State<UiState>, Path(action): Path<String>, body: Bytes
     }
     let (tx, rx) = tokio::sync::oneshot::channel();
     let (app, state, art) = (s.app.clone(), s.run.clone(), s.art.clone());
+    let split = super::field(&form, "split").unwrap_or_default().to_string();
     tokio::spawn(async move {
         use futures_util::FutureExt;
         // A panic in the run still frees the slot.
-        match std::panic::AssertUnwindSafe(run(&app, &state, &art, action, &paths, &with))
+        match std::panic::AssertUnwindSafe(run(&app, &state, &art, action, &paths, &with, &split))
             .catch_unwind()
             .await
         {
@@ -2186,6 +2190,7 @@ async fn run(
     action: Action,
     paths: &[String],
     with: &HashMap<String, String>,
+    split: &str,
 ) -> anyhow::Result<()> {
     let library = &app.library;
     let root = library.root().to_string_lossy().into_owned();
@@ -2271,7 +2276,7 @@ async fn run(
         return Ok(());
     }
     let known = match action {
-        Action::Credit | Action::Enrich => library.known_artists().await?,
+        Action::Credit | Action::Enrich => library.known_artists().await?.splitting_on(split),
         _ => Default::default(),
     };
     for path in paths {

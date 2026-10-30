@@ -155,7 +155,7 @@
   <ul>
   {% for j in settled %}
     <li id="job-{{ j.id }}" class="flex min-w-0 items-center gap-2.5 border-b border-rule py-2" data-class:busy="${{ self.sig_of(j.id) }}">
-      <span class="min-w-0 truncate{% if j.cancelled %} text-muted line-through{% endif %}">{{ j.title }}</span>
+      {% if let Some(href) = j.href %}<a class="min-w-0 truncate" href="{{ href }}">{{ j.title }}</a>{% else %}<span class="min-w-0 truncate{% if j.cancelled %} text-muted line-through{% endif %}">{{ j.title }}</span>{% endif %}
       {% if j.cancelled %}<span class="min-w-0 flex-1 truncate text-meta text-muted">cancelled</span>{% endif %}
       {% if j.cancelled %}<button class="flex-none px-2.5 py-1 text-meta" data-indicator="{{ self.sig_of(j.id) }}" data-attr:disabled="${{ self.sig_of(j.id) }}" data-on:click="@post('/jobs/{{ j.id }}/retry')">Retry</button>{% endif %}
       <button class="quiet flex-none px-2.5 py-1 text-meta" data-indicator="{{ self.sig_of(j.id) }}" data-attr:disabled="${{ self.sig_of(j.id) }}" data-on:click="{% if j.cancelled %}confirm('Remove this album and delete its downloaded files?') && {% endif %}@post('/jobs/{{ j.id }}/remove')" title="Forget this entry; the album stays in the library">Clear</button>

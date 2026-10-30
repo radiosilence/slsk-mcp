@@ -591,6 +591,8 @@ struct Settled {
     /// What landed, as filed ("Artist — (Year) Album"), which is the
     /// confirmation a person wants; the query that asked for it otherwise.
     title: String,
+    /// The album's page in the library, once it is filed.
+    href: Option<String>,
     cancelled: bool,
 }
 
@@ -606,9 +608,17 @@ impl From<crate::db::Job> for Settled {
                 }
             }
         };
+        let href = j.library_path.as_ref().map(|path| {
+            library::Filter {
+                album: path.clone(),
+                ..Default::default()
+            }
+            .url()
+        });
         Self {
             id: j.id.to_string(),
             title,
+            href,
             cancelled: j.status == "cancelled",
         }
     }

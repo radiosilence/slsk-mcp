@@ -1,0 +1,1 @@
+- **Imported albums link to their library page.** Each entry under "In your library" opens the album it was filed as.

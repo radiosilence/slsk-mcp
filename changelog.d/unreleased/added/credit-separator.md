@@ -1,0 +1,1 @@
+- **Split artist credits on a separator you type.** Credit artists, in the web UI and as `creditArtists(separator:)`, splits each credit on the separator given, for collaborations whose artists the library holds nothing else by; the automatic split needs every part to be a known artist and leaves those whole.
