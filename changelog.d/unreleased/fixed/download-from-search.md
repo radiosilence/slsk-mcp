@@ -1,0 +1,1 @@
+- **Downloading a search result from a peer that will not list its folders.** The web UI's Download sent only the folder, so a peer whose browsing is broken failed the job with "the peer did not list the folder". It now sends the files the search found too, and those are fetched by name when the listing fails, as `grab` already did.

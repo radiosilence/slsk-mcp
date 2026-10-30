@@ -1188,6 +1188,10 @@ impl ResultsView {
     fn key(&self, f: &Folder) -> String {
         URL_SAFE_NO_PAD.encode(f.remote_path.as_bytes())
     }
+    /// A file as the download form sends it: its path, then its size.
+    fn file_key(&self, x: &crate::folders::File) -> String {
+        format!("{}.{}", URL_SAFE_NO_PAD.encode(x.remote.as_bytes()), x.size)
+    }
     /// Stable across regroups, so an open preview stays with its folder.
     fn id(&self, f: &Folder) -> u64 {
         use std::hash::{Hash, Hasher};
@@ -1279,13 +1283,6 @@ async fn search(State(s): State<UiState>, Query(view): Query<SearchQuery>) -> Re
     sse(events).into_response()
 }
 
-#[derive(serde::Deserialize)]
-struct DownloadForm {
-    username: String,
-    key: String,
-    title: Option<String>,
-}
-
 async fn grab(State(s): State<UiState>, axum::Form(form): axum::Form<SearchForm>) -> Response {
     let filter = form.lossless.then(|| Filter {
         lossless: true,
@@ -1312,19 +1309,40 @@ async fn import_url(State(s): State<UiState>, axum::Form(form): axum::Form<UrlFo
     }
 }
 
-async fn download(
-    State(s): State<UiState>,
-    axum::Form(form): axum::Form<DownloadForm>,
-) -> Response {
-    let Ok(raw) = URL_SAFE_NO_PAD.decode(&form.key) else {
+/// A folder from the search results. The files the results listed come
+/// with it, to fetch by name when the peer will not list the folder.
+async fn download(State(s): State<UiState>, body: Bytes) -> Response {
+    let fields = fields(&body);
+    let (Some(username), Some(Ok(raw))) = (
+        field(&fields, "username"),
+        field(&fields, "key").map(|k| URL_SAFE_NO_PAD.decode(k)),
+    ) else {
         return StatusCode::BAD_REQUEST.into_response();
     };
+    let files = fields
+        .iter()
+        .filter(|(k, _)| k == "file")
+        .filter_map(|(_, v)| {
+            let (path, size) = v.rsplit_once('.')?;
+            let remote = RawStr(URL_SAFE_NO_PAD.decode(path).ok()?.into());
+            Some(crate::folders::File {
+                name: remote.to_string_lossy(),
+                extension: String::new(),
+                size: size.parse().ok()?,
+                remote,
+                bitrate: None,
+                duration: None,
+                sample_rate: None,
+                bit_depth: None,
+            })
+        })
+        .collect();
     let remote = RawStr(raw.into());
     let folder = Folder {
-        username: form.username,
+        username: username.to_string(),
         path: remote.to_string_lossy(),
         remote_path: remote,
-        files: Vec::new(),
+        files,
         audio_files: 0,
         total_size: 0,
         lossless: false,
@@ -1336,12 +1354,8 @@ async fn download(
         queue_length: 0,
         score: 0.0,
     };
-    match s
-        .app
-        .jobs
-        .from_folder(&folder, form.title, Vec::new())
-        .await
-    {
+    let title = field(&fields, "title").map(str::to_string);
+    match s.app.jobs.from_folder(&folder, title, Vec::new()).await {
         Ok(job) => one(flash_ok(&format!("Downloading {}", job.title))),
         Err(e) => one(format!(
             r#"<div id="flash" class="toast border-bad text-meta text-bad">{}</div>"#,
