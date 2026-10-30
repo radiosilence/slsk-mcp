@@ -1355,21 +1355,24 @@ impl Mutation {
     /// with a release costs one MusicBrainz request. `preview: true` writes
     /// nothing and lists, in `planned`, each file's credits as they would be
     /// written and the release they come from (none for a split).
+    /// `separator` splits each credit on it instead, for artists the
+    /// library holds nothing else by ("A; B" with `";"`).
     async fn credit_artists(
         &self,
         ctx: &Context<'_>,
         query: Vec<String>,
         #[graphql(default)] preview: bool,
+        #[graphql(default)] separator: String,
     ) -> Result<Vec<crate::library::CreditedAlbum>> {
         if query.is_empty() {
             return Err(Error::new("give a query; [\"\"] means the whole library"));
         }
         let library = &app(ctx).library;
+        let known = library.known_artists().await?.splitting_on(&separator);
         if preview {
-            let known = library.known_artists().await?;
             return Ok(library.credit_plan(&query, &known).await?);
         }
-        Ok(library.credit(&query).await?)
+        Ok(library.credit_with(&query, &known).await?)
     }
 
     /// Match albums already in the library against MusicBrainz again and

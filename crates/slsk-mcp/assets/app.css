@@ -738,6 +738,10 @@
     height: 18px;
   }
 
+  .w-24 {
+    width: calc(var(--spacing) * 24);
+  }
+
   .w-\[1\%\] {
     width: 1%;
   }
