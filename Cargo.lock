@@ -3029,6 +3029,7 @@ dependencies = [
  "rmcp",
  "rusqlite",
  "rustfft",
+ "same-file",
  "schemars",
  "serde",
  "serde_json",
