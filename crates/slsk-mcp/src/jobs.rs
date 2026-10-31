@@ -1857,7 +1857,7 @@ pub(crate) fn unzip(archive: &std::path::Path, dir: &std::path::Path, limit: u64
 /// and it is a name Windows can create, so a download behaves the same on
 /// every platform: Win32 refuses `<>:"|?*` and control characters, drops
 /// trailing dots and spaces (making `.. ` into `..`), and opens a device for
-/// `CON`, `NUL` and the like whatever the extension. Empty means skip it.
+/// `CON`, `NUL`, `CONOUT$` and the like whatever the extension. Empty means skip it.
 fn path_part(s: &str) -> String {
     let s: String = s
         .chars()
@@ -1876,10 +1876,12 @@ fn path_part(s: &str) -> String {
         .unwrap_or(s)
         .trim_end()
         .to_ascii_uppercase();
-    let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
-        || ((stem.starts_with("COM") || stem.starts_with("LPT"))
-            && stem.len() == 4
-            && stem.as_bytes()[3].is_ascii_digit());
+    let reserved = matches!(
+        stem.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+    ) || ((stem.starts_with("COM") || stem.starts_with("LPT"))
+        && stem.len() == 4
+        && stem.as_bytes()[3].is_ascii_digit());
     if reserved {
         format!("_{s}")
     } else {
@@ -1915,6 +1917,7 @@ mod tests {
             ("Con Funk Shun.flac", "Con Funk Shun.flac"),
             ("CONSOLE.flac", "CONSOLE.flac"),
             ("COM10", "COM10"),
+            ("conout$.txt", "_conout$.txt"),
         ] {
             assert_eq!(path_part(name), part, "{name:?}");
         }
