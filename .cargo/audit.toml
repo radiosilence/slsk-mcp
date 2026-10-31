@@ -9,7 +9,4 @@ ignore = [
     # paste, unmaintained. A proc-macro held by lofty, through slsk-engine and
     # sift-music.
     "RUSTSEC-2024-0436",
-    # unsafe-libyaml, unmaintained. Held by serde_yaml_ng 0.10.0, its latest
-    # release, through sift-music.
-    "RUSTSEC-2024-0449",
 ]
