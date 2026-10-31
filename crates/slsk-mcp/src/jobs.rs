@@ -531,18 +531,14 @@ impl Jobs {
     fn dest(&self, f: &JobFile) -> PathBuf {
         let name = RawStr(f.remote.clone().into()).to_string_lossy();
         let base = name.rsplit('\\').next().unwrap_or(&name);
-        // Peers control these names; nothing they send may climb out of the
-        // job's directory.
-        let clean = |s: &str| {
-            s.replace(['/', '\0'], "_")
-                .trim_start_matches('.')
-                .to_string()
-        };
         let mut path = self.dir(f.job_id);
-        for part in f.subdir.split('/').filter(|p| !p.is_empty() && *p != "..") {
-            path.push(clean(part));
+        for part in f.subdir.split(['/', '\\']).map(path_part) {
+            if !part.is_empty() {
+                path.push(part);
+            }
         }
-        path.push(clean(base));
+        let base = path_part(base);
+        path.push(if base.is_empty() { "file".into() } else { base });
         path
     }
 
@@ -1856,12 +1852,73 @@ pub(crate) fn unzip(archive: &std::path::Path, dir: &std::path::Path, limit: u64
     Ok(())
 }
 
+/// One component of a path under a job's directory, from a name a peer chose.
+/// Nothing it yields may climb out of the directory or name another drive,
+/// and it is a name Windows can create, so a download behaves the same on
+/// every platform: Win32 refuses `<>:"|?*` and control characters, drops
+/// trailing dots and spaces (making `.. ` into `..`), and opens a device for
+/// `CON`, `NUL` and the like whatever the extension. Empty means skip it.
+fn path_part(s: &str) -> String {
+    let s: String = s
+        .chars()
+        .map(|c| {
+            if c.is_control() || matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let s = s.trim_matches(['.', ' ']);
+    let stem = s
+        .split('.')
+        .next()
+        .unwrap_or(s)
+        .trim_end()
+        .to_ascii_uppercase();
+    let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || ((stem.starts_with("COM") || stem.starts_with("LPT"))
+            && stem.len() == 4
+            && stem.as_bytes()[3].is_ascii_digit());
+    if reserved {
+        format!("_{s}")
+    } else {
+        s.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::Write;
     use std::path::{Path, PathBuf};
 
     use super::*;
+
+    #[test]
+    fn path_parts_stay_inside_the_job_on_every_platform() {
+        for (name, part) in [
+            ("01 Song.flac", "01 Song.flac"),
+            ("What's Going On?.flac", "What's Going On_.flac"),
+            ("C:x.flac", "C_x.flac"),
+            ("a:b", "a_b"),
+            ("..", ""),
+            (".. ", ""),
+            ("... ", ""),
+            (" . ", ""),
+            ("Vol. 1.", "Vol. 1"),
+            (".hidden", "hidden"),
+            ("a\\..\\b", "a_.._b"),
+            ("tab\there", "tab_here"),
+            ("CON.flac", "_CON.flac"),
+            ("nul", "_nul"),
+            ("com1.txt", "_com1.txt"),
+            ("Con Funk Shun.flac", "Con Funk Shun.flac"),
+            ("CONSOLE.flac", "CONSOLE.flac"),
+            ("COM10", "COM10"),
+        ] {
+            assert_eq!(path_part(name), part, "{name:?}");
+        }
+    }
 
     fn zip_of(files: &[(&str, &[u8])]) -> PathBuf {
         let path = std::env::temp_dir().join(format!("slsk-zip-{}.zip", Uuid::new_v4()));
