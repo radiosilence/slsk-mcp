@@ -138,22 +138,22 @@ mod tests {
     fn authorize_url_carries_every_required_parameter_and_escapes_the_redirect() {
         let oidc = Oidc {
             issuer: "https://auth.example.com".to_string(),
-            client_id: "mariastew".to_string(),
+            client_id: "slsk-mcp".to_string(),
             client_secret: "secret".to_string(),
         };
         let url = authorize_url(
             &oidc,
-            "https://mariastew.example.com/auth/callback",
+            "https://slsk.example.com/auth/callback",
             "csrf-token",
             "the-challenge",
         );
         let parsed = Url::parse(&url).unwrap();
         let pairs: std::collections::HashMap<_, _> = parsed.query_pairs().into_owned().collect();
 
-        assert_eq!(pairs["client_id"], "mariastew");
+        assert_eq!(pairs["client_id"], "slsk-mcp");
         assert_eq!(
             pairs["redirect_uri"],
-            "https://mariastew.example.com/auth/callback"
+            "https://slsk.example.com/auth/callback"
         );
         assert_eq!(pairs["response_type"], "code");
         assert_eq!(pairs["scope"], "openid offline_access");

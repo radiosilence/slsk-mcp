@@ -4,8 +4,8 @@
 //! single-origin app that is never embedded, so a cross-site form post never
 //! carries the session.
 
-pub const SESSION_COOKIE: &str = "mariastew_session";
-pub const FLOW_COOKIE: &str = "mariastew_flow";
+pub const SESSION_COOKIE: &str = "slsk_session";
+pub const FLOW_COOKIE: &str = "slsk_flow";
 
 pub fn set_cookie(name: &str, value: &str, max_age_secs: i64) -> String {
     format!("{name}={value}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age={max_age_secs}")
@@ -28,7 +28,7 @@ mod tests {
 
     #[test]
     fn reads_a_named_cookie_from_a_header_of_several() {
-        let h = "other=1; mariastew_session=abc123; another=2";
+        let h = "other=1; slsk_session=abc123; another=2";
         assert_eq!(read_cookie(h, SESSION_COOKIE), Some("abc123"));
         assert_eq!(read_cookie(h, "absent"), None);
     }
