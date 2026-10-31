@@ -504,10 +504,12 @@ impl From<sift::Comparison> for Comparison {
     }
 }
 
-/// A MusicBrainz release the tagger considered.
+/// A release the tagger considered: a MusicBrainz id, or `discogs:<number>`.
 #[derive(SimpleObject)]
 pub(crate) struct Candidate {
     pub release_id: String,
+    /// The release's page on MusicBrainz or Discogs.
+    pub url: String,
     pub title: String,
     pub artist: String,
     pub date: Option<String>,
@@ -526,6 +528,7 @@ pub(crate) struct Candidate {
 impl From<sift::Candidate> for Candidate {
     fn from(c: sift::Candidate) -> Self {
         Self {
+            url: crate::library::release_link(&c.id).1,
             release_id: c.id,
             title: c.title,
             artist: c.artist,
@@ -622,6 +625,24 @@ struct Buddy {
     privileged: bool,
 }
 
+/// Where the tagger looks for releases.
+#[derive(SimpleObject)]
+struct Tagger {
+    /// MusicBrainz is always consulted. Discogs is consulted when MusicBrainz has no strong match, and able to apply a
+    /// `discogs:<number>` release; on when the service has `DISCOGS_TOKEN`.
+    discogs: bool,
+}
+
+/// A release id from what was given: a MusicBrainz id, `discogs:<number>`,
+/// or a link to either.
+fn release_arg(s: &str) -> Result<String> {
+    crate::library::release_id(s).ok_or_else(|| {
+        Error::new(format!(
+            "{s:?} is not a MusicBrainz id, a discogs:<number> id or a link to either"
+        ))
+    })
+}
+
 pub struct Query;
 
 #[Object]
@@ -659,6 +680,13 @@ impl Query {
             shared_folders: folders,
             distributed_parent: parent,
             distributed_children: children,
+        }
+    }
+
+    /// Where the tagger looks for releases: whether Discogs is on.
+    async fn tagger(&self, ctx: &Context<'_>) -> Tagger {
+        Tagger {
+            discogs: app(ctx).jobs.discogs(),
         }
     }
 
@@ -994,8 +1022,10 @@ impl Query {
             .collect())
     }
 
-    /// How a job's files line up against one MusicBrainz release, track by
-    /// track: whether it is the right release, and what differs if nearly.
+    /// How a job's files line up against one release, track by track:
+    /// whether it is the right release, and what differs if nearly.
+    /// `releaseId` is a MusicBrainz id, `discogs:<number>`, or a link to
+    /// either.
     async fn compare_release(
         &self,
         ctx: &Context<'_>,
@@ -1004,7 +1034,7 @@ impl Query {
     ) -> Result<Comparison> {
         Ok(app(ctx)
             .jobs
-            .compare(parse_id(&id)?, &release_id)
+            .compare(parse_id(&id)?, &release_arg(&release_id)?)
             .await?
             .into())
     }
@@ -1446,6 +1476,10 @@ impl Mutation {
                 "give a query; this retags every album it matches",
             ));
         }
+        let release_id = release_id.as_deref().map(release_arg).transpose()?;
+        if let Some(r) = &release_id {
+            app(ctx).jobs.check_release(r)?;
+        }
         let library = &app(ctx).library;
         let albums = library.albums(&query).await?;
         if release_id.is_some() && albums.len() > 1 {
@@ -1788,11 +1822,12 @@ impl Mutation {
         job_view(app, job, true).await
     }
 
-    /// Import a job in review as the given MusicBrainz release.
+    /// Import a job in review as the given release: a MusicBrainz id,
+    /// `discogs:<number>`, or a link to either.
     async fn resolve_job(&self, ctx: &Context<'_>, id: ID, release_id: String) -> Result<Job> {
         let app = app(ctx);
         let id = parse_id(&id)?;
-        app.jobs.resolve(id, release_id).await?;
+        app.jobs.resolve(id, release_arg(&release_id)?).await?;
         job_view(
             app,
             db::job(&app.db, id)

@@ -106,6 +106,17 @@ async fn main() -> anyhow::Result<()> {
     // The root filesystem is read-only in a container; the state volume is
     // where a cache survives restarts.
     sift_cfg.cache_dir = Some(cfg.state_dir.join("cache"));
+    // A token is the operator asking for Discogs; beets also wants the
+    // plugin listed, which nobody setting a token means to withhold.
+    if sift_cfg.discogs.is_none()
+        && let Some(token) = &cfg.discogs_token
+    {
+        sift_cfg.discogs = Some(sift::config::DiscogsConf {
+            token: token.clone(),
+            index_tracks: false,
+        });
+    }
+    tracing::info!(discogs = sift_cfg.discogs.is_some(), "tagger configured");
     let importer = Arc::new(sift::Importer::new(sift_cfg));
     // Spare copies go beside the library rather than in it: out of
     // Navidrome's and the shares' sight, and on the same drive, so binning

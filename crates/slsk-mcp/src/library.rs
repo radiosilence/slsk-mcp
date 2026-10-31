@@ -1383,3 +1383,56 @@ fn writable(path: &Path) -> anyhow::Result<()> {
         .map(drop)
         .map_err(|e| anyhow::anyhow!("{} cannot be written: {e}", path.display()))
 }
+
+/// A release id from what was pasted: a MusicBrainz id, `discogs:<number>`,
+/// or a link to a release on either site (any of its pages, any language).
+/// Links to anything else, such as a release group or a Discogs master, are
+/// refused.
+pub fn release_id(s: &str) -> Option<String> {
+    let s = s.trim();
+    let discogs = |n: &str| {
+        let digits = n.split('-').next().unwrap_or_default();
+        (!digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
+            .then(|| format!("discogs:{digits}"))
+    };
+    if let Some(n) = s.strip_prefix("discogs:") {
+        return discogs(n).filter(|_| !n.contains('-'));
+    }
+    let uuid = |id: &str| {
+        id.len() == 36
+            && id.chars().enumerate().all(|(i, c)| {
+                if [8, 13, 18, 23].contains(&i) {
+                    c == '-'
+                } else {
+                    c.is_ascii_hexdigit()
+                }
+            })
+    };
+    if !s.contains('/') {
+        return uuid(s).then(|| s.to_ascii_lowercase());
+    }
+    let path = s.split(['?', '#']).next().unwrap_or(s);
+    let mut segments = path.split('/');
+    let on_discogs = segments
+        .clone()
+        .take(3)
+        .any(|seg| seg.to_ascii_lowercase().ends_with("discogs.com"));
+    segments.find(|seg| *seg == "release")?;
+    let id = segments.next()?;
+    if on_discogs {
+        discogs(id)
+    } else {
+        uuid(id).then(|| id.to_ascii_lowercase())
+    }
+}
+
+/// Where a release id is shown on its own site, with the site's name.
+pub fn release_link(id: &str) -> (&'static str, String) {
+    match id.strip_prefix("discogs:") {
+        Some(n) => ("Discogs", format!("https://www.discogs.com/release/{n}")),
+        None => (
+            "MusicBrainz",
+            format!("https://musicbrainz.org/release/{id}"),
+        ),
+    }
+}
