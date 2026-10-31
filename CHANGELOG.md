@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.9.1
+
+### Changed
+
+- **The web UI's cookies are named for this service.** `__Host-slsk-mcp-session` and `__Host-slsk-mcp-flow` replace names carried over from another project, and the prefix stops a sibling subdomain setting or shadowing them. Every existing session is ended, so each browser signs in once more.
+
+## 0.9.0
+
+### Added
+
+- **`binAlbums` bins whole albums.** Over GraphQL and MCP, the albums a query matches move to the bin whether or not another copy is held, as the web UI's Bin action does; `preview: true` lists where each would go.
+- **Wishes report what their last search found.** `Wish.found` counts the complete copies the latest search turned up, so a wish that does not grab says when one is there to choose.
+- **Discogs matching is usable.** `DISCOGS_TOKEN` alone turns it on, without listing the beets plugin. Discogs candidates in review can be used and compared, a Discogs release id or link can be pasted on a job or a library album, candidates link to their own site, and Settings and the `tagger` query say whether Discogs is on.
+- **Profiles.** Every username in the web UI links to a profile page showing the peer's picture, description, status, shares, speed, uploads, queue and interests, with links to browse their shares, message them or add them as a buddy. The Profile tab edits this account's own description and picture, kept per account and served to peers who ask, and shows its lifetime upload and download totals.
+
+### Security
+
+- **Deployment hardened and pinned.** The Pulumi package's UPnP mapper drops every capability, its state init container receives paths as quoted environment variables rather than spliced into a shell string, and the NetworkPolicy's ingress, gateway and scraper peers can name their namespaces (`*NamespaceLabels`) and node CIDR (`nodeCidr`, validated), defaulting to the previous behaviour; base images are pinned by digest, Dependabot moves the Dockerfile's, and `just check` runs what CI runs.
+- **Inbound peer connections are bounded and verified.** Strangers can hold only a limited number of connections open, per address and in total (`MAX_INBOUND_CONNECTIONS`, `MAX_INBOUND_PER_ADDRESS`); every peer message but a requested share list is refused above 1 MiB from its header, and a message must finish arriving within three minutes. A connection a peer opens is taken as the user it names only once the server places that user at its address: until then its answers to our requests are ignored and our own messages to that user are not sent over it. Requests and search results on it are still attributed to the name it gives, as the protocol has no other way to know.
+- **Downloads cannot be made to fill the disk.** An offer whose size differs from the size queued, or exceeds 8 GiB, fails the download; the size a peer announces was previously trusted as the number of bytes to write.
+- **Fetches refuse private addresses.** `importUrl` and `setAlbumArt` no longer reach loopback, private, link-local or other reserved addresses, whether named directly, through DNS or on a redirect; the internal listener trusts whoever reaches it.
+- **Peers cannot drive large allocations.** Unsolicited search results and folder contents are dropped before inflating, share lists over the usual limit are taken only from verified links, decoded lists no longer reserve from a forged count, and bans are applied from the login status so a lagging subscriber cannot skip them.
+
+### Removed
+
+- **Searches of only `*tail` terms match nothing.** Answering one meant reading every word in the share index for each such search the network relays.
+
+### Fixed
+
+- **Cancels, bans and retries no longer race transfers.** An upload cancelled or banned while starting is no longer sent anyway, a retried download no longer runs alongside the transfer it replaces, offer tokens are dropped when an offer ends, rescans run one at a time so a fresh import is not lost from the share index, a partial file larger than the peer's is kept rather than emptied, and a distributed reset stops the old parent and child connections.
+- **All-V0 transcodes are caught.** An album most of whose tracks look lossy goes to `suspect` at any confidence, as the album verdict already said, instead of importing clean; a spectrogram that cannot be written no longer fails a good album as damaged.
+- **`binDuplicates` needs a query.** Without one and without `preview`, it is refused instead of binning every spare in the library.
+- **A cancelled or removed job stays stopped.** A download finishing, a search for another copy or a fallback that lands after a job was cancelled no longer sets it back to downloading or importing, and two retries at once no longer fetch it twice.
+- **Jobs resume without a stored account.** Fetches from URLs and imports interrupted by a restart pick up at boot whether or not a Soulseek account is configured, and an import resumes with the release or as-is edits it was given rather than matching afresh.
+- **Grabs, wishes and fallbacks take only folders that match.** When no folder holds every word of the query, nothing is downloaded, rather than an unrelated folder from the same answers.
+- **Imports no longer stay `importing` for good.** An import that errs or panics fails the job; one waiting on MusicBrainz gives up after two hours of tries and fails for a retry, and can be removed while it waits.
+- **Web UI actions answer where they are asked.** Grab on Search confirms with a toast instead of patching a job list the page lacks; leaving a chat room clears it from the address; grabbing, importing a link, pasting a release and cancelling an upload keep the rows shown after "Show more"; and Browse's Download buttons show their own progress and cannot be sent twice.
+- **Memory no longer grows with uptime.** Finished downloads, dropped distributed children, large read buffers and several per-peer and per-job maps were kept until restart, and engine-only server traffic no longer crowds out private messages and logins on the event channel.
+
+### Internal
+
+- **Dependencies refreshed.** Every crate is on its latest release, which brings semver-incompatible transitive bumps (typed-path 0.13 through zip, ogg_pager 0.8 through lofty, aws-lc-sys 0.47); rusqlite stays on 0.40 because sift-music links the same libsqlite3. The stale unsafe-libyaml audit exception is removed, since nothing in the lockfile depends on it.
+- **Unused protocol messages and stale auth code removed.** Server messages nothing sends or handles now decode as unknown, the mock server helpers sit behind a feature, MCP and `/graphql` share one schema, and the unused `BEET_BIN` setting is gone.
+
 ## 0.8.6
 
 ### Added
