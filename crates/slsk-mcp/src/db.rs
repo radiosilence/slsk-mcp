@@ -91,6 +91,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0002_active_jobs.sql"),
     include_str!("../migrations/0003_import_how.sql"),
     include_str!("../migrations/0004_profiles.sql"),
+    include_str!("../migrations/0005_end_sessions.sql"),
 ];
 
 /// How many idle connections to keep. More than the concurrency the service

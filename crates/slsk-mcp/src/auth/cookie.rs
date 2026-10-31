@@ -2,10 +2,12 @@
 //!
 //! `SameSite=Lax` is the CSRF control for the state-changing routes: this is a
 //! single-origin app that is never embedded, so a cross-site form post never
-//! carries the session.
+//! carries the session. The `__Host-` prefix makes browsers refuse either
+//! cookie unless it is `Secure`, has `Path=/` and names no `Domain`, so a
+//! sibling subdomain cannot set or shadow it.
 
-pub const SESSION_COOKIE: &str = "mariastew_session";
-pub const FLOW_COOKIE: &str = "mariastew_flow";
+pub const SESSION_COOKIE: &str = "__Host-slsk-mcp-session";
+pub const FLOW_COOKIE: &str = "__Host-slsk-mcp-flow";
 
 pub fn set_cookie(name: &str, value: &str, max_age_secs: i64) -> String {
     format!("{name}={value}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age={max_age_secs}")
@@ -28,7 +30,7 @@ mod tests {
 
     #[test]
     fn reads_a_named_cookie_from_a_header_of_several() {
-        let h = "other=1; mariastew_session=abc123; another=2";
+        let h = "other=1; __Host-slsk-mcp-session=abc123; another=2";
         assert_eq!(read_cookie(h, SESSION_COOKIE), Some("abc123"));
         assert_eq!(read_cookie(h, "absent"), None);
     }
