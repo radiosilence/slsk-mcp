@@ -701,7 +701,7 @@ mod profile {
             Some(&info(Some(b"\x89PNG\r\n\x1a\nxx"))),
             None,
         );
-        assert!(html.contains("&lt;b&gt;dub&lt;/b&gt; techno"), "{html}");
+        assert!(html.contains("&#60;b&#62;dub&#60;/b&#62; techno"), "{html}");
         assert!(
             html.contains("/profile/picture?username=ann&#38;v="),
             "{html}"
