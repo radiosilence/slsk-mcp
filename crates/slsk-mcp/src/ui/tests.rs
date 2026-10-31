@@ -59,7 +59,7 @@ fn sources_link_folders_by_their_bytes_and_skip_unrecorded_counts() {
     let current = view.current.as_ref().unwrap();
     assert_eq!(
         current.folder.as_ref().unwrap().1,
-        browse_href("peer", &browse::key(&raw))
+        browse_href("peer", &URL_SAFE_NO_PAD.encode(&raw))
     );
     let found: Vec<_> = view.others.iter().map(|o| o.found).collect();
     assert_eq!(found, [None, Some((2, 15))]);
