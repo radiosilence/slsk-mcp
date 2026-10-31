@@ -125,7 +125,7 @@ async fn two_engines_search_and_download() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_profile_set_at_runtime_is_what_peers_see() {
-    let Some(server) = server().await else { return };
+    let server = TestServer::start().await;
     let tmp = tempfile::tempdir().unwrap();
     let alice = engine(&server, "alice", vec![], tmp.path()).await;
     let bob = engine(&server, "bob", vec![], tmp.path()).await;
