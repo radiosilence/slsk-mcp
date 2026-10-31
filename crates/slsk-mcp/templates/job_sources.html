@@ -2,7 +2,7 @@
 <div id="{{ target }}" class="mt-1.5 grid min-w-0 gap-3">
   {% if let Some(c) = current %}
   <section class="min-w-0">
-    <h3 class="m-0 text-meta text-muted">Fetching from</h3>
+    <h3 class="m-0 text-meta text-muted">Source</h3>
     <ul class="rows tight">{% call line(c) %}{% endcall %}</ul>
   </section>
   {% endif %}

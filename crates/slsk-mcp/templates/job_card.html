@@ -9,9 +9,9 @@
     {% if j.status == "importing" %} · tagging and filing{% endif %}
   </div>
   {% if j.status == "downloading" %}<progress max="100" value="{{ self.pct(j) }}">{{ self.pct(j) }}%</progress>{% endif %}
-  {% if !warn && !j.files.is_empty() %}{% let open = self.open_sig(j) %}
-  <button type="button" class="quiet mt-1.5 px-2 py-0.5 text-meta" data-on:click="${{ open }} = !${{ open }}" data-text="(${{ open }} ? '▾ ' : '▸ ') + '{{ j.files.len() }} files'">▸ {{ j.files.len() }} files</button>
-  <ul class="mt-1 grid gap-1 text-meta" data-show="${{ open }}">
+  {% if (full || !warn) && !j.files.is_empty() %}{% let open = self.open_sig(j) %}
+  {% if !full %}<button type="button" class="quiet mt-1.5 px-2 py-0.5 text-meta" data-on:click="${{ open }} = !${{ open }}" data-text="(${{ open }} ? '▾ ' : '▸ ') + '{{ j.files.len() }} files'">▸ {{ j.files.len() }} files</button>{% endif %}
+  <ul class="mt-1 grid gap-1 text-meta"{% if !full %} data-show="${{ open }}"{% endif %}>
     {% for f in j.files %}
     <li class="flex min-w-0 flex-wrap items-baseline gap-x-2">
       <span class="min-w-0 flex-[1_1_60%] wrap-anywhere{% if f.state == "completed" %} text-muted{% endif %}">{{ f.name }}</span>
@@ -35,6 +35,12 @@
       </li>
     {% endfor %}
     </ul>
+  </details>
+  {% endif %}
+  {% if warn && !full %}
+  <details class="mt-2" data-ignore-morph data-on:toggle="el.open && @get('/jobs/{{ j.id.as_str() }}/sources')">
+    <summary class="text-muted">Sources and history{% if j.alternates > 0 %} · {{ j.alternates }} other {% if j.alternates == 1 %}copy{% else %}copies{% endif %}{% endif %}</summary>
+    <div id="sources-{{ j.id.as_str() }}" class="mt-1.5 text-meta text-muted">Reading history…</div>
   </details>
   {% endif %}
   {% if j.status == "review" || j.status == "suspect" %}

@@ -399,7 +399,7 @@ impl Page {
             PAGES
                 .iter()
                 .find(|p| p.0 == self.tab)
-                .map_or("slsk", |p| p.2)
+                .map_or("Job", |p| p.2)
         })
     }
 }
@@ -423,7 +423,11 @@ struct SearchPage {
 async fn pages(State(s): State<UiState>, request: Request, next: Next) -> Response {
     if request.method() == http::Method::GET
         && !request.headers().contains_key("datastar-request")
-        && let Some(&(tab, ..)) = PAGES.iter().find(|p| request.uri().path() == p.1)
+        && let Some(tab) = PAGES
+            .iter()
+            .find(|p| request.uri().path() == p.1)
+            .map(|p| p.0)
+            .or_else(|| job_of_path(request.uri().path()).map(|_| "job"))
     {
         // Searches were once drawn on Albums, at `/?q=…`.
         if tab == "albums"
@@ -433,15 +437,6 @@ async fn pages(State(s): State<UiState>, request: Request, next: Next) -> Respon
             return axum::response::Redirect::to(&format!("/search?{query}")).into_response();
         }
         return match render_page(&s, tab, request.uri()).await {
-            Ok(html) => html.into_response(),
-            Err(e) => e.into_response(),
-        };
-    }
-    if request.method() == http::Method::GET
-        && !request.headers().contains_key("datastar-request")
-        && job_of_path(request.uri().path()).is_some()
-    {
-        return match render_page(&s, "job", request.uri()).await {
             Ok(html) => html.into_response(),
             Err(e) => e.into_response(),
         };
@@ -549,7 +544,7 @@ async fn render_page(
         "job" => match job {
             Some(id) => match job_page(&s.app, id).await? {
                 Some((title, html)) => {
-                    heading = Some(title);
+                    heading = Some(title).filter(|t| !t.is_empty());
                     html
                 }
                 None => {
@@ -1179,17 +1174,12 @@ async fn job_page(app: &App, id: Uuid) -> anyhow::Result<Option<(String, String)
     Ok(Some((title, html)))
 }
 
-/// A job's page as the stream and its actions redraw it; empty, so nothing
-/// is sent, when it could not be read.
-async fn job_page_html(app: &App, id: Uuid) -> String {
-    match job_page(app, id).await {
-        Ok(Some((_, html))) => html,
-        Ok(None) => JobPageView::gone(),
-        Err(e) => {
-            tracing::warn!(%id, error = %e, "could not show job");
-            String::new()
-        }
-    }
+/// A job's page as the stream and its actions redraw it.
+async fn job_page_html(app: &App, id: Uuid) -> anyhow::Result<String> {
+    Ok(match job_page(app, id).await? {
+        Some((_, html)) => html,
+        None => JobPageView::gone(),
+    })
 }
 
 impl JobPageView {
@@ -1418,7 +1408,11 @@ async fn stream(
                 match page.as_str() {
                     "albums" => jobs_html(&app, shown.jobs).await,
                     "job" => match Uuid::parse_str(&shown.job) {
-                        Ok(id) => job_page_html(&app, id).await,
+                        // Empty, so nothing is sent; the next tick tries again.
+                        Ok(id) => job_page_html(&app, id).await.unwrap_or_else(|e| {
+                            tracing::warn!(%id, error = %e, "could not show job");
+                            String::new()
+                        }),
                         Err(_) => String::new(),
                     },
                     "uploads" => uploads_html(&app, shown.history).await,
@@ -1718,7 +1712,10 @@ async fn job_action(
 /// list, as many rows as the page shows.
 async fn done(app: &App, shown: i64, job: &str) -> Response {
     let html = match Uuid::parse_str(job) {
-        Ok(id) => job_page_html(app, id).await,
+        Ok(id) => match job_page_html(app, id).await {
+            Ok(html) => html,
+            Err(e) => return failed(&e.context("Done, but couldn't redraw the job")),
+        },
         Err(_) => jobs_html(app, shown).await,
     };
     one(format!("{html}\n<div id=\"flash\"></div>"))
