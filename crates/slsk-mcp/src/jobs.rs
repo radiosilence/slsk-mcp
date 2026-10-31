@@ -1817,6 +1817,13 @@ pub(crate) fn unzip(archive: &std::path::Path, dir: &std::path::Path, limit: u64
         }) else {
             bail!("the zip holds a path outside itself: {}", entry.name()?);
         };
+        // A part Windows would trim to `..` or to nothing, such as `.. `.
+        if path
+            .components()
+            .any(|c| path_part(&c.as_os_str().to_string_lossy()).is_empty())
+        {
+            bail!("the zip holds a path outside itself: {}", entry.name()?);
+        }
         // Folders are made as needed; links and Finder's resource forks
         // are not the album.
         if entry.is_dir()
@@ -1834,14 +1841,11 @@ pub(crate) fn unzip(archive: &std::path::Path, dir: &std::path::Path, limit: u64
             .all(|(_, p)| p.components().count() > 1 && p.components().next() == top);
     let mut left = limit;
     for (i, path) in &entries {
-        let mut rel = std::path::PathBuf::new();
-        for part in path.components().skip(usize::from(wrapped)) {
-            let part = path_part(&part.as_os_str().to_string_lossy());
-            if part.is_empty() {
-                bail!("the zip holds a path outside itself: {}", path.display());
-            }
-            rel.push(part);
-        }
+        let rel: std::path::PathBuf = path
+            .components()
+            .skip(usize::from(wrapped))
+            .map(|c| path_part(&c.as_os_str().to_string_lossy()))
+            .collect();
         let out = dir.join(&rel);
         if let Some(parent) = out.parent() {
             std::fs::create_dir_all(parent)?;
@@ -1964,7 +1968,12 @@ mod tests {
                 if p.is_dir() {
                     stack.push(p);
                 } else {
-                    out.push(p.strip_prefix(dir).unwrap().to_string_lossy().into_owned());
+                    let rel = p.strip_prefix(dir).unwrap().components();
+                    out.push(
+                        rel.map(|c| c.as_os_str().to_string_lossy())
+                            .collect::<Vec<_>>()
+                            .join("/"),
+                    );
                 }
             }
         }
