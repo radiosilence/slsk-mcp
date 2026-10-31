@@ -1,0 +1,1 @@
+- **The Pulumi package's pods take less than they did.** The UPnP mapper drops every capability, and the state init container receives its paths as quoted environment variables rather than spliced into a shell string; the ingress controller's labels and the node CIDR the policy admits are options (`ingressPodLabels`, `nodeCidr`), defaulting to the previous values.
