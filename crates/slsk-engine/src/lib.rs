@@ -21,7 +21,7 @@ use std::collections::{HashSet, VecDeque};
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -121,9 +121,10 @@ pub enum Status {
 
 #[derive(Debug, Clone)]
 pub enum Event {
-    /// Every server message, after the engine has acted on the ones it owns
-    /// (addresses, indirect connections, distributed search). The app layer
-    /// takes rooms, private messages, user status and the rest from here.
+    /// Server messages, after the engine has acted on them. Those only the
+    /// engine uses (addresses, indirect connections, searches to answer and
+    /// the distributed network) are not passed on. The app layer takes
+    /// rooms, private messages, user status and the rest from here.
     Server(Arc<FromServer>),
     Status(Status),
 }
@@ -194,6 +195,8 @@ pub(crate) struct Inner {
     uploads: uploads::Uploads,
     dist: distributed::Dist,
     responders: Arc<Semaphore>,
+    /// Large peer messages being inflated and parsed at once.
+    decoders: Arc<Semaphore>,
     pub(crate) metrics: Arc<Metrics>,
     up_limit: limit::Bucket,
     down_limit: limit::Bucket,
@@ -203,6 +206,11 @@ pub(crate) struct Inner {
     /// Set when the server says it has banned us: logging in again before
     /// then is refused, and may lengthen the ban.
     ban_until: Mutex<Option<tokio::time::Instant>>,
+    /// Held by the one rescan running; `rescan_wanted` asks it for another.
+    scanning: tokio::sync::Mutex<()>,
+    rescan_wanted: AtomicBool,
+    /// Set once the first rescan has shared what the cache already knew.
+    shared_unprobed: AtomicBool,
 }
 
 /// Spacing for searches: a short burst goes out quickly, then one every
@@ -315,6 +323,7 @@ impl Engine {
             uploads: uploads::Uploads::new(cfg.upload_slots),
             dist: distributed::Dist::new(cfg.max_children),
             responders: Arc::new(Semaphore::new(cfg.max_search_responders)),
+            decoders: Arc::new(Semaphore::new(4)),
             up_limit: limit::Bucket::new(cfg.upload_limit),
             down_limit: limit::Bucket::new(cfg.download_limit),
             metrics,
@@ -323,6 +332,9 @@ impl Engine {
                 VecDeque::new(),
             )),
             ban_until: Mutex::new(None),
+            scanning: tokio::sync::Mutex::new(()),
+            rescan_wanted: AtomicBool::new(false),
+            shared_unprobed: AtomicBool::new(false),
             cfg,
         });
         tokio::spawn(peers::listen(inner.clone(), listener));
@@ -405,12 +417,32 @@ impl Engine {
 
     /// Rescan shared directories and announce the new counts. Only changed
     /// files are probed, so this is cheap to call after every import.
+    ///
+    /// Calls during a scan coalesce into one more after it, which the
+    /// running call does: each scan walks the whole tree and holds a whole
+    /// index, and a burst of imports would otherwise run that many at once.
+    /// So this can return before the changes it was called for are shared.
     pub async fn rescan(&self) {
-        // Twice when the cache is cold: once from what is already known, so
-        // everything is shared within seconds, then again once every new
-        // file's audio headers have been read.
-        self.scan_and_publish(false).await;
-        self.scan_and_publish(true).await;
+        let inner = &self.0;
+        inner.rescan_wanted.store(true, Ordering::SeqCst);
+        // Checked again after letting go: a call that found the lock held
+        // just as the last pass ended would otherwise go unanswered.
+        while inner.rescan_wanted.load(Ordering::SeqCst) {
+            let Ok(_scanning) = inner.scanning.try_lock() else {
+                return;
+            };
+            while inner.rescan_wanted.swap(false, Ordering::SeqCst) {
+                // The first time twice: once from what the cache already
+                // knows, so a cold start shares everything within seconds,
+                // then again once every new file's audio headers have been
+                // read. After that the new files are an import's worth, and
+                // probing them first costs less than a second walk.
+                if !inner.shared_unprobed.swap(true, Ordering::SeqCst) {
+                    self.scan_and_publish(false).await;
+                }
+                self.scan_and_publish(true).await;
+            }
+        }
     }
 
     async fn scan_and_publish(&self, probe: bool) {
@@ -635,6 +667,18 @@ impl Engine {
 
     pub fn uploads(&self) -> Vec<TransferView> {
         self.0.uploads.views()
+    }
+
+    /// Upload and download speeds in bytes per second, summed: what
+    /// [`Engine::uploads`] and [`Engine::downloads`] would add up to,
+    /// without building either list.
+    pub fn speeds(&self) -> (u64, u64) {
+        (self.0.uploads.speed(), self.0.downloads.speed())
+    }
+
+    /// Uploads sending or waiting to.
+    pub fn uploads_pending(&self) -> usize {
+        self.0.uploads.pending()
     }
 
     pub fn download_view(&self, username: &str, filename: &RawStr) -> Option<TransferView> {

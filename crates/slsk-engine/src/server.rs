@@ -15,6 +15,8 @@ use crate::{Event, Inner, Status, distributed, peers};
 
 /// Server frames are small; the largest is a room list.
 const MAX_FRAME: usize = 16 << 20;
+/// The longest server ban waited out before trying again.
+const MAX_BAN_MINUTES: u64 = 7 * 24 * 60;
 
 pub(crate) async fn run(inner: Arc<Inner>) {
     let mut backoff = Duration::from_secs(2);
@@ -118,7 +120,7 @@ async fn session(inner: &Arc<Inner>) -> Result<(), End> {
 
     let (mut reader, writer) = conn.split();
     let (tx, rx) = mpsc::channel(4096);
-    net::spawn_writer(writer, rx);
+    drop(net::spawn_writer(writer, rx));
     *inner.server_tx.write() = Some(tx.clone());
 
     let shares = inner.shares.load();
@@ -177,7 +179,12 @@ async fn session(inner: &Arc<Inner>) -> Result<(), End> {
             break Err(End::Displaced);
         }
         dispatch(inner, &msg);
-        let _ = inner.events.send(Event::Server(Arc::new(msg)));
+        // The engine's own traffic is most of what the server sends, a
+        // search relayed many times a second; passed on, it fills the
+        // channel and the messages the app does want are lost to lag.
+        if !engine_owned(&msg) {
+            let _ = inner.events.send(Event::Server(Arc::new(msg)));
+        }
     };
     keepalive.abort();
     result
@@ -222,7 +229,9 @@ fn dispatch(inner: &Arc<Inner>, msg: &FromServer) {
                 && let Some(minutes) = ban_minutes(message)
             {
                 // A minute over, so the first login lands after the ban.
-                let wait = Duration::from_secs((minutes + 1) * 60);
+                // Capped: an absurd length would overflow the clock and
+                // panic this task, which nothing restarts.
+                let wait = Duration::from_secs((minutes.min(MAX_BAN_MINUTES) + 1) * 60);
                 *inner.ban_until.lock() = Some(tokio::time::Instant::now() + wait);
                 tracing::warn!(
                     minutes,
@@ -236,7 +245,10 @@ fn dispatch(inner: &Arc<Inner>, msg: &FromServer) {
         }
         FromServer::ResetDistributed => distributed::reset(inner, true),
         FromServer::ParentSpeedRatio { ratio } => inner.dist.set_ratio(*ratio),
-        FromServer::ExcludedSearchPhrases { phrases } => *inner.excluded.write() = phrases.clone(),
+        // Lower-cased once here, not on every search they are checked in.
+        FromServer::ExcludedSearchPhrases { phrases } => {
+            *inner.excluded.write() = phrases.iter().map(|p| p.to_lowercase()).collect();
+        }
         FromServer::PrivilegedUsers { usernames } => {
             *inner.privileged.write() = usernames.iter().map(|u| u.to_lowercase()).collect();
         }
@@ -253,6 +265,21 @@ fn dispatch(inner: &Arc<Inner>, msg: &FromServer) {
         .metrics
         .peer_connections
         .store(inner.peers.links.len() as u64, Ordering::Relaxed);
+}
+
+/// Messages the engine acts on and nothing else needs.
+fn engine_owned(msg: &FromServer) -> bool {
+    matches!(
+        msg,
+        FromServer::PeerAddress { .. }
+            | FromServer::ConnectToPeer { .. }
+            | FromServer::CantConnectToPeer { .. }
+            | FromServer::FileSearch { .. }
+            | FromServer::PossibleParents { .. }
+            | FromServer::EmbeddedMessage { .. }
+            | FromServer::ResetDistributed
+            | FromServer::ParentSpeedRatio { .. }
+    )
 }
 
 /// The length of a ban the server announces: "You have been banned for 30

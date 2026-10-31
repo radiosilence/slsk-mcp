@@ -114,9 +114,13 @@ pub(crate) fn on_address(inner: &Inner, username: &str, ip: Ipv4Addr, port: u32)
     if port != 0 && !ip.is_unspecified() {
         let addresses = &inner.peers.addresses;
         // Every peer ever asked about otherwise stays; past a few thousand,
-        // the stale go.
+        // the stale go. If they are all fresh it is only a cache, and
+        // emptying it keeps each insert from walking every entry again.
         if addresses.len() >= 4096 {
             addresses.retain(|_, (_, at)| at.elapsed() < ADDRESS_TTL);
+            if addresses.len() >= 4096 {
+                addresses.clear();
+            }
         }
         addresses.insert(username.to_string(), (addr, Instant::now()));
     }
@@ -244,6 +248,16 @@ pub(crate) async fn link(inner: &Arc<Inner>, username: &str) -> Result<mpsc::Sen
         .or_default()
         .clone();
     let _guard = lock.lock().await;
+    // Only the holder clears the entry, and only its own, so a waiter giving
+    // up cannot let a second attempt start beside this one. Whether it
+    // connects or finds a live link, it goes: kept, every peer ever messaged
+    // would leave one behind.
+    let _forget = Defer::new(|| {
+        inner
+            .peers
+            .connecting
+            .remove_if(username, |_, l| Arc::ptr_eq(l, &lock));
+    });
     let live = inner
         .peers
         .links
@@ -256,14 +270,6 @@ pub(crate) async fn link(inner: &Arc<Inner>, username: &str) -> Result<mpsc::Sen
         trusted.store(true, Ordering::Relaxed);
         return Ok(tx);
     }
-    // Only the caller that connects clears the entry, and only its own, so a
-    // waiter giving up cannot let a second attempt start beside this one.
-    let _forget = Defer::new(|| {
-        inner
-            .peers
-            .connecting
-            .remove_if(username, |_, l| Arc::ptr_eq(l, &lock));
-    });
     let conn = connect(inner, username, ConnKind::Peer).await?;
     Ok(spawn_peer(inner.clone(), username.to_string(), conn, None))
 }
@@ -321,7 +327,7 @@ fn spawn_peer(
     let ip = conn.stream.peer_addr().ok().map(|a| a.ip().to_canonical());
     let (mut reader, writer) = conn.split();
     let (tx, rx) = mpsc::channel(256);
-    net::spawn_writer(writer, rx);
+    drop(net::spawn_writer(writer, rx));
     let id = inner.peers.next_id.fetch_add(1, Ordering::Relaxed);
     let trusted = Arc::new(AtomicBool::new(inbound.is_none()));
     let link = Link {
@@ -360,8 +366,12 @@ fn spawn_peer(
                     break;
                 }
             }
+            // Only on a link known to be that user's: a stranger naming
+            // someone we are browsing would otherwise be let send 128 MiB,
+            // and have it inflated, on each of hundreds of connections. A
+            // browse asks over a link we opened or one verified first.
             let max = |code| {
-                if code == 5 && browsing(&inner, &username) {
+                if code == 5 && trusted.load(Ordering::Relaxed) && browsing(&inner, &username) {
                     MAX_SHARE_LIST
                 } else {
                     MAX_PEER_MESSAGE
@@ -380,13 +390,27 @@ fn spawn_peer(
                 };
             // A share list is inflated only when we asked for it: unasked
             // for, it is up to 256 MiB of work for nothing.
-            if frame.code == 5 && !browsing(&inner, &username) {
+            // Search results and folder contents inflate too, up to 16 MiB
+            // each, and anyone may send them: with nothing waiting for one,
+            // it is dropped unread.
+            if (frame.code == 5 && !browsing(&inner, &username))
+                || (frame.code == 9 && inner.searches.is_empty())
+                || (frame.code == 37 && inner.folder_waiters.is_empty())
+            {
                 continue;
             }
             let code = frame.code;
             let decoded = if frame.body.len() > INLINE_DECODE {
-                match tokio::task::spawn_blocking(move || PeerMessage::decode(code, frame.body))
-                    .await
+                // Each can inflate to 16 MiB or more, and any connection can
+                // send one: a few at a time bounds what they hold together.
+                let Ok(permit) = inner.decoders.clone().acquire_owned().await else {
+                    break;
+                };
+                match tokio::task::spawn_blocking(move || {
+                    let _permit = permit;
+                    PeerMessage::decode(code, frame.body)
+                })
+                .await
                 {
                     Ok(d) => d,
                     Err(_) => break,

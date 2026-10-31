@@ -13,6 +13,8 @@ use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::sync::mpsc;
 
 pub const READ_CHUNK: usize = 256 * 1024;
+/// Past this, a read buffer is not kept beyond the frame that grew it.
+const LARGE_BUFFER: usize = 1 << 20;
 
 pub struct Conn {
     pub stream: TcpStream,
@@ -115,7 +117,20 @@ async fn read_frame<R: AsyncReadExt + Unpin>(
             };
         }
         match slsk_proto::frame::decode(buf, width, limit.unwrap_or(usize::MAX)) {
-            Ok(Some(f)) => return Ok(Some(f)),
+            Ok(Some(f)) => {
+                // The frame shares the buffer's allocation, and once the frame
+                // is dropped the buffer would reclaim all of it and keep it
+                // for the life of the connection: a share list's worth, per
+                // peer browsed. What follows the frame moves to a buffer of
+                // its own instead, once it is small: a large leftover is more
+                // frames, and copying it again for each would be quadratic.
+                if (f.body.len() > LARGE_BUFFER || buf.capacity() > LARGE_BUFFER)
+                    && buf.len() <= LARGE_BUFFER / 4
+                {
+                    *buf = BytesMut::from(&buf[..]);
+                }
+                return Ok(Some(f));
+            }
             Ok(None) => {}
             Err(e) => return Err(io::Error::new(io::ErrorKind::InvalidData, e)),
         }
@@ -136,7 +151,11 @@ async fn read_frame<R: AsyncReadExt + Unpin>(
 /// Drain `rx` onto the socket. The channel is bounded by the caller, so a
 /// peer that stops reading fills it and further sends fail fast instead of
 /// queueing in memory.
-pub fn spawn_writer(mut half: OwnedWriteHalf, mut rx: mpsc::Receiver<bytes::Bytes>) {
+/// The task ends once every sender is dropped.
+pub fn spawn_writer(
+    mut half: OwnedWriteHalf,
+    mut rx: mpsc::Receiver<bytes::Bytes>,
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         // A peer that stops reading while its connection stays up would
         // hold this task, and the frames queued for it, for good.
@@ -147,7 +166,7 @@ pub fn spawn_writer(mut half: OwnedWriteHalf, mut rx: mpsc::Receiver<bytes::Byte
             }
         }
         let _ = half.shutdown().await;
-    });
+    })
 }
 
 pub async fn connect(addr: std::net::SocketAddr, within: Duration) -> io::Result<TcpStream> {

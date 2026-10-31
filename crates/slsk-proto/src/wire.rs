@@ -169,7 +169,10 @@ impl Reader {
         mut item: impl FnMut(&mut Self) -> Result<T>,
     ) -> Result<Vec<T>> {
         let n = self.count(min_item)?;
-        let mut out = Vec::with_capacity(n);
+        // The count is checked against wire bytes, but an item in memory is
+        // many times its smallest encoding: a forged count would still
+        // reserve several times the payload before a single item parsed.
+        let mut out = Vec::with_capacity(n.min(1024));
         for _ in 0..n {
             out.push(item(self)?);
         }
@@ -273,6 +276,9 @@ pub fn inflate(data: &[u8], limit: usize) -> Result<Bytes> {
     if read > limit {
         return Err(DecodeError::TooLarge(limit));
     }
+    // Strings decoded from it are slices of it, and some are kept for hours:
+    // the growth slack would be kept with them.
+    out.shrink_to_fit();
     Ok(Bytes::from(out))
 }
 

@@ -81,6 +81,8 @@ pub(crate) struct Download {
     bytes: AtomicU64,
     speed: AtomicU64,
     place: AtomicU32,
+    /// The token of the peer's latest offer, under which `by_token` holds it.
+    token: AtomicU32,
     state: AtomicU8,
     attempts: AtomicU32,
     error: Mutex<Option<String>>,
@@ -161,6 +163,15 @@ impl Downloads {
         self.map.get(&key(username, filename)).map(|d| d.clone())
     }
 
+    /// Bytes per second across the downloads arriving now.
+    pub fn speed(&self) -> u64 {
+        self.map
+            .iter()
+            .filter(|d| d.state() == DownloadState::Transferring)
+            .map(|d| d.speed.load(Ordering::Relaxed))
+            .sum()
+    }
+
     pub fn views(&self) -> Vec<TransferView> {
         let mut v: Vec<_> = self.map.iter().map(|d| d.view()).collect();
         v.sort_unstable_by_key(|t| t.id);
@@ -222,14 +233,12 @@ pub(crate) fn add(
         bytes: AtomicU64::new(0),
         speed: AtomicU64::new(0),
         place: AtomicU32::new(0),
+        token: AtomicU32::new(0),
         state: AtomicU8::new(DownloadState::Queued as u8),
         attempts: AtomicU32::new(0),
         error: Mutex::new(None),
         wake: Notify::new(),
     });
-    if let Ok(meta) = std::fs::metadata(d.part()) {
-        d.bytes.store(meta.len(), Ordering::Relaxed);
-    }
     let id = d.id;
     inner.downloads.map.insert(k, d.clone());
     tokio::spawn(drive(inner.clone(), d));
@@ -253,6 +262,13 @@ pub(crate) fn retry(inner: &Arc<Inner>, username: &str, filename: &RawStr) -> bo
 }
 
 async fn drive(inner: Arc<Inner>, d: Arc<Download>) {
+    // What a `.part` already holds, to show before the transfer resumes it.
+    // Read here rather than when queued: that runs on the caller's thread.
+    if d.bytes.load(Ordering::Relaxed) == 0
+        && let Ok(meta) = tokio::fs::metadata(d.part()).await
+    {
+        d.bytes.store(meta.len(), Ordering::Relaxed);
+    }
     loop {
         match d.state() {
             DownloadState::Queued => {
@@ -308,11 +324,11 @@ async fn drive(inner: Arc<Inner>, d: Arc<Download>) {
                 }
             }
             DownloadState::Starting => {
+                let token = d.token.load(Ordering::Acquire);
                 tokio::select! {
                     _ = d.wake.notified() => {}
                     _ = tokio::time::sleep(START_TIMEOUT) => {
                         if d.transition(DownloadState::Starting, DownloadState::Queued) {
-                            inner.downloads.by_token.retain(|_, t| !Arc::ptr_eq(t, &d));
                             let attempts = d.attempts.fetch_add(1, Ordering::Relaxed) + 1;
                             if attempts >= MAX_ATTEMPTS {
                                 inner
@@ -323,6 +339,16 @@ async fn drive(inner: Arc<Inner>, d: Arc<Download>) {
                             }
                         }
                     }
+                }
+                // However it left starting (timed out, failed, denied,
+                // cancelled or removed), that offer's token answers nothing
+                // now. Only that token: a new offer landing meanwhile has
+                // its own, which must stay.
+                if d.state() != DownloadState::Starting {
+                    inner
+                        .downloads
+                        .by_token
+                        .remove_if(&token, |_, t| Arc::ptr_eq(t, &d));
                 }
             }
             DownloadState::Transferring => d.wake.notified().await,
@@ -352,6 +378,12 @@ pub(crate) fn on_transfer_request(
     if size > 0 {
         d.size.store(size, Ordering::Relaxed);
     }
+    // An offer made again replaces the last: its token is never used.
+    let previous = d.token.swap(token, Ordering::AcqRel);
+    inner
+        .downloads
+        .by_token
+        .remove_if(&previous, |_, t| Arc::ptr_eq(t, &d));
     inner.downloads.by_token.insert(token, d.clone());
     d.place.store(0, Ordering::Relaxed);
     d.transition(from, DownloadState::Starting)

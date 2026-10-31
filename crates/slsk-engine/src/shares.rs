@@ -125,8 +125,8 @@ impl ShareIndex {
     ///
     /// Terms are whole words, as other clients match them. `-word` excludes,
     /// and `*tail` matches any word ending in `tail`. Paths containing any of
-    /// `excluded` — the phrases the server bans from search results — are
-    /// dropped.
+    /// `excluded`, lower-cased — the phrases the server bans from search
+    /// results — are dropped.
     pub fn search(&self, query: &str, limit: usize, excluded: &[String]) -> Vec<&SharedFile> {
         let mut include: Vec<&[u32]> = Vec::new();
         let mut tails: Vec<String> = Vec::new();
@@ -155,7 +155,10 @@ impl ShareIndex {
         }
         // A `*tail` filters what whole words found. Alone, it is resolved
         // through the vocabulary, the one time every word is looked at.
+        // Anyone on the network can send one, and a short tail alone
+        // matches most of the vocabulary: every file, collected and sorted.
         let partial: Vec<u32> = match tails.first() {
+            Some(first) if include.is_empty() && first.chars().count() < MIN_TAIL => Vec::new(),
             Some(first) if include.is_empty() => {
                 let mut ids: Vec<u32> = self
                     .postings
@@ -177,7 +180,6 @@ impl ShareIndex {
             sets.push(&partial);
         }
         sets.sort_by_key(|s| s.len());
-        let excluded: Vec<String> = excluded.iter().map(|p| p.to_lowercase()).collect();
         sets[0]
             .iter()
             .copied()
@@ -242,6 +244,9 @@ fn words(s: &str) -> impl Iterator<Item = String> + '_ {
         .filter(|w| !w.is_empty())
         .map(str::to_lowercase)
 }
+
+/// The shortest `*tail` searched for on its own.
+const MIN_TAIL: usize = 3;
 
 const AUDIO: &[&str] = &[
     "flac", "mp3", "m4a", "aac", "ogg", "opus", "wav", "aiff", "aif", "ape", "wv", "alac", "wma",
@@ -513,6 +518,11 @@ mod tests {
         ]);
         assert_eq!(idx.search("canada -mp3", 10, &[]).len(), 2);
         assert_eq!(idx.search("*gaddi", 10, &[]).len(), 2);
+        assert!(
+            idx.search("*di", 10, &[]).is_empty(),
+            "a short tail alone is not searched"
+        );
+        assert_eq!(idx.search("canada *di", 10, &[]).len(), 2);
         assert_eq!(idx.search("canada *gaddi", 10, &[]).len(), 2);
         assert_eq!(idx.search("canada *gaddi -mp3", 10, &[]).len(), 1);
         assert!(idx.search("canada *nothing", 10, &[]).is_empty());

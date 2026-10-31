@@ -208,7 +208,7 @@ async fn run_parent(inner: Arc<Inner>, username: String, id: u64, conn: Conn) {
                 if is_parent(&inner) {
                     adopt_position(
                         &inner,
-                        inner.dist.level.load(Ordering::Relaxed) - 1,
+                        inner.dist.level.load(Ordering::Relaxed).saturating_sub(1),
                         Some(root),
                     );
                 }
@@ -264,7 +264,8 @@ async fn run_parent(inner: Arc<Inner>, username: String, id: u64, conn: Conn) {
 
 /// Our position is our parent's plus one.
 fn adopt_position(inner: &Inner, parent_level: i32, root: Option<String>) {
-    let level = parent_level + 1;
+    // The parent's word: a peer can send any level.
+    let level = parent_level.saturating_add(1);
     inner.dist.level.store(level, Ordering::Relaxed);
     let _ = inner.send_server(ToServer::BranchLevel {
         level: level.max(0) as u32,
@@ -335,7 +336,7 @@ pub(crate) fn on_child(
     for frame in inner.dist.position_frames() {
         let _ = tx.try_send(frame);
     }
-    net::spawn_writer(writer, rx);
+    let mut written = net::spawn_writer(writer, rx);
     let id = inner.dist.next_id.fetch_add(1, Ordering::Relaxed);
     inner
         .dist
@@ -348,8 +349,16 @@ pub(crate) fn on_child(
     tokio::spawn(async move {
         let _inbound = inbound;
         // Children only send pings and obsolete depth reports. Reading keeps
-        // the socket drained and tells us when they leave.
-        while let Ok(Some(_)) = reader.frame(CodeWidth::U8, MAX_DIST_FRAME).await {}
+        // the socket drained and tells us when they leave. A child dropped
+        // from the map (too slow, replaced, or every child on a reset) has
+        // no sender left, which ends the writer: the connection goes then,
+        // rather than holding its inbound place for as long as it pings.
+        let read =
+            async { while let Ok(Some(_)) = reader.frame(CodeWidth::U8, MAX_DIST_FRAME).await {} };
+        tokio::select! {
+            () = read => {}
+            _ = &mut written => {}
+        }
         inner.dist.children.remove_if(&username, |_, c| c.id == id);
         inner
             .metrics
