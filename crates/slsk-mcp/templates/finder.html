@@ -1,5 +1,5 @@
 <form id="finder" class="flex flex-wrap gap-2" action="/search">
-  <input class="basis-full" name="q" value="{{ q }}" data-bind:q placeholder="Artist album" autocomplete="off" autofocus>
+  <input class="basis-full" name="q" value="{{ q }}" data-bind:q placeholder="Artist album" aria-label="Artist and album" autocomplete="off" autofocus>
   <label class="flex items-center gap-1.5 text-muted"><input type="checkbox" name="lossless" value="true"{% if lossless %} checked{% endif %} data-bind:lossless> lossless</label>
   <button class="flex-auto" type="submit" data-attr:disabled="$busy">Search</button>
   <button type="button" class="primary flex-auto" data-indicator:busy data-attr:disabled="$busy || !$q" data-class:busy="$busy"

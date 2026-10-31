@@ -18,7 +18,7 @@
   </ul>
   {% endif %}
   <div class="flex flex-wrap items-center gap-2">
-    <input class="basis-full" name="pasted" placeholder="Or paste a MusicBrainz release id or link" autocomplete="off">
+    <input class="basis-full" name="pasted" placeholder="Or paste a MusicBrainz release id or link" aria-label="MusicBrainz release id or link" autocomplete="off">
     <button class="flex-auto" type="button" data-indicator="_pv_retag" data-attr:disabled="$_pv_retag" data-class:busy="$_pv_retag" data-on:click="@post('/library/preview/reimport', {contentType: 'form', selector: '#lib-retag'})">Preview re-tag</button>
   </div>
 </form>

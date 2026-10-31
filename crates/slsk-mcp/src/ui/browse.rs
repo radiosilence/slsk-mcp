@@ -466,7 +466,11 @@ fn render(p: &Place, dirs: &[Directory], info: Option<Info>, mine: bool) -> Stri
         up,
         refresh: format!("{}&fresh=1", p.href()),
         here_key: key(&p.at),
-        tree_files: albums(dirs, &p.at).values().map(Vec::len).sum(),
+        tree_files: dirs
+            .iter()
+            .filter(|d| d.name.as_bytes() == p.at.as_slice() || under(d.name.as_bytes(), &p.at))
+            .map(|d| d.files.len())
+            .sum(),
         has_files: dirs
             .iter()
             .any(|d| d.name.as_bytes() == p.at.as_slice() && !d.files.is_empty()),
@@ -665,14 +669,10 @@ pub(super) fn albums(
     dirs: &[Directory],
     at: &[u8],
 ) -> BTreeMap<Vec<u8>, Vec<(RawStr, u64, String)>> {
-    let mut prefix = at.to_vec();
-    if !prefix.is_empty() {
-        prefix.push(b'\\');
-    }
     let mut out: BTreeMap<Vec<u8>, Vec<(RawStr, u64, String)>> = BTreeMap::new();
     for d in dirs {
         let name = d.name.as_bytes();
-        if d.files.is_empty() || !(at.is_empty() || name == at || name.starts_with(&prefix)) {
+        if d.files.is_empty() || !(name == at || under(name, at)) {
             continue;
         }
         let (root, sub) = match name.iter().rposition(|b| *b == b'\\') {

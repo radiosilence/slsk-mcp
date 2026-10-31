@@ -20,7 +20,7 @@
   <h3>Interests</h3>
   <p class="text-meta text-muted">What you like and dislike drives the server's recommendations and similar users.</p>
   <form id="interest" class="my-1.5 flex flex-wrap items-center gap-2" data-indicator="_int" data-on:submit__prevent="@post('/settings/interest', {contentType: 'form', selector: '#interest'})">
-    <input class="flex-[1_1_12em]" name="item" data-bind:_interest placeholder="dub techno" autocomplete="off" required>
+    <input class="flex-[1_1_12em]" name="item" data-bind:_interest placeholder="dub techno" aria-label="Interest" autocomplete="off" required>
     <button type="submit" name="liked" value="true" data-attr:disabled="$_int">Like</button>
     <button type="submit" name="liked" value="false" class="quiet" data-attr:disabled="$_int">Dislike</button>
   </form>
