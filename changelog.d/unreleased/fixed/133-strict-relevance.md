@@ -1,0 +1,1 @@
+- **Grabs, wishes and fallbacks take only folders that match.** When no folder holds every word of the query, nothing is downloaded, rather than an unrelated folder from the same answers.

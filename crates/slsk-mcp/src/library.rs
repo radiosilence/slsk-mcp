@@ -357,10 +357,7 @@ impl Library {
             cfg: tagger.cfg.clone(),
             bin,
             tagger,
-            http: reqwest::Client::builder()
-                .user_agent(concat!("slsk-mcp/", env!("CARGO_PKG_VERSION")))
-                .connect_timeout(std::time::Duration::from_secs(30))
-                .build()?,
+            http: crate::jobs::web_client().build()?,
         })
     }
 
@@ -584,16 +581,33 @@ impl Library {
     /// Move the album at `dir` to the bin, whether or not another copy is
     /// held. Nothing is deleted.
     pub async fn bin_album(&self, dir: &str) -> anyhow::Result<PathBuf> {
+        self.bin_albums(&[dir])
+            .await?
+            .pop()
+            .expect("one outcome per album")
+    }
+
+    /// [`Self::bin_album`] for each of `dirs`, under one hold of the index:
+    /// each album's outcome, in order.
+    pub async fn bin_albums(&self, dirs: &[&str]) -> anyhow::Result<Vec<anyhow::Result<PathBuf>>> {
         let mut index = self.write().await?;
-        let albums = tokio::task::block_in_place(|| index.albums(&Query::parse(&by_path([dir]))?))?;
-        let album = albums
-            .iter()
-            .find(|a| a.dir == Path::new(dir))
-            .ok_or_else(|| anyhow::anyhow!("no longer in the library"))?;
-        let to = manage::bin(&mut index, &self.cfg.directory, &self.bin, album).await?;
-        self.bump();
-        tracing::info!(from = dir, to = %to.display(), "binned an album");
-        Ok(to)
+        let albums = tokio::task::block_in_place(|| {
+            index.albums(&Query::parse(&by_path(dirs.iter().copied()))?)
+        })?;
+        let mut out = Vec::new();
+        for dir in dirs {
+            let Some(album) = albums.iter().find(|a| a.dir == Path::new(dir)) else {
+                out.push(Err(anyhow::anyhow!("no longer in the library")));
+                continue;
+            };
+            let to = manage::bin(&mut index, &self.cfg.directory, &self.bin, album).await;
+            if let Ok(to) = &to {
+                self.bump();
+                tracing::info!(from = dir, to = %to.display(), "binned an album");
+            }
+            out.push(to.map_err(anyhow::Error::from));
+        }
+        Ok(out)
     }
 
     /// Every artist the library holds an album by: what a collaboration's
@@ -637,14 +651,9 @@ impl Library {
 
     /// Credit each artist on matching albums whose files name them only in
     /// one string: from their MusicBrainz release, or by splitting the
-    /// credit where every part is an artist the library holds. Files that
-    /// already carry the credits are left alone, so it can run again.
-    pub async fn credit(&self, query: &[String]) -> anyhow::Result<Vec<CreditedAlbum>> {
-        let known = self.known_artists().await?;
-        self.credit_with(query, &known).await
-    }
-
-    /// [`Self::credit`] against artists already listed.
+    /// credit where every part is an artist the library holds, as listed in
+    /// `known`. Files that already carry the credits are left alone, so it
+    /// can run again.
     pub async fn credit_with(
         &self,
         query: &[String],
@@ -833,12 +842,7 @@ impl Library {
                             t.path.display()
                         );
                     }
-                    std::fs::OpenOptions::new()
-                        .write(true)
-                        .open(&t.path)
-                        .map_err(|e| {
-                            anyhow::anyhow!("{} cannot be written: {e}", t.path.display())
-                        })?;
+                    writable(&t.path)?;
                     let undo: Vec<_> = changes
                         .iter()
                         .map(|(f, _)| (f.clone(), t.field(f)))
@@ -966,8 +970,6 @@ impl Library {
         Ok(out)
     }
 
-    /// Albums not where the current path rules put them. With `apply`, each
-    /// is moved; albums whose plan collides with anything are left alone.
     /// Set or clear tags on every file of the albums `query` matches, then
     /// re-file those the change moves. `changes` are beets' `field=value` and
     /// `field!`.
@@ -1365,7 +1367,7 @@ impl Library {
 }
 
 /// `path` relative to the album at `dir`.
-fn within(dir: &str, path: &Path) -> String {
+pub(crate) fn within(dir: &str, path: &Path) -> String {
     path.strip_prefix(dir)
         .unwrap_or(path)
         .to_string_lossy()
@@ -1380,4 +1382,57 @@ fn writable(path: &Path) -> anyhow::Result<()> {
         .open(path)
         .map(drop)
         .map_err(|e| anyhow::anyhow!("{} cannot be written: {e}", path.display()))
+}
+
+/// A release id from what was pasted: a MusicBrainz id, `discogs:<number>`,
+/// or a link to a release on either site (any of its pages, any language).
+/// Links to anything else, such as a release group or a Discogs master, are
+/// refused.
+pub fn release_id(s: &str) -> Option<String> {
+    let s = s.trim();
+    let discogs = |n: &str| {
+        let digits = n.split('-').next().unwrap_or_default();
+        (!digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
+            .then(|| format!("discogs:{digits}"))
+    };
+    if let Some(n) = s.strip_prefix("discogs:") {
+        return discogs(n).filter(|_| !n.contains('-'));
+    }
+    let uuid = |id: &str| {
+        id.len() == 36
+            && id.chars().enumerate().all(|(i, c)| {
+                if [8, 13, 18, 23].contains(&i) {
+                    c == '-'
+                } else {
+                    c.is_ascii_hexdigit()
+                }
+            })
+    };
+    if !s.contains('/') {
+        return uuid(s).then(|| s.to_ascii_lowercase());
+    }
+    let path = s.split(['?', '#']).next().unwrap_or(s);
+    let mut segments = path.split('/');
+    let on_discogs = segments
+        .clone()
+        .take(3)
+        .any(|seg| seg.to_ascii_lowercase().ends_with("discogs.com"));
+    segments.find(|seg| *seg == "release")?;
+    let id = segments.next()?;
+    if on_discogs {
+        discogs(id)
+    } else {
+        uuid(id).then(|| id.to_ascii_lowercase())
+    }
+}
+
+/// Where a release id is shown on its own site, with the site's name.
+pub fn release_link(id: &str) -> (&'static str, String) {
+    match id.strip_prefix("discogs:") {
+        Some(n) => ("Discogs", format!("https://www.discogs.com/release/{n}")),
+        None => (
+            "MusicBrainz",
+            format!("https://musicbrainz.org/release/{id}"),
+        ),
+    }
 }

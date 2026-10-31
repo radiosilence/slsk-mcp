@@ -1,0 +1,1 @@
+- **A cancelled or removed job stays stopped.** A download finishing, a search for another copy or a fallback that lands after a job was cancelled no longer sets it back to downloading or importing, and two retries at once no longer fetch it twice.

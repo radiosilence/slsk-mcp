@@ -301,3 +301,110 @@ async fn searches_past_the_hours_budget_are_refused() {
         Err(slsk_engine::Error::SearchBudget { budget: 2, .. })
     ));
 }
+
+/// Whether the engine closes `stream` within `within`.
+async fn closed_within(stream: &mut tokio::net::TcpStream, within: Duration) -> bool {
+    use tokio::io::AsyncReadExt;
+    let mut buf = [0u8; 1024];
+    tokio::time::timeout(within, async {
+        while let Ok(n) = stream.read(&mut buf).await
+            && n > 0
+        {}
+    })
+    .await
+    .is_ok()
+}
+
+async fn stranger(engine: &Engine) -> tokio::net::TcpStream {
+    use tokio::io::AsyncWriteExt;
+    let mut s = tokio::net::TcpStream::connect(("127.0.0.1", engine.listen_port()))
+        .await
+        .unwrap();
+    let init = slsk_proto::peer::PeerInit::PeerInit {
+        username: "mallory".into(),
+        kind: slsk_proto::ConnKind::Peer,
+        token: 0,
+    };
+    s.write_all(&init.encode()).await.unwrap();
+    s
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_peer_announcing_an_oversized_message_is_dropped() {
+    use tokio::io::AsyncWriteExt;
+    let server = server().await.unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let engine = engine(&server, "guarded", Vec::new(), tmp.path()).await;
+    // A search response, and a share list nobody asked for, each claiming
+    // two megabytes: refused from the header alone.
+    for code in [9u32, 5] {
+        let mut s = stranger(&engine).await;
+        let mut header = (4 + (2u32 << 20)).to_le_bytes().to_vec();
+        header.extend_from_slice(&code.to_le_bytes());
+        s.write_all(&header).await.unwrap();
+        assert!(
+            closed_within(&mut s, Duration::from_secs(5)).await,
+            "code {code} was buffered"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn inbound_connections_are_capped_per_address() {
+    let server = server().await.unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let mut cfg = EngineConfig::new("crowded", "hunter2");
+    cfg.server = server.address();
+    cfg.listen_port = 0;
+    cfg.state_dir = state.path().to_path_buf();
+    cfg.max_inbound_per_address = 2;
+    let engine = Engine::start(cfg).await.unwrap();
+    let mut held = [stranger(&engine).await, stranger(&engine).await];
+    let mut third = stranger(&engine).await;
+    assert!(closed_within(&mut third, Duration::from_secs(5)).await);
+    assert!(!closed_within(&mut held[0], Duration::from_millis(500)).await);
+    drop(held);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let mut again = stranger(&engine).await;
+    assert!(!closed_within(&mut again, Duration::from_millis(500)).await);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stranger_claiming_a_name_is_not_taken_for_that_user() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let server = server().await.unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let engine = engine(&server, "asker", Vec::new(), tmp.path()).await;
+    // "ghost" is not logged in, so the server places them nowhere and this
+    // connection cannot be theirs. Taken at its word, it would receive the
+    // request and answer it.
+    let mut s = tokio::net::TcpStream::connect(("127.0.0.1", engine.listen_port()))
+        .await
+        .unwrap();
+    let init = slsk_proto::peer::PeerInit::PeerInit {
+        username: "ghost".into(),
+        kind: slsk_proto::ConnKind::Peer,
+        token: 0,
+    };
+    s.write_all(&init.encode()).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let forger = tokio::spawn(async move {
+        let mut buf = [0u8; 64];
+        let _ = tokio::time::timeout(Duration::from_secs(2), s.read(&mut buf)).await;
+        let forged = slsk_proto::peer::PeerMessage::UserInfoResponse(slsk_proto::peer::UserInfo {
+            description: "forged".into(),
+            picture: None,
+            total_uploads: 0,
+            queue_size: 0,
+            slots_free: true,
+            upload_permitted: None,
+        });
+        let _ = s.write_all(&forged.encode()).await;
+        s
+    });
+    let info = tokio::time::timeout(Duration::from_secs(20), engine.user_info("ghost"))
+        .await
+        .unwrap();
+    assert!(info.is_err(), "took a stranger's answer: {info:?}");
+    drop(forger.await);
+}

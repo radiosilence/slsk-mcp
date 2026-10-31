@@ -133,7 +133,6 @@ async fn session(inner: &Arc<Inner>) -> Result<(), End> {
         ToServer::SetStatus {
             status: UserStatus::Online,
         },
-        ToServer::CheckPrivileges,
         ToServer::AcceptChildren {
             accept: inner.cfg.accept_children,
         },

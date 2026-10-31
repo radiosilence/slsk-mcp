@@ -316,7 +316,14 @@ fn forward(inner: &Inner, raw: &Bytes) {
 }
 
 /// A peer wants us as its parent.
-pub(crate) fn on_child(inner: Arc<Inner>, username: String, conn: Conn) {
+/// `inbound` holds the connection's place under the inbound limits for as
+/// long as the child stays.
+pub(crate) fn on_child(
+    inner: Arc<Inner>,
+    username: String,
+    conn: Conn,
+    inbound: Option<crate::peers::Inbound>,
+) {
     if !inner.cfg.accept_children || inner.dist.children.len() >= inner.cfg.max_children {
         return;
     }
@@ -337,6 +344,7 @@ pub(crate) fn on_child(inner: Arc<Inner>, username: String, conn: Conn) {
         .children
         .store(inner.dist.children.len() as u64, Ordering::Relaxed);
     tokio::spawn(async move {
+        let _inbound = inbound;
         // Children only send pings and obsolete depth reports. Reading keeps
         // the socket drained and tells us when they leave.
         loop {
