@@ -633,6 +633,10 @@ struct Tagger {
     /// MusicBrainz is always consulted. Discogs is consulted when MusicBrainz has no strong match, and able to apply a
     /// `discogs:<number>` release; on when the service has `DISCOGS_TOKEN`.
     discogs: bool,
+    /// Files no release matches strongly are fingerprinted and looked up on
+    /// AcoustID, and the releases their recordings appear on are scored with
+    /// what the audio says; on when the service has `ACOUSTID_CLIENT`.
+    acoustid: bool,
 }
 
 /// A release id from what was given: a MusicBrainz id, `discogs:<number>`,
@@ -685,10 +689,11 @@ impl Query {
         }
     }
 
-    /// Where the tagger looks for releases: whether Discogs is on.
+    /// Where the tagger looks for releases: whether Discogs and AcoustID are on.
     async fn tagger(&self, ctx: &Context<'_>) -> Tagger {
         Tagger {
             discogs: app(ctx).jobs.discogs(),
+            acoustid: app(ctx).jobs.acoustid(),
         }
     }
 

@@ -116,7 +116,15 @@ async fn main() -> anyhow::Result<()> {
             index_tracks: false,
         });
     }
-    tracing::info!(discogs = sift_cfg.discogs.is_some(), "tagger configured");
+    // The same for AcoustID: a key is the operator asking for fingerprinting.
+    if sift_cfg.acoustid_client.is_none() {
+        sift_cfg.acoustid_client = cfg.acoustid_client.clone();
+    }
+    tracing::info!(
+        discogs = sift_cfg.discogs.is_some(),
+        acoustid = sift_cfg.acoustid_client.is_some(),
+        "tagger configured"
+    );
     let importer = Arc::new(sift::Importer::new(sift_cfg));
     // Spare copies go beside the library rather than in it: out of
     // Navidrome's and the shares' sight, and on the same drive, so binning

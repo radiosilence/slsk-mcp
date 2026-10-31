@@ -57,6 +57,7 @@ pub struct Config {
     /// Merged over the built-in beets config.
     pub beets_config: Option<PathBuf>,
     pub discogs_token: Option<String>,
+    pub acoustid_client: Option<String>,
     pub description: String,
 }
 
@@ -150,6 +151,7 @@ impl Config {
             oidc,
             beets_config: opt("BEETS_CONFIG").map(PathBuf::from),
             discogs_token: opt("DISCOGS_TOKEN"),
+            acoustid_client: opt("ACOUSTID_CLIENT"),
             description: or(
                 "DESCRIPTION",
                 concat!(

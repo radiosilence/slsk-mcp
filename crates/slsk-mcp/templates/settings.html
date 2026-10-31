@@ -32,4 +32,5 @@
 {% endif %}
   <h3>Matching</h3>
   {% if discogs %}<p class="text-meta text-muted">MusicBrainz first, then Discogs when MusicBrainz has no strong match. A release from either can be pasted on a job in review or a library album, by id (<code>discogs:123</code>) or link.</p>{% else %}<p class="text-meta text-muted">MusicBrainz only. Setting <code>DISCOGS_TOKEN</code> to a Discogs personal access token adds Discogs, consulted when MusicBrainz has no strong match.</p>{% endif %}
+  {% if acoustid %}<p class="text-meta text-muted">Folders no release matches strongly are identified by their audio on AcoustID.</p>{% else %}<p class="text-meta text-muted">Setting <code>ACOUSTID_CLIENT</code> to an AcoustID application key identifies folders no release matches strongly by their audio.</p>{% endif %}
 </div>
