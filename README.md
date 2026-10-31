@@ -139,6 +139,9 @@ that produced it, in a history kept after the job itself is gone. The
 `triage` query groups them by cause with examples, and
 `slsk_job_outcomes_total` counts them for the dashboard. A cause that recurs
 is a fix to make in code; the version then identifies the jobs to repair.
+In the web UI each job's page (`/jobs/<id>`) lists that history beside its
+source and the other copies found, and stays readable after the
+job is removed, so a failed or suspect job can be judged without the logs.
 
 ### The library after import
 
