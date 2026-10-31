@@ -1,0 +1,1 @@
+- **Memory no longer grows with uptime.** Finished downloads, dropped distributed children, large read buffers and several per-peer and per-job maps were kept until restart, and engine-only server traffic no longer crowds out private messages and logins on the event channel.

@@ -127,9 +127,10 @@ pub enum Status {
 
 #[derive(Debug, Clone)]
 pub enum Event {
-    /// Every server message, after the engine has acted on the ones it owns
-    /// (addresses, indirect connections, distributed search). The app layer
-    /// takes rooms, private messages, user status and the rest from here.
+    /// Server messages, after the engine has acted on them. Those only the
+    /// engine uses (addresses, indirect connections, searches to answer and
+    /// the distributed network) are not passed on. The app layer takes
+    /// rooms, private messages, user status and the rest from here.
     Server(Arc<FromServer>),
     Status(Status),
 }
@@ -201,6 +202,8 @@ pub(crate) struct Inner {
     uploads: uploads::Uploads,
     dist: distributed::Dist,
     responders: Arc<Semaphore>,
+    /// Large peer messages being inflated and parsed at once.
+    decoders: Arc<Semaphore>,
     pub(crate) metrics: Arc<Metrics>,
     up_limit: limit::Bucket,
     down_limit: limit::Bucket,
@@ -322,14 +325,11 @@ impl Engine {
             browse_waiters: DashMap::new(),
             folder_waiters: DashMap::new(),
             info_waiters: DashMap::new(),
-            profile: RwLock::new(Profile {
-                description: cfg.description.clone(),
-                picture: None,
-            }),
             downloads: downloads::Downloads::default(),
             uploads: uploads::Uploads::new(cfg.upload_slots, metrics.clone()),
             dist: distributed::Dist::default(),
             responders: Arc::new(Semaphore::new(cfg.max_search_responders)),
+            decoders: Arc::new(Semaphore::new(4)),
             up_limit: limit::Bucket::new(cfg.upload_limit),
             down_limit: limit::Bucket::new(cfg.download_limit),
             metrics,
@@ -340,6 +340,10 @@ impl Engine {
             ban_until: Mutex::new(None),
             scanning: tokio::sync::Mutex::new(()),
             rescan_wanted: AtomicBool::new(false),
+            profile: RwLock::new(Profile {
+                description: cfg.description.clone(),
+                picture: None,
+            }),
             cfg,
         });
         tokio::spawn(peers::listen(inner.clone(), listener));
@@ -657,6 +661,18 @@ impl Engine {
 
     pub fn uploads(&self) -> Vec<TransferView> {
         self.0.uploads.views()
+    }
+
+    /// Upload and download speeds in bytes per second, summed: what
+    /// [`Engine::uploads`] and [`Engine::downloads`] would add up to,
+    /// without building either list.
+    pub fn speeds(&self) -> (u64, u64) {
+        (self.0.uploads.speed(), self.0.downloads.speed())
+    }
+
+    /// Uploads sending or waiting to.
+    pub fn uploads_pending(&self) -> usize {
+        self.0.uploads.pending()
     }
 
     pub fn download_view(&self, username: &str, filename: &RawStr) -> Option<TransferView> {

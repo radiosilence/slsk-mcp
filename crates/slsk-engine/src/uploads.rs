@@ -130,6 +130,10 @@ struct Queue {
     /// Users in the order they will next be served.
     order: VecDeque<String>,
     by_user: HashMap<String, VecDeque<Arc<Upload>>>,
+    /// Files in `by_user`, kept as they change: asked for on every search
+    /// answered, where summing every user's queue under this lock is not
+    /// cheap.
+    waiting: usize,
     active: HashMap<Key, Arc<Upload>>,
     /// Finished uploads, newest last, for display.
     history: VecDeque<Arc<Upload>>,
@@ -167,10 +171,49 @@ impl Uploads {
     }
 
     fn publish_waiting(&self, q: &Queue) {
-        let waiting: usize = q.by_user.values().map(VecDeque::len).sum();
         self.metrics
             .uploads_queued
-            .store(waiting as u64, Ordering::Relaxed);
+            .store(q.waiting as u64, Ordering::Relaxed);
+    }
+
+    /// Bytes per second across the uploads sending now.
+    pub fn speed(&self) -> u64 {
+        let q = self.queue.lock();
+        q.active
+            .values()
+            .filter(|u| u.state() == UploadState::Transferring)
+            .map(|u| u.speed.load(Ordering::Relaxed))
+            .sum()
+    }
+
+    /// Uploads under way or waiting.
+    pub fn pending(&self) -> usize {
+        let q = self.queue.lock();
+        let underway = q
+            .active
+            .values()
+            .filter(|u| matches!(u.state(), UploadState::Starting | UploadState::Transferring))
+            .count();
+        underway + q.waiting
+    }
+
+    /// Whether `username`'s `filename` finished, failed or was cancelled
+    /// lately: asked about again, it is not queued again.
+    pub fn settled(&self, username: &str, filename: &RawStr) -> bool {
+        let q = self.queue.lock();
+        q.history
+            .iter()
+            .any(|u| u.username == username && &u.filename == filename)
+    }
+
+    /// Forget what `username` has waiting; an upload under way carries on.
+    fn drop_queue(&self, username: &str) {
+        let mut q = self.queue.lock();
+        if let Some(list) = q.by_user.remove(username) {
+            q.waiting -= list.len();
+        }
+        q.order.retain(|o| o != username);
+        self.publish_waiting(&q);
     }
 
     pub fn set_slots(&self, slots: usize) {
@@ -191,7 +234,7 @@ impl Uploads {
     /// (files waiting, whether a slot is free now)
     pub fn queue_summary(&self) -> (usize, bool) {
         let q = self.queue.lock();
-        let waiting = q.by_user.values().map(VecDeque::len).sum();
+        let waiting = q.waiting;
         (
             waiting,
             waiting == 0 && q.active.len() < self.slots.load(Ordering::Relaxed),
@@ -227,7 +270,9 @@ impl Uploads {
             && let Some(i) = list.iter().position(|u| &u.filename == filename)
         {
             let u = list.remove(i).unwrap();
-            if list.is_empty() {
+            let emptied = list.is_empty();
+            q.waiting -= 1;
+            if emptied {
                 q.by_user.remove(username);
                 q.order.retain(|o| o != username);
             }
@@ -242,6 +287,7 @@ impl Uploads {
     pub fn drop_users(&self, users: &HashSet<String>) {
         let mut q = self.queue.lock();
         q.by_user.retain(|u, _| !users.contains(&u.to_lowercase()));
+        q.waiting = q.by_user.values().map(VecDeque::len).sum();
         q.order.retain(|u| !users.contains(&u.to_lowercase()));
         for u in q.active.values() {
             if users.contains(&u.username.to_lowercase()) {
@@ -306,6 +352,9 @@ pub(crate) fn enqueue(
     {
         return Err(reason::TOO_MANY_MEGABYTES);
     }
+    // The name is a slice of the buffer the request arrived in; a queued
+    // upload can wait for days, and would keep all of that buffer with it.
+    let filename = RawStr(bytes::Bytes::copy_from_slice(filename.as_bytes()));
     let list = q.by_user.entry(username.to_string()).or_default();
     list.push_back(Arc::new(Upload {
         id: inner.uploads.next_id.fetch_add(1, Ordering::Relaxed),
@@ -318,6 +367,7 @@ pub(crate) fn enqueue(
         state: AtomicU8::new(UploadState::Queued as u8),
         error: Mutex::new(None),
     }));
+    q.waiting += 1;
     if !q.order.iter().any(|u| u == username) {
         q.order.push_back(username.to_string());
     }
@@ -363,7 +413,9 @@ fn pick(q: &mut Queue, privileged: &HashSet<String>) -> Option<Arc<Upload>> {
     let user = q.order.remove(pos).unwrap();
     let list = q.by_user.get_mut(&user).unwrap();
     let upload = list.pop_front().unwrap();
-    if list.is_empty() {
+    let emptied = list.is_empty();
+    q.waiting -= 1;
+    if emptied {
         q.by_user.remove(&user);
     } else {
         q.order.push_back(user);
@@ -419,6 +471,14 @@ async fn serve(inner: &Arc<Inner>, u: &Arc<Upload>) {
             });
         }
         Err(e) => {
+            // Each of a gone peer's queued files would otherwise hold a slot
+            // through its own lookup and connection timeouts, one after
+            // another, for up to the whole queue. They ask again once back.
+            // Offline only: the server says so. Unreachable can be a link
+            // that dropped for a moment, and the queue is not told.
+            if matches!(e, Error::Offline(_)) {
+                inner.uploads.drop_queue(&u.username);
+            }
             // A cancel or a ban is not a failure, and the downloader is not
             // told about one.
             let failed = u.transition(UploadState::Starting, UploadState::Failed)
@@ -549,6 +609,7 @@ mod tests {
                 .entry(user.to_string())
                 .or_default()
                 .push_back(upload(user, name, i as u64));
+            q.waiting += 1;
             if !q.order.iter().any(|u| u == user) {
                 q.order.push_back(user.to_string());
             }

@@ -162,6 +162,15 @@ impl Downloads {
         self.map.get(&key(username, filename)).map(|d| d.clone())
     }
 
+    /// Bytes per second across the downloads arriving now.
+    pub fn speed(&self) -> u64 {
+        self.map
+            .iter()
+            .filter(|d| d.state() == DownloadState::Transferring)
+            .map(|d| d.speed.load(Ordering::Relaxed))
+            .sum()
+    }
+
     pub fn views(&self) -> Vec<TransferView> {
         let mut v: Vec<_> = self.map.iter().map(|d| d.view()).collect();
         v.sort_unstable_by_key(|t| t.id);

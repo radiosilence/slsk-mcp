@@ -9,7 +9,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use slsk_engine::{Engine, EngineConfig, Event, Profile, Status};
+use slsk_engine::{Engine, EngineConfig, Profile, Status};
 use tokio::sync::{Mutex, OnceCell};
 
 use crate::config::Config;
@@ -96,33 +96,37 @@ impl Session {
 
 /// Bans and the profile live in the database per account; push them into
 /// the engine every time a login lands, since the account may have changed.
+/// Followed on the status watch rather than the event channel: a lagging
+/// subscriber of that can miss a login, and banned users would then be
+/// served.
 async fn apply_account_on_login(session: Arc<Session>, engine: Engine) {
-    let mut events = engine.events();
+    let mut status = engine.status();
     loop {
-        match events.recv().await {
-            Ok(Event::Status(Status::LoggedIn { .. })) => {
-                let account = engine.username();
-                match db::bans(&session.db, &account).await {
-                    Ok(bans) => engine.set_banned(bans),
-                    Err(e) => tracing::warn!(error = %e, "could not load bans"),
-                }
-                match db::profile(&session.db, &account).await {
-                    Ok(saved) => engine.set_profile(match saved {
-                        Some((description, picture)) => Profile {
-                            description,
-                            picture: picture.map(Into::into),
-                        },
-                        None => Profile {
-                            description: session.cfg.description.clone(),
-                            picture: None,
-                        },
-                    }),
-                    Err(e) => tracing::warn!(error = %e, "could not load the profile"),
-                }
+        let logged_in = matches!(*status.borrow_and_update(), Status::LoggedIn { .. });
+        if logged_in {
+            let account = engine.username();
+            match db::bans(&session.db, &account).await {
+                Ok(bans) => engine.set_banned(bans),
+                Err(e) => tracing::warn!(error = %e, "could not load bans"),
             }
-            Ok(_) => {}
-            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
-            Err(_) => return,
+            match db::profile(&session.db, &account).await {
+                Ok(saved) => engine.set_profile(match saved {
+                    Some((description, picture)) => Profile {
+                        description,
+                        picture: picture.map(Into::into),
+                    },
+                    None => Profile {
+                        description: session.cfg.description.clone(),
+                        picture: None,
+                    },
+                }),
+                Err(e) => tracing::warn!(error = %e, "could not load the profile"),
+            }
+        }
+        // Until the next change of status: a login is seen however many
+        // came and went while these were read.
+        if status.changed().await.is_err() {
+            return;
         }
     }
 }

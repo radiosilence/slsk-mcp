@@ -1087,7 +1087,7 @@ pub(crate) async fn search(
     filter: &Filter,
 ) -> Result<Vec<Folder>> {
     let responses = responses(app.session.require()?, query, wait).await?;
-    Ok(folders::group(&responses, filter))
+    Ok(folders::group(responses.iter().map(Arc::as_ref), filter))
 }
 
 /// How long one search's answers stand in for another of the same words.
@@ -1102,7 +1102,8 @@ const MOST_RESPONSES: usize = 1000;
 /// What a search has heard so far.
 #[derive(Clone, Default)]
 pub(crate) struct Heard {
-    pub responses: Arc<Vec<SearchResponse>>,
+    /// Each response shared, so a snapshot each second copies pointers.
+    pub responses: Arc<Vec<Arc<SearchResponse>>>,
     /// It has stopped listening, or could not be sent.
     pub done: bool,
     /// Why it could not be sent.
@@ -1115,7 +1116,7 @@ pub(crate) async fn responses(
     engine: &slsk_engine::Engine,
     query: &str,
     wait: u64,
-) -> anyhow::Result<Arc<Vec<SearchResponse>>> {
+) -> anyhow::Result<Arc<Vec<Arc<SearchResponse>>>> {
     let mut heard = listen(engine, query, wait);
     let heard = heard.wait_for(|h| h.done).await?;
     match &heard.error {
@@ -1216,7 +1217,7 @@ where
             while open {
                 match tokio::time::timeout_at(tick, rx.recv()).await {
                     Ok(Some(r)) => {
-                        responses.push(r);
+                        responses.push(Arc::new(r));
                         // Enough to choose from: the rest would only grow
                         // what every watcher is sent each second.
                         if responses.len() >= MOST_RESPONSES {
@@ -1314,10 +1315,15 @@ pub(crate) async fn grab(
     // One search: when no copy passes the lossless filter, the same answers
     // are grouped again without it.
     let responses = responses(app.session.require()?, query, wait).await?;
-    let mut found = folders::relevant_complete_first(folders::group(&responses, &filter), query);
+    let mut found = folders::relevant_complete_first(
+        folders::group(responses.iter().map(Arc::as_ref), &filter),
+        query,
+    );
     if found.is_empty() && !strict {
-        found =
-            folders::relevant_complete_first(folders::group(&responses, &Filter::default()), query);
+        found = folders::relevant_complete_first(
+            folders::group(responses.iter().map(Arc::as_ref), &Filter::default()),
+            query,
+        );
     }
     // A peer we are queued with and receiving nothing from, or one that
     // stalled us recently, answers searches readily and sends nothing; its

@@ -127,7 +127,7 @@ impl ShareIndex {
     /// and `*tail` narrows what the whole words found to paths with a word
     /// ending in `tail`. A query of tails alone matches nothing: resolving
     /// one means reading the whole vocabulary, on the task that reads every
-    /// search the network relays. Paths containing any of `excluded` — the
+    /// search the network relays. Paths containing any of `excluded`, lower-cased — the
     /// phrases the server bans from search results — are dropped.
     pub fn search(&self, query: &str, limit: usize, excluded: &[String]) -> Vec<&SharedFile> {
         let mut include: Vec<&[u32]> = Vec::new();
@@ -160,7 +160,6 @@ impl ShareIndex {
             return Vec::new();
         }
         sets.sort_by_key(|s| s.len());
-        let excluded: Vec<String> = excluded.iter().map(|p| p.to_lowercase()).collect();
         sets[0]
             .iter()
             .copied()
