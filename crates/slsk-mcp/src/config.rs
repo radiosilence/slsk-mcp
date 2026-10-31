@@ -1,7 +1,8 @@
 //! Everything read from the environment, once, at boot.
 //!
 //! A missing or malformed value fails startup rather than the request that
-//! first needs it.
+//! first needs it. `DISCOGS_TOKEN` is not read here: sift reads it from the
+//! environment when the beets config enables the discogs plugin.
 
 use std::path::PathBuf;
 

@@ -1,1 +1,1 @@
-- **Unused protocol messages and stale auth code removed.** Server messages nothing sends or handles now decode as unknown, the mock server helpers sit behind a feature, MCP and `/graphql` share one schema, and the unused `BEET_BIN` and `DISCOGS_TOKEN` settings are gone.
+- **Unused protocol messages and stale auth code removed.** Server messages nothing sends or handles now decode as unknown, the mock server helpers sit behind a feature, MCP and `/graphql` share one schema, and the unused `BEET_BIN` setting is gone.
