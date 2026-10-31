@@ -113,7 +113,7 @@ impl Sessions {
         }
     }
 
-    pub async fn begin_flow(&self, verifier: &str, csrf: &str, ttl: Duration) -> String {
+    pub fn begin_flow(&self, verifier: &str, csrf: &str, ttl: Duration) -> String {
         let id = Self::token();
         let flow = Flow {
             verifier: verifier.to_string(),
@@ -141,7 +141,7 @@ impl Sessions {
     }
 
     /// One-shot: taking a flow consumes it, so a callback cannot be replayed.
-    pub async fn take_flow(&self, id: &str) -> Option<Flow> {
+    pub fn take_flow(&self, id: &str) -> Option<Flow> {
         let flow = self.flows.lock().remove(id)?;
         (Instant::now() < flow.expires).then_some(flow)
     }
@@ -158,11 +158,9 @@ mod tests {
     #[tokio::test]
     async fn take_flow_returns_once_then_none() {
         let sessions = sessions().await;
-        let id = sessions
-            .begin_flow("verifier", "csrf", Duration::from_secs(60))
-            .await;
-        assert!(sessions.take_flow(&id).await.is_some());
-        assert!(sessions.take_flow(&id).await.is_none());
+        let id = sessions.begin_flow("verifier", "csrf", Duration::from_secs(60));
+        assert!(sessions.take_flow(&id).is_some());
+        assert!(sessions.take_flow(&id).is_none());
     }
 
     #[test]
@@ -193,9 +191,7 @@ mod tests {
     #[tokio::test]
     async fn an_expired_flow_is_not_taken() {
         let sessions = sessions().await;
-        let id = sessions
-            .begin_flow("verifier", "csrf", Duration::ZERO)
-            .await;
-        assert!(sessions.take_flow(&id).await.is_none());
+        let id = sessions.begin_flow("verifier", "csrf", Duration::ZERO);
+        assert!(sessions.take_flow(&id).is_none());
     }
 }

@@ -1,4 +1,4 @@
-//! The gate, and the accessor behind it.
+//! The gate in front of the UI.
 //!
 //! [`require_session`] is a layer over the whole protected router rather than a
 //! decorator on each route. Any UI route that skips it can start downloads and

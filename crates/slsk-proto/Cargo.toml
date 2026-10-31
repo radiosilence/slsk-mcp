@@ -5,6 +5,7 @@ description = "Soulseek wire protocol: framing and the messages this client spea
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+publish = false
 
 [dependencies]
 bytes.workspace = true

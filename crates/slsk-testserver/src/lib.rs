@@ -100,7 +100,9 @@ async fn client(state: Arc<Mutex<State>>, stream: TcpStream, peer: SocketAddr) {
         };
         let Some(f) = f else { break };
         let mut r = Reader::new(f.body);
-        let _ = handle(&state, &tx, ip, &mut me, f.code, &mut r);
+        if let Err(e) = handle(&state, &tx, ip, &mut me, f.code, &mut r) {
+            eprintln!("slsk-testserver: undecodable message {}: {e}", f.code);
+        }
     }
     if let Some((name, conn)) = me {
         let mut s = state.lock().unwrap();

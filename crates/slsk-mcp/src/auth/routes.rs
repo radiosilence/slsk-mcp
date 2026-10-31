@@ -72,14 +72,11 @@ fn redirect(location: &str, cookies: &[String]) -> Response {
 pub async fn login(State(state): State<AppState>) -> AppResult<Response> {
     let (verifier, challenge) = pkce();
     let csrf = Sessions::token();
-    let flow_id = state
-        .sessions
-        .begin_flow(
-            &verifier,
-            &csrf,
-            std::time::Duration::from_secs(FLOW_TTL_SECS as u64),
-        )
-        .await;
+    let flow_id = state.sessions.begin_flow(
+        &verifier,
+        &csrf,
+        std::time::Duration::from_secs(FLOW_TTL_SECS as u64),
+    );
     let url = authorize_url(
         state.config.oidc.as_ref().ok_or(AppError::Unauthorized)?,
         &state.config.redirect_uri(),
@@ -111,7 +108,6 @@ pub async fn callback(
     let flow = state
         .sessions
         .take_flow(flow_id)
-        .await
         .ok_or(AppError::Unauthorized)?;
     if flow.csrf != q.state {
         return Err(AppError::BadRequest("state mismatch".to_string()));

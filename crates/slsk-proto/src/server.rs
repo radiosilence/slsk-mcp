@@ -162,7 +162,6 @@ pub enum ToServer {
         item: String,
     },
     RoomList,
-    CheckPrivileges,
     HaveNoParent {
         no_parent: bool,
     },
@@ -216,7 +215,6 @@ impl ToServer {
             AddThingILike { .. } => 51,
             RemoveThingILike { .. } => 52,
             RoomList => 64,
-            CheckPrivileges => 92,
             HaveNoParent { .. } => 71,
             AcceptChildren { .. } => 100,
             WishlistSearch { .. } => 103,
@@ -278,7 +276,7 @@ impl ToServer {
             SetStatus { status } => {
                 w.i32(status.code() as i32);
             }
-            ServerPing | RoomList | CheckPrivileges => {}
+            ServerPing | RoomList => {}
             SharedFoldersFiles { dirs, files } => {
                 w.u32(*dirs).u32(*files);
             }
