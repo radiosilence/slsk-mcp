@@ -121,8 +121,13 @@ pub fn analyse(path: &Path, spectrogram: Option<&Path>) -> Result<Option<TrackAn
     if let Some(out) = spectrogram
         && !decoded.columns.is_empty()
     {
-        render(&decoded, analysis.cutoff_hz, out)?;
-        analysis.spectrogram = Some(out.to_path_buf());
+        // A picture that cannot be written says nothing about the audio.
+        match render(&decoded, analysis.cutoff_hz, out) {
+            Ok(()) => analysis.spectrogram = Some(out.to_path_buf()),
+            Err(e) => {
+                tracing::warn!(file = %path.display(), error = %e, "could not write a spectrogram")
+            }
+        }
     }
     Ok(Some(analysis))
 }

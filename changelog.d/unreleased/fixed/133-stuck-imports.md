@@ -1,0 +1,1 @@
+- **Imports no longer stay `importing` for good.** An import that errs or panics fails the job; one waiting on MusicBrainz gives up after two hours of tries and fails for a retry, and can be removed while it waits.

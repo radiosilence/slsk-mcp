@@ -2,7 +2,7 @@
  * What this package needs from Kubernetes and hands back to whoever deploys it.
  *
  * Declared here rather than imported from a shared package, and that is the
- * point: this is a chart. It describes how to stand the gateway up and knows
+ * point: this is a chart. It describes how to stand slsk-mcp up and knows
  * nothing about the estate standing it up — so it depends on `@pulumi/*` and
  * `zod` and nothing else, and can be published and consumed by a deployment
  * that has never heard of jaritanet.
@@ -47,7 +47,7 @@ export type Route = {
 /**
  * The OAuth client this needs registered for it.
  *
- * Returned rather than configured, because the callback path is the gateway's
+ * Returned rather than configured, because the callback path is the service's
  * own and the host half comes from the hostname it was told to publish at — so
  * the redirect URI cannot name somewhere the service is not.
  */

@@ -81,6 +81,8 @@ impl Session {
         ec.upload_limit = self.cfg.upload_limit;
         ec.download_limit = self.cfg.download_limit;
         ec.searches_per_hour = self.cfg.searches_per_hour;
+        ec.max_inbound_connections = self.cfg.max_inbound_connections;
+        ec.max_inbound_per_address = self.cfg.max_inbound_per_address;
         ec.description = self.cfg.description.clone();
         let engine = Engine::start(ec)
             .await

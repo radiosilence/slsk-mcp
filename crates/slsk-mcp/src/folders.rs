@@ -285,9 +285,12 @@ fn is_clutter(w: &str) -> bool {
 /// ("portishead portishead" is the album in the artist's folder, not any
 /// folder under it), and a live or demos folder waits behind the album
 /// unless the query asks for one. With nothing that qualifies, everything
-/// is returned as it came.
+/// is returned as it came, for a person to look through.
 pub fn relevant(folders: Vec<Folder>, query: &str) -> Vec<Folder> {
-    tiered(folders, query).into_iter().map(|(_, f)| f).collect()
+    tiered(folders, query, false)
+        .into_iter()
+        .map(|(_, f)| f)
+        .collect()
 }
 
 /// An album this short is taken at whatever length anyone has it: a single
@@ -301,11 +304,13 @@ fn is_fragment(f: &Folder, fullest: usize) -> bool {
 }
 
 /// [`relevant`], each folder marked when it holds only part of the album.
+/// Only folders holding every word of the query: what this picks is
+/// downloaded unasked, so with nothing that qualifies there is nothing.
 /// The album's length is taken as the most tracks any folder in the best
 /// relevance tier holds: those answer the query most closely, where a live
 /// or deluxe folder further down may well be longer than the album.
 fn marked(folders: Vec<Folder>, query: &str) -> Vec<(Option<u8>, bool, Folder)> {
-    let ranked = tiered(folders, query);
+    let ranked = tiered(folders, query, true);
     let best = ranked.first().map(|(t, _)| *t);
     let most = ranked
         .iter()
@@ -338,7 +343,10 @@ pub fn relevant_complete(folders: Vec<Folder>, query: &str) -> Vec<Folder> {
         .collect()
 }
 
-fn tiered(folders: Vec<Folder>, query: &str) -> Vec<(Option<u8>, Folder)> {
+/// Each folder with its relevance tier, best first; `None` for one missing a
+/// word of the query. `strict` drops those, and otherwise they are dropped
+/// only when some folder qualifies.
+fn tiered(folders: Vec<Folder>, query: &str, strict: bool) -> Vec<(Option<u8>, Folder)> {
     let norm = sift::matching::normalise(query);
     let wanted: Vec<&str> = norm.split(' ').filter(|w| w.len() > 1).collect();
     let tier = |f: &Folder| -> Option<u8> {
@@ -365,7 +373,7 @@ fn tiered(folders: Vec<Folder>, query: &str) -> Vec<(Option<u8>, Folder)> {
     };
     let mut ranked: Vec<(Option<u8>, Folder)> =
         folders.into_iter().map(|f| (tier(&f), f)).collect();
-    if ranked.iter().any(|(t, _)| t.is_some()) {
+    if strict || ranked.iter().any(|(t, _)| t.is_some()) {
         ranked.retain(|(t, _)| t.is_some());
         ranked.sort_by_key(|(t, _)| *t);
     }
@@ -599,9 +607,13 @@ mod tests {
     }
 
     #[test]
-    fn nothing_relevant_returns_everything() {
+    fn nothing_relevant_returns_everything_to_look_through_and_nothing_to_grab() {
         let found = relevant(vec![folder("a", "m\\Other")], "portishead dummy");
         assert_eq!(found.len(), 1);
+        assert!(
+            relevant_complete_first(vec![folder("a", "m\\Other")], "portishead dummy").is_empty()
+        );
+        assert!(relevant_complete(vec![folder("a", "m\\Other")], "portishead dummy").is_empty());
     }
 
     #[test]

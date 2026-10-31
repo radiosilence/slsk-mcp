@@ -83,6 +83,20 @@ tested for interoperability against the `soulseek-rs` client.
    its MusicBrainz ID or URL. For a release MusicBrainz lacks, the files can
    be imported as-is by their own tags when those describe one album.
 
+### Discogs
+
+MusicBrainz is thin on some catalogues, small-label electronic music above
+all, where Discogs often has the exact pressing. With `DISCOGS_TOKEN` set to a
+Discogs personal access token, sift searches Discogs whenever MusicBrainz has
+no strong match, and the two compete on distance: a close Discogs release is
+applied without review, and otherwise its releases are offered beside
+MusicBrainz's. The token alone turns this on; the service adds beets'
+`discogs` plugin itself, since nobody setting a token means it to go unused.
+Discogs releases carry the id `discogs:<number>`, and a job in review, a
+library re-tag, `resolveJob`, `compareRelease` and `reimportAlbums` take that
+or a link to the release page. Settings in the web UI and the `tagger` query
+say whether it is on. Without a token, a pasted Discogs release is refused.
+
 ### From a URL
 
 An album bought elsewhere, such as on Bandcamp, arrives as a download link
@@ -255,8 +269,10 @@ startup.
 | `LISTEN_PORT` | `2234` | The peer port. Must be reachable for peers behind NAT to connect. |
 | `UPLOAD_SLOTS`, `UPLOAD_LIMIT`, `DOWNLOAD_LIMIT` | `500`, `0`, `0` | Uploads at once, then limits in bytes per second (0 is unlimited). Each running upload holds a socket and a 256 KiB buffer; past what saturates the uplink, more slots split it more ways rather than send more. |
 | `SEARCHES_PER_HOUR` | `200` | Searches allowed in any rolling hour, 0 for unlimited. Every search is relayed to thousands of peers, and the server temporarily bans accounts that search in floods; past the budget a search is refused with when the next is free. |
+| `MAX_INBOUND_CONNECTIONS`, `MAX_INBOUND_PER_ADDRESS` | `512`, `32` | Connections other peers may hold open to the peer port, in total and from one address. Anyone can connect, so these bound what strangers can hold. Behind a proxy that hides peers' source addresses (Docker's userland proxy, Docker Desktop), every peer arrives from one address: raise the per-address limit to the total. |
 | `DESCRIPTION` | names the client as automated | The user info other peers see. The default says this is an automated client that shares back, so sharers can decide for themselves. |
 | `BEETS_CONFIG` | — | A beets `config.yaml` for the importer's template and replacements. |
+| `DISCOGS_TOKEN` | — | A Discogs personal access token; consults Discogs when MusicBrainz has no strong match (see Discogs above). |
 | `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | — | Required for the UI. `UI_INSECURE_NO_AUTH=1` disables sign-in and is only accepted with a loopback `UI_ADDR`. |
 | `UI_ADDR`, `INTERNAL_ADDR`, `METRICS_ADDR`, `PUBLIC_URL` | `0.0.0.0:8080`, `0.0.0.0:8081`, `0.0.0.0:9464` | |
 

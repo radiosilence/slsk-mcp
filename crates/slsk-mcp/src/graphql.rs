@@ -15,6 +15,7 @@ use uuid::Uuid;
 use crate::App;
 use crate::db::{self, Alternate, Source};
 use crate::folders::{self, Filter, Folder};
+use crate::library::within;
 
 pub type SlskSchema = Schema<Query, Mutation, EmptySubscription>;
 
@@ -127,7 +128,8 @@ pub(crate) struct Job {
     pub id: ID,
     pub title: String,
     /// downloading, importing, imported, review (the tagger could not choose a
-    /// release), suspect (the audio looks transcoded), failed or cancelled.
+    /// release), suspect (the audio looks transcoded), failed, cancelled, or
+    /// removing (on its way out after `removeJob`).
     pub status: String,
     pub error: Option<String>,
     pub username: Option<String>,
@@ -349,14 +351,6 @@ async fn matching_at_most(
     Ok(albums)
 }
 
-/// A file's path within the album at `dir`.
-fn within(dir: &str, path: &std::path::Path) -> String {
-    path.strip_prefix(dir)
-        .unwrap_or(path)
-        .to_string_lossy()
-        .into_owned()
-}
-
 /// Edits to one library album for `editTracks`: the album at `path`, and
 /// fields as in `TagEdits`, with each `file` as `libraryTracks` names it.
 /// An empty string clears a field.
@@ -510,10 +504,12 @@ impl From<sift::Comparison> for Comparison {
     }
 }
 
-/// A MusicBrainz release the tagger considered.
+/// A release the tagger considered: a MusicBrainz id, or `discogs:<number>`.
 #[derive(SimpleObject)]
 pub(crate) struct Candidate {
     pub release_id: String,
+    /// The release's page on MusicBrainz or Discogs.
+    pub url: String,
     pub title: String,
     pub artist: String,
     pub date: Option<String>,
@@ -532,6 +528,7 @@ pub(crate) struct Candidate {
 impl From<sift::Candidate> for Candidate {
     fn from(c: sift::Candidate) -> Self {
         Self {
+            url: crate::library::release_link(&c.id).1,
             release_id: c.id,
             title: c.title,
             artist: c.artist,
@@ -628,6 +625,24 @@ struct Buddy {
     privileged: bool,
 }
 
+/// Where the tagger looks for releases.
+#[derive(SimpleObject)]
+struct Tagger {
+    /// MusicBrainz is always consulted. Discogs is consulted when MusicBrainz has no strong match, and able to apply a
+    /// `discogs:<number>` release; on when the service has `DISCOGS_TOKEN`.
+    discogs: bool,
+}
+
+/// A release id from what was given: a MusicBrainz id, `discogs:<number>`,
+/// or a link to either.
+fn release_arg(s: &str) -> Result<String> {
+    crate::library::release_id(s).ok_or_else(|| {
+        Error::new(format!(
+            "{s:?} is not a MusicBrainz id, a discogs:<number> id or a link to either"
+        ))
+    })
+}
+
 pub struct Query;
 
 #[Object]
@@ -665,6 +680,13 @@ impl Query {
             shared_folders: folders,
             distributed_parent: parent,
             distributed_children: children,
+        }
+    }
+
+    /// Where the tagger looks for releases: whether Discogs is on.
+    async fn tagger(&self, ctx: &Context<'_>) -> Tagger {
+        Tagger {
+            discogs: app(ctx).jobs.discogs(),
         }
     }
 
@@ -1000,8 +1022,10 @@ impl Query {
             .collect())
     }
 
-    /// How a job's files line up against one MusicBrainz release, track by
-    /// track: whether it is the right release, and what differs if nearly.
+    /// How a job's files line up against one release, track by track:
+    /// whether it is the right release, and what differs if nearly.
+    /// `releaseId` is a MusicBrainz id, `discogs:<number>`, or a link to
+    /// either.
     async fn compare_release(
         &self,
         ctx: &Context<'_>,
@@ -1010,7 +1034,7 @@ impl Query {
     ) -> Result<Comparison> {
         Ok(app(ctx)
             .jobs
-            .compare(parse_id(&id)?, &release_id)
+            .compare(parse_id(&id)?, &release_arg(&release_id)?)
             .await?
             .into())
     }
@@ -1071,6 +1095,9 @@ pub(crate) async fn search(
 /// retrying, or re-filtering within minutes, or a page opened again, gets
 /// what the network already said.
 const SEARCH_REUSE: Duration = Duration::from_secs(600);
+
+/// The most peers' answers one search keeps.
+const MOST_RESPONSES: usize = 1000;
 
 /// What a search has heard so far.
 #[derive(Clone, Default)]
@@ -1188,7 +1215,14 @@ where
             let before = responses.len();
             while open {
                 match tokio::time::timeout_at(tick, rx.recv()).await {
-                    Ok(Some(r)) => responses.push(r),
+                    Ok(Some(r)) => {
+                        responses.push(r);
+                        // Enough to choose from: the rest would only grow
+                        // what every watcher is sent each second.
+                        if responses.len() >= MOST_RESPONSES {
+                            open = false;
+                        }
+                    }
                     Ok(None) => open = false,
                     Err(_) => break,
                 }
@@ -1214,9 +1248,6 @@ where
     heard
 }
 
-/// Search, pick the best relevant folder, keep four fallbacks, start a job.
-/// Without a filter it prefers lossless and settles for lossy only when
-/// there is no lossless copy at all.
 /// Peers holding downloads of ours in their queue while sending none.
 fn stuck_peers(downloads: &[slsk_engine::TransferView]) -> std::collections::HashSet<String> {
     let mut queued = std::collections::HashSet::new();
@@ -1236,6 +1267,9 @@ fn stuck_peers(downloads: &[slsk_engine::TransferView]) -> std::collections::Has
     queued
 }
 
+/// Search, pick the best relevant folder, keep four fallbacks, start a job.
+/// Without a filter it prefers lossless and settles for lossy only when
+/// there is no lossless copy at all.
 pub(crate) async fn grab(
     app: &App,
     query: &str,
@@ -1332,6 +1366,11 @@ impl Mutation {
     ) -> Result<Vec<crate::library::DuplicateSet>> {
         let library = &app(ctx).library;
         if !preview {
+            if query.iter().all(|q| q.trim().is_empty()) {
+                return Err(Error::new(
+                    "give a query; without one this bins every spare in the library",
+                ));
+            }
             return Ok(library.duplicates(&query, true).await?);
         }
         let mut sets = library.duplicates(&query, false).await?;
@@ -1358,27 +1397,31 @@ impl Mutation {
         #[graphql(default)] preview: bool,
     ) -> Result<Vec<crate::library::AlbumMove>> {
         let library = &app(ctx).library;
-        let mut moves = Vec::new();
-        for album in matching_at_most(library, &query).await? {
-            let to = if preview {
-                library
-                    .bin_destination(&album.path)
-                    .map_err(anyhow::Error::msg)
-            } else {
-                library.bin_album(&album.path).await
-            };
-            let (to, refused) = match to {
-                Ok(to) => (Some(to.to_string_lossy().into_owned()), None),
-                Err(e) => (None, Some(e.to_string())),
-            };
-            moves.push(crate::library::AlbumMove {
-                from: album.path,
-                to,
-                refused,
-                files: album.tracks,
-            });
-        }
-        Ok(moves)
+        let albums = matching_at_most(library, &query).await?;
+        let dirs: Vec<&str> = albums.iter().map(|a| a.path.as_str()).collect();
+        let tos = if preview {
+            dirs.iter()
+                .map(|d| library.bin_destination(d).map_err(anyhow::Error::msg))
+                .collect()
+        } else {
+            library.bin_albums(&dirs).await?
+        };
+        Ok(albums
+            .iter()
+            .zip(tos)
+            .map(|(album, to)| {
+                let (to, refused) = match to {
+                    Ok(to) => (Some(to.to_string_lossy().into_owned()), None),
+                    Err(e) => (None, Some(e.to_string())),
+                };
+                crate::library::AlbumMove {
+                    from: album.path.clone(),
+                    to,
+                    refused,
+                    files: album.tracks,
+                }
+            })
+            .collect())
     }
 
     /// Credit each artist on a collaboration (`ARTISTS`, `ALBUMARTISTS` and
@@ -1432,6 +1475,10 @@ impl Mutation {
             return Err(Error::new(
                 "give a query; this retags every album it matches",
             ));
+        }
+        let release_id = release_id.as_deref().map(release_arg).transpose()?;
+        if let Some(r) = &release_id {
+            app(ctx).jobs.check_release(r)?;
         }
         let library = &app(ctx).library;
         let albums = library.albums(&query).await?;
@@ -1775,11 +1822,12 @@ impl Mutation {
         job_view(app, job, true).await
     }
 
-    /// Import a job in review as the given MusicBrainz release.
+    /// Import a job in review as the given release: a MusicBrainz id,
+    /// `discogs:<number>`, or a link to either.
     async fn resolve_job(&self, ctx: &Context<'_>, id: ID, release_id: String) -> Result<Job> {
         let app = app(ctx);
         let id = parse_id(&id)?;
-        app.jobs.resolve(id, release_id).await?;
+        app.jobs.resolve(id, release_arg(&release_id)?).await?;
         job_view(
             app,
             db::job(&app.db, id)

@@ -27,7 +27,8 @@ The static binaries are built once per architecture (`linux-build`); the image o
 ## Check
 
 ```sh
-just check   # Cargo.lock clean, fmt --check, clippy -D warnings, tests, the Pulumi package's typecheck and tests, actionlint
+just check   # what CI checks bar the audit and release builds: Cargo.lock clean, fmt, clippy -D warnings, tests,
+             # the Pulumi package's typecheck, tests and build, a stale assets/app.css, changelog fragments, version agreement, actionlint
 just fast    # what the pre-push hook runs
 just fmt
 just css     # recompile assets/app.css after changing classes in templates or src, or styles/; CI fails if it is stale

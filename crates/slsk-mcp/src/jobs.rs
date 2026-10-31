@@ -1,8 +1,11 @@
 //! Jobs: a folder (usually an album) on its way from a peer into the library.
 //!
 //! downloading → importing → imported, or → review when the tagger cannot
-//! match it confidently, or → failed. A folder whose peer fails falls back to
-//! the next folder that matched the same request before giving up.
+//! match it confidently, → suspect when its audio looks transcoded, or →
+//! failed. A downloading job can be cancelled, and any job but one being
+//! filed goes through removing on its way out. A folder whose peer fails
+//! falls back to the next folder that matched the same request before
+//! giving up.
 //!
 //! A job can also start from a URL rather than a peer: the file is fetched
 //! over HTTP, unpacked if it is a zip, and goes on to import as a download
@@ -59,18 +62,28 @@ pub mod cause {
     pub const UNTAGGED: &str = "untagged";
 }
 
-/// How an import decides what the album is.
-#[derive(Debug, Clone)]
-enum How {
+/// How an import decides what the album is. Kept on the job, so a restart
+/// resumes an import with the decision it was given.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub enum How {
     /// Against MusicBrainz; with a release id, that release.
     Match(Option<String>),
     /// By the files' own tags, with any corrections.
     AsIs(sift::Edits),
 }
 
+/// The states a job leaves its source from: downloading, or waiting on a
+/// decision. A job cancelled, removed or imported meanwhile stays as it is.
+const LEAVING: &[&str] = &["downloading", "review", "suspect", "failed"];
+
 /// Times a job's failed files are asked for again from the same peer before
 /// another source is tried.
 const RETRY_ROUNDS: u32 = 2;
+
+/// How long an import waits for MusicBrainz to come back, and how many times,
+/// before the job fails for a person to retry.
+const DEFER: Duration = Duration::from_secs(300);
+const DEFER_TRIES: u32 = 24;
 
 /// How long a download may go without a single byte before another source
 /// is tried.
@@ -114,8 +127,12 @@ pub struct Jobs {
     /// racing for the same destination.
     import_lock: Mutex<()>,
     /// Imports put off while MusicBrainz is unavailable: when to try again,
-    /// and the release a person chose, if any.
-    deferred: std::sync::Mutex<HashMap<Uuid, (tokio::time::Instant, Option<String>)>>,
+    /// and how.
+    deferred: std::sync::Mutex<HashMap<Uuid, (tokio::time::Instant, How)>>,
+    /// Times each job's import has been put off, kept while it runs.
+    deferrals: std::sync::Mutex<HashMap<Uuid, u32>>,
+    /// Set once the jobs a previous process left are picked up again.
+    resumed: std::sync::atomic::AtomicBool,
     /// Rounds of retrying a job's failed files from the same peer, and when
     /// the next may start.
     retried: std::sync::Mutex<HashMap<Uuid, (u32, tokio::time::Instant)>>,
@@ -162,6 +179,8 @@ impl Jobs {
             tagger,
             import_lock: Mutex::new(()),
             deferred: Default::default(),
+            deferrals: Default::default(),
+            resumed: Default::default(),
             retried: Default::default(),
             closing: Default::default(),
             stalled: Default::default(),
@@ -169,9 +188,7 @@ impl Jobs {
             started: tokio::time::Instant::now(),
             stalled_peers: Default::default(),
             fetches: Default::default(),
-            http: reqwest::Client::builder()
-                .user_agent(concat!("slsk-mcp/", env!("CARGO_PKG_VERSION")))
-                .connect_timeout(Duration::from_secs(30))
+            http: web_client()
                 .read_timeout(URL_IDLE)
                 .timeout(URL_TIMEOUT)
                 .build()
@@ -233,7 +250,6 @@ impl Jobs {
                     .collect::<Vec<_>>(),
             )
             .await?;
-        let id = Uuid::new_v4();
         let title = title.unwrap_or_else(|| {
             folder
                 .path
@@ -242,28 +258,17 @@ impl Jobs {
                 .unwrap_or(&folder.path)
                 .to_string()
         });
-        let job = Job {
-            id,
-            account: engine.username(),
+        let job = Job::new(
+            engine.username(),
             title,
-            source: Json(Source::Soulseek {
+            Source::Soulseek {
                 username: folder.username.clone(),
                 folder: folder.path.clone(),
                 folder_raw: folder.remote_path.as_bytes().to_vec(),
-            }),
-            alternates: Json(alternates),
-            status: "downloading".into(),
-            error: None,
-            import_log: None,
-            candidates: None,
-            library_path: None,
-            analysis: None,
-            approved: false,
-            as_is_blocker: None,
-            replaces: false,
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
-        };
+            },
+            alternates,
+        );
+        let id = job.id;
         let rows = self.rows(id, &folder.username, &files);
         db::insert_job(&self.db, &job, &rows).await?;
         self.start(&engine, id, &rows);
@@ -294,27 +299,15 @@ impl Jobs {
         title: String,
     ) -> Result<Job> {
         let engine = self.session.require()?.clone();
-        let id = Uuid::new_v4();
-        let job = Job {
-            id,
-            account: engine.username(),
+        let job = Job::new(
+            engine.username(),
             title,
-            source: Json(Source::Files {
+            Source::Files {
                 username: username.to_string(),
-            }),
-            alternates: Json(Vec::new()),
-            status: "downloading".into(),
-            error: None,
-            import_log: None,
-            candidates: None,
-            library_path: None,
-            analysis: None,
-            approved: false,
-            as_is_blocker: None,
-            replaces: false,
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
-        };
+            },
+            Vec::new(),
+        );
+        let id = job.id;
         let rows = self.rows(id, username, &listing);
         db::insert_job(&self.db, &job, &rows).await?;
         self.start(&engine, id, &rows);
@@ -326,32 +319,19 @@ impl Jobs {
     /// purchase, or a single audio file.
     pub async fn from_url(self: &Arc<Self>, url: &str) -> Result<Job> {
         let url = check_url(url)?;
-        let id = Uuid::new_v4();
-        let job = Job {
-            id,
-            account: self
-                .session
+        let job = Job::new(
+            self.session
                 .engine()
                 .map(|e| e.username())
                 .unwrap_or_default(),
             // Until the server names the file.
-            title: url.host_str().unwrap_or_default().to_string(),
-            source: Json(Source::Url {
+            url.host_str().unwrap_or_default().to_string(),
+            Source::Url {
                 url: url.to_string(),
-            }),
-            alternates: Json(Vec::new()),
-            status: "downloading".into(),
-            error: None,
-            import_log: None,
-            candidates: None,
-            library_path: None,
-            analysis: None,
-            approved: false,
-            as_is_blocker: None,
-            replaces: false,
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
-        };
+            },
+            Vec::new(),
+        );
+        let id = job.id;
         db::insert_job(&self.db, &job, &[]).await?;
         self.fetch(id, url.to_string());
         Ok(job)
@@ -373,37 +353,34 @@ impl Jobs {
             .map(|(_, f)| (f.received.load(Relaxed), f.size.load(Relaxed)))
     }
 
-    /// Fetch a URL job's file in the background, then import it.
+    /// Fetch a URL job's file in the background, then import it. A job
+    /// already being fetched is left to the fetch in hand.
     fn fetch(self: &Arc<Self>, id: Uuid, url: String) {
         let fetched = Arc::new(Fetched::default());
         // Held across the spawn, so the task cannot finish and remove its
         // entry before it is inserted.
         let mut fetches = self.fetches.lock().expect("fetches");
+        if fetches.contains_key(&id) {
+            return;
+        }
         let (jobs, progress) = (self.clone(), fetched.clone());
         let task = tokio::spawn(async move {
             let outcome = jobs.download_url(id, &url, &progress).await;
             jobs.fetches.lock().expect("fetches").remove(&id);
             let _ = tokio::fs::remove_file(jobs.fetch_file(id)).await;
-            let to = if outcome.is_ok() {
-                "importing"
-            } else {
-                "failed"
+            let reason = outcome.as_ref().err().map(|e| format!("{e:#}"));
+            let moved = match &reason {
+                None => db::claim_import(&jobs.db, id, &["downloading"], &How::Match(None)).await,
+                Some(r) => db::move_status(&jobs.db, id, &["downloading"], "failed", Some(r)).await,
             };
-            match (
-                outcome,
-                db::move_status(&jobs.db, id, &["downloading"], to).await,
-            ) {
-                (Ok(()), Ok(true)) => {
+            match (reason, moved) {
+                (None, Ok(true)) => {
                     if let Err(e) = jobs.import(id, None).await {
                         tracing::warn!(%id, error = %e, "import failed");
                     }
                 }
-                (Err(e), Ok(true)) => {
-                    let reason = format!("{e:#}");
+                (Some(reason), Ok(true)) => {
                     tracing::info!(%id, host = %host(&url), error = %reason, "fetch failed");
-                    if let Err(e) = db::set_status(&jobs.db, id, "failed", Some(&reason)).await {
-                        tracing::warn!(%id, error = %e, "could not record a failed fetch");
-                    }
                     if let Ok(Some(job)) = db::job(&jobs.db, id).await {
                         jobs.event(&job, "failed", Some(cause::URL_FAILED), Some(&reason))
                             .await;
@@ -586,36 +563,45 @@ impl Jobs {
         }
     }
 
-    /// Re-queue unfinished downloads after a restart. The engine resumes each
-    /// from its `.part`.
+    /// Pick up the jobs a previous process left: fetches from URLs and
+    /// imports at once, downloads from peers once there is an engine to
+    /// queue them with. Called at boot and again when an account signs in;
+    /// only the downloads are queued twice, which the engine ignores. A
+    /// download the engine lacks is also queued by the next tick.
     pub async fn resume(self: &Arc<Self>) -> Result<()> {
-        // Remembered across restarts: a peer that stalled us yesterday is
-        // no more likely to send today because this process is new.
-        let now = tokio::time::Instant::now();
-        for peer in db::stalled_peers(&self.db).await.unwrap_or_default() {
-            self.stalled_peers
-                .lock()
-                .expect("stalled peers")
-                .insert(peer, now);
-        }
+        use std::sync::atomic::Ordering::SeqCst;
         let (fetches, downloads): (Vec<_>, Vec<_>) =
             db::jobs(&self.db, Some("downloading"), 10_000)
                 .await?
                 .into_iter()
                 .partition(|j| matches!(j.source.0, Source::Url { .. }));
-        for job in fetches {
-            if let Source::Url { url } = job.source.0 {
-                self.fetch(job.id, url);
+        if !self.resumed.load(SeqCst) {
+            // Remembered across restarts: a peer that stalled us yesterday
+            // is no more likely to send today because this process is new.
+            let now = tokio::time::Instant::now();
+            for peer in db::stalled_peers(&self.db).await.unwrap_or_default() {
+                self.stalled_peers
+                    .lock()
+                    .expect("stalled peers")
+                    .insert(peer, now);
             }
+            for job in fetches {
+                if let Source::Url { url } = job.source.0 {
+                    self.fetch(job.id, url);
+                }
+            }
+            for job in db::jobs(&self.db, Some("importing"), 10_000).await? {
+                self.import_in_background(job.id, job.import_how.unwrap_or(How::Match(None)));
+            }
+            // Only once all of it has gone: a pass that failed part way is
+            // run again by the next call.
+            self.resumed.store(true, SeqCst);
         }
-        let engine = self.session.require()?.clone();
-        for job in downloads {
-            let rows = db::job_files(&self.db, job.id).await?;
-            self.start(&engine, job.id, &rows);
-        }
-        for job in db::jobs(&self.db, Some("importing"), 10_000).await? {
-            let jobs = self.clone();
-            tokio::spawn(async move { jobs.import(job.id, None).await });
+        if let Some(engine) = self.session.engine().cloned() {
+            for job in downloads {
+                let rows = db::job_files(&self.db, job.id).await?;
+                self.start(&engine, job.id, &rows);
+            }
         }
         self.wake.notify_one();
         Ok(())
@@ -667,12 +653,11 @@ impl Jobs {
                 .map(|(id, _)| *id)
                 .collect();
             ids.into_iter()
-                .filter_map(|id| deferred.remove(&id).map(|(_, r)| (id, r)))
+                .filter_map(|id| deferred.remove(&id).map(|(_, how)| (id, how)))
                 .collect()
         };
-        for (id, release) in due {
-            let jobs = self.clone();
-            tokio::spawn(async move { jobs.import(id, release).await });
+        for (id, how) in due {
+            self.import_in_background(id, how);
         }
         let Some(engine) = self.session.engine().cloned() else {
             return Ok(());
@@ -704,7 +689,14 @@ impl Jobs {
         rows: Vec<JobFile>,
     ) -> Result<()> {
         if rows.is_empty() {
-            db::set_status(&self.db, job.id, "failed", Some("no files to download")).await?;
+            db::move_status(
+                &self.db,
+                job.id,
+                &["downloading"],
+                "failed",
+                Some("no files to download"),
+            )
+            .await?;
             return Ok(());
         }
         let mut states: HashMap<&str, usize> = HashMap::new();
@@ -821,9 +813,11 @@ impl Jobs {
         self.places.lock().expect("places").remove(&job.id);
         if failed.is_none() && done.is_some() {
             self.retried.lock().expect("retried").remove(&job.id);
-            db::set_status(&self.db, job.id, "importing", None).await?;
-            let (jobs, id) = (self.clone(), job.id);
-            tokio::spawn(async move { jobs.import(id, None).await });
+            // Cancelled or removed since this tick read it: left so.
+            let how = How::Match(None);
+            if db::claim_import(&self.db, job.id, &["downloading"], &how).await? {
+                self.import_in_background(job.id, how);
+            }
         } else if failed.is_some() {
             // Most failures are a peer dropping off for a moment. Asking
             // the same peer again, spaced out, resumes from the partial
@@ -911,7 +905,10 @@ impl Jobs {
                         folder_raw: alt.folder_raw.clone(),
                     };
                     let rows = self.rows(job.id, &alt.username, &files);
-                    db::replace_files(&self.db, job.id, &source, &alternates, &rows).await?;
+                    if !db::replace_files(&self.db, job.id, &source, &alternates, &rows).await? {
+                        tracing::info!(job = %job.id, "moved on while another source was found; left as it is");
+                        return Ok(());
+                    }
                     self.start(engine, job.id, &rows);
                     let detail = format!("to {}; left {left}: {}", alt.username, errors.join("; "));
                     self.event(job, "fallback", Some(cause), Some(&detail))
@@ -929,8 +926,9 @@ impl Jobs {
                 "download failed, and no other copy could be fetched".into()
             }
         });
-        db::set_status(&self.db, job.id, "failed", Some(&error)).await?;
-        self.event(job, "failed", Some(cause), Some(&error)).await;
+        if db::move_status(&self.db, job.id, LEAVING, "failed", Some(&error)).await? {
+            self.event(job, "failed", Some(cause), Some(&error)).await;
+        }
         Ok(())
     }
 
@@ -966,10 +964,37 @@ impl Jobs {
     /// client dropped) cannot cancel an import halfway: the file moves would
     /// carry on in blocking threads, filing the album, and the job would
     /// never record it. The task also holds the import lock until the job is
-    /// recorded, which is what `drain` waits on at shutdown.
+    /// recorded, which is what `drain` waits on at shutdown. An import that
+    /// errs or panics fails the job rather than leave it `importing`.
     async fn run_import(self: &Arc<Self>, id: Uuid, how: How) -> Result<()> {
         let jobs = self.clone();
-        tokio::spawn(async move { jobs.file(id, how).await }).await?
+        tokio::spawn(async move {
+            let filing = jobs.clone();
+            let outcome = tokio::spawn(async move { filing.file(id, how).await })
+                .await
+                .unwrap_or_else(|e| Err(anyhow::anyhow!("the import stopped: {e}")));
+            if let Err(e) = &outcome {
+                jobs.deferrals.lock().expect("deferrals").remove(&id);
+                let reason = format!("{e:#}");
+                if let Err(e) =
+                    db::move_status(&jobs.db, id, &["importing"], "failed", Some(&reason)).await
+                {
+                    tracing::warn!(%id, error = %e, "could not record a failed import");
+                }
+            }
+            outcome
+        })
+        .await?
+    }
+
+    /// [`Self::run_import`] without waiting, its outcome logged.
+    fn import_in_background(self: &Arc<Self>, id: Uuid, how: How) {
+        let jobs = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = jobs.run_import(id, how).await {
+                tracing::warn!(%id, error = %e, "import failed");
+            }
+        });
     }
 
     async fn file(self: &Arc<Self>, id: Uuid, how: How) -> Result<()> {
@@ -981,8 +1006,9 @@ impl Jobs {
         // Imports queue on the lock, so a second request for the same job
         // (a double tap, Retry beside Use) arrives after the first has
         // filed the album and cleared its folder. A job stopped or being
-        // removed while one waited is not filed either.
-        if matches!(job.status.as_str(), "imported" | "cancelled" | "removing") {
+        // removed while one waited is not filed either. Clears the reason
+        // an earlier attempt was put off.
+        if !db::move_status(&self.db, id, &["importing"], "importing", None).await? {
             return Ok(());
         }
         // Out of incomplete/ and into complete/ first, so what is left for a
@@ -1003,7 +1029,6 @@ impl Jobs {
         } else {
             incoming
         };
-        db::set_status(&self.db, id, "importing", None).await?;
         // A file that does not decode never goes in, whoever approved it: it
         // plays as noise, and no judgement about the release changes that.
         let tracks = self.analyse(id, &dir).await;
@@ -1026,21 +1051,24 @@ impl Jobs {
             db::set_status(&self.db, id, "failed", Some(&reason)).await?;
             self.event(&job, "failed", Some(cause::CORRUPT_COPY), Some(&reason))
                 .await;
-            if let Err(e) = self.next_source(id, cause::CORRUPT_COPY).await {
-                tracing::warn!(%id, error = %e, "damaged copy, and no other source: {reason}");
-            }
+            // Off the import lock: finding another copy lists a peer's folder.
+            let jobs = self.clone();
+            tokio::spawn(async move {
+                if let Err(e) = jobs.next_source(id, cause::CORRUPT_COPY).await {
+                    tracing::warn!(%id, error = %e, "damaged copy, and no other source: {reason}");
+                }
+            });
             return Ok(());
         }
         // A person who looked at the analysis and approved, or who named the
         // release, has already decided; everyone else gets the check.
         // An album sent here as-is was checked on its way to review.
         if !job.approved && matches!(how, How::Match(None)) {
-            let (verdict, confidence) = crate::analysis::album_verdict(&tracks);
+            let (verdict, _) = crate::analysis::album_verdict(&tracks);
             if matches!(
                 verdict,
                 crate::analysis::Verdict::Lossy | crate::analysis::Verdict::Upsampled
-            ) && confidence >= 0.8
-            {
+            ) {
                 let flagged: Vec<_> = tracks.iter().filter(|t| t.verdict == verdict).collect();
                 let example = flagged
                     .iter()
@@ -1082,6 +1110,9 @@ impl Jobs {
             }
             Ok(sift::Outcome::Review { .. }) => tracing::info!(%id, "import finished: review"),
             Err(e) => tracing::info!(%id, error = %e, "import finished: not filed"),
+        }
+        if !matches!(&outcome, Err(e) if e.is_transient()) {
+            self.deferrals.lock().expect("deferrals").remove(&id);
         }
         match outcome {
             Ok(sift::Outcome::Imported { dir: path, log, .. }) => {
@@ -1145,12 +1176,33 @@ impl Jobs {
             }
             // MusicBrainz being busy says nothing about the files, so the job
             // waits rather than asking a person to retry it.
+            // Within a limit: an outage that outlasts it fails the job for a
+            // person to retry, rather than leave it importing for good.
             Err(e) if e.is_transient() => {
+                let tries = {
+                    let mut deferrals = self.deferrals.lock().expect("deferrals");
+                    let tries = deferrals.entry(id).or_default();
+                    *tries += 1;
+                    *tries
+                };
+                if tries > DEFER_TRIES {
+                    self.deferrals.lock().expect("deferrals").remove(&id);
+                    let reason = format!(
+                        "{e:#}; MusicBrainz stayed unavailable through {DEFER_TRIES} tries: retry it later"
+                    );
+                    db::set_status(&self.db, id, "failed", Some(&reason)).await?;
+                    self.event(&job, "failed", Some(cause::MB_UNAVAILABLE), Some(&reason))
+                        .await;
+                    return Ok(());
+                }
                 db::set_status(
                     &self.db,
                     id,
                     "importing",
-                    Some(&format!("{e:#}; trying again in 5 minutes")),
+                    Some(&format!(
+                        "{e:#}; trying again in {} minutes",
+                        DEFER.as_secs() / 60
+                    )),
                 )
                 .await?;
                 self.event(
@@ -1160,17 +1212,10 @@ impl Jobs {
                     Some(&format!("{e:#}")),
                 )
                 .await;
-                let release = match how {
-                    How::Match(release) => release,
-                    How::AsIs(_) => None,
-                };
-                self.deferred.lock().expect("deferred imports").insert(
-                    id,
-                    (
-                        tokio::time::Instant::now() + Duration::from_secs(300),
-                        release,
-                    ),
-                );
+                self.deferred
+                    .lock()
+                    .expect("deferred imports")
+                    .insert(id, (tokio::time::Instant::now() + DEFER, how));
             }
             // Another copy of this album is already filed, in this format's
             // folder. What was asked for is in the library, so the job is
@@ -1257,7 +1302,7 @@ impl Jobs {
             };
             while let Ok(Some(e)) = rd.next_entry().await {
                 let p = e.path();
-                if p.is_dir() {
+                if tokio::fs::metadata(&p).await.is_ok_and(|m| m.is_dir()) {
                     stack.push(p);
                 } else if p
                     .extension()
@@ -1312,12 +1357,11 @@ impl Jobs {
         tracks
     }
 
-    /// Import a suspect job anyway.
     /// Take a job waiting on a decision into `importing`, or say why not. A
     /// second request for the same job (a double tap, an assistant beside a
     /// person) is refused here rather than queued behind the first.
-    async fn claim(&self, id: Uuid) -> Result<()> {
-        if db::claim_import(&self.db, id).await? {
+    async fn claim(&self, id: Uuid, how: &How) -> Result<()> {
+        if db::claim_import(&self.db, id, db::DECIDED, how).await? {
             return Ok(());
         }
         let job = db::job(&self.db, id).await?.context("no such job")?;
@@ -1329,7 +1373,7 @@ impl Jobs {
 
     /// Import a suspect job despite its analysis, waiting for the outcome.
     pub async fn approve(self: &Arc<Self>, id: Uuid) -> Result<()> {
-        self.claim(id).await?;
+        self.claim(id, &How::Match(None)).await?;
         db::set_approved(&self.db, id).await?;
         self.import(id, None).await
     }
@@ -1337,8 +1381,9 @@ impl Jobs {
     /// File a job by its own tags, for a release MusicBrainz does not have,
     /// waiting for the outcome.
     pub async fn import_as_is(self: &Arc<Self>, id: Uuid, edits: sift::Edits) -> Result<()> {
-        self.claim(id).await?;
-        self.run_import(id, How::AsIs(edits)).await
+        let how = How::AsIs(edits);
+        self.claim(id, &how).await?;
+        self.run_import(id, how).await
     }
 
     /// Where a job's files are now: filed for a decision once they have
@@ -1358,30 +1403,36 @@ impl Jobs {
         Ok(self.tagger.tracks(&self.files_dir(id).await?).await?)
     }
 
+    /// Whether the tagger consults Discogs, and so can apply a `discogs:`
+    /// release.
+    pub fn discogs(&self) -> bool {
+        self.tagger.cfg.discogs.is_some()
+    }
+
+    /// Refuses a `discogs:` release when Discogs is off, before anything
+    /// starts, for every path that applies or compares a named release.
+    pub fn check_release(&self, release: &str) -> Result<()> {
+        if release.starts_with("discogs:") && !self.discogs() {
+            bail!("Discogs is not enabled; it needs DISCOGS_TOKEN set");
+        }
+        Ok(())
+    }
+
     /// The job's files against one release, track by track.
     pub async fn compare(&self, id: Uuid, release: &str) -> Result<sift::Comparison> {
+        self.check_release(release)?;
         Ok(self
             .tagger
             .compare(&self.files_dir(id).await?, release)
             .await?)
     }
 
-    /// `import_as_is` without waiting, for a person tapping a button.
-    pub async fn import_as_is_soon(self: &Arc<Self>, id: Uuid) -> Result<()> {
-        self.claim(id).await?;
-        let jobs = self.clone();
-        tokio::spawn(async move {
-            if let Err(e) = jobs.run_import(id, How::AsIs(sift::Edits::default())).await {
-                tracing::warn!(%id, error = %e, "import as-is failed");
-            }
-        });
-        Ok(())
-    }
-
-    /// Import a job as the given MusicBrainz release, waiting for the outcome.
+    /// Import a job as the given release, waiting for the outcome.
     pub async fn resolve(self: &Arc<Self>, id: Uuid, release: String) -> Result<()> {
-        self.claim(id).await?;
-        self.import(id, Some(release)).await
+        self.check_release(&release)?;
+        let how = How::Match(Some(release));
+        self.claim(id, &how).await?;
+        self.run_import(id, how).await
     }
 
     /// `approve` or `resolve` without waiting: the job reads `importing` as
@@ -1392,16 +1443,15 @@ impl Jobs {
         approve: bool,
         release: Option<String>,
     ) -> Result<()> {
-        self.claim(id).await?;
+        if let Some(r) = &release {
+            self.check_release(r)?;
+        }
+        let how = How::Match(release);
+        self.claim(id, &how).await?;
         if approve {
             db::set_approved(&self.db, id).await?;
         }
-        let jobs = self.clone();
-        tokio::spawn(async move {
-            if let Err(e) = jobs.import(id, release).await {
-                tracing::warn!(%id, error = %e, "import failed");
-            }
-        });
+        self.import_in_background(id, how);
         Ok(())
     }
 
@@ -1415,7 +1465,7 @@ impl Jobs {
     /// or waiting on a decision, and `remove` is the way to drop it. What
     /// arrived stays, so a retry resumes rather than starts again.
     pub async fn cancel(&self, id: Uuid) -> Result<()> {
-        if !db::move_status(&self.db, id, &["downloading"], "cancelled").await? {
+        if !db::move_status(&self.db, id, &["downloading"], "cancelled", None).await? {
             let job = db::job(&self.db, id).await?.context("no such job")?;
             bail!("job is {}; only a downloading job cancels", job.status);
         }
@@ -1432,6 +1482,7 @@ impl Jobs {
     /// deferred import in particular would otherwise run after it stopped.
     fn forget(&self, id: Uuid) {
         self.deferred.lock().expect("deferred imports").remove(&id);
+        self.deferrals.lock().expect("deferrals").remove(&id);
         self.retried.lock().expect("retried").remove(&id);
         self.stalled.lock().expect("stalled").remove(&id);
         self.places.lock().expect("places").remove(&id);
@@ -1477,12 +1528,13 @@ impl Jobs {
         let search = async |filter: &crate::folders::Filter| -> Result<Vec<Folder>> {
             let responses =
                 crate::graphql::responses(engine, &job.title, SEARCH_WAIT.as_secs()).await?;
-            Ok(
-                crate::folders::relevant(crate::folders::group(&responses, filter), &job.title)
-                    .into_iter()
-                    .filter(|f| f.username != current && !stalled.contains(&f.username))
-                    .collect(),
+            Ok(crate::folders::relevant_complete_first(
+                crate::folders::group(&responses, filter),
+                &job.title,
             )
+            .into_iter()
+            .filter(|f| f.username != current && !stalled.contains(&f.username))
+            .collect())
         };
         // The replacement must be as good a copy as the one it replaces:
         // lossless for lossless, and most of the tracks. A copy that is
@@ -1535,14 +1587,26 @@ impl Jobs {
             "review" | "suspect" => {}
             "failed" if downloaded => {}
             "failed" | "cancelled" => {
-                return match job.source.0 {
-                    Source::Url { url } => {
-                        db::set_status(&self.db, id, "downloading", None).await?;
-                        self.fetch(id, url);
-                        Ok(())
-                    }
-                    _ => self.redownload(&self.session.require()?.clone(), id).await,
+                let engine = match job.source.0 {
+                    Source::Url { .. } => None,
+                    _ => Some(self.session.require()?.clone()),
                 };
+                // Claimed first, in one statement: of two retries at once,
+                // one fetches and the other is refused.
+                if !db::move_status(&self.db, id, &["failed", "cancelled"], "downloading", None)
+                    .await?
+                {
+                    bail!("job is already being retried");
+                }
+                match engine {
+                    Some(engine) => self.redownload(&engine, id).await?,
+                    None => {
+                        if let Source::Url { url } = job.source.0 {
+                            self.fetch(id, url);
+                        }
+                    }
+                }
+                return Ok(());
             }
             s => bail!("job is {s}; only failed, cancelled, review and suspect jobs retry"),
         }
@@ -1557,12 +1621,22 @@ impl Jobs {
                 engine.download(&f.peer, remote, f.size as u64, self.dest(f));
             }
         }
-        db::set_status(&self.db, id, "downloading", None).await?;
         self.wake.notify_one();
         Ok(())
     }
 
     pub async fn remove(&self, id: Uuid) -> Result<()> {
+        // An import put off until MusicBrainz is back is not filing
+        // anything: taken off the waiting list, it can go like any other.
+        if self
+            .deferred
+            .lock()
+            .expect("deferred imports")
+            .remove(&id)
+            .is_some()
+        {
+            db::move_status(&self.db, id, &["importing"], "removing", None).await?;
+        }
         // Its files may be on their way into the library, and deleting the
         // folder then would leave the album half there. One statement takes
         // it out of every state an import can start from, so none starts
@@ -1575,7 +1649,7 @@ impl Jobs {
             "cancelled",
             "imported",
         ];
-        if !db::move_status(&self.db, id, NOT_IMPORTING, "removing").await? {
+        if !db::move_status(&self.db, id, NOT_IMPORTING, "removing", None).await? {
             match db::job(&self.db, id).await? {
                 Some(j) if j.status == "importing" => {
                     bail!("the album is being filed into the library; remove it once that finishes")
@@ -1606,18 +1680,116 @@ impl Jobs {
     }
 }
 
-/// A URL a job may fetch: http or https, with a host.
+/// A URL a job may fetch: http or https, with a host that is not an
+/// address on this machine or its network. A name is checked when the
+/// client made by [`web_client`] resolves it.
 pub(crate) fn check_url(s: &str) -> Result<url::Url> {
     let url = url::Url::parse(s.trim()).context("not a URL")?;
     anyhow::ensure!(
         matches!(url.scheme(), "http" | "https"),
         "only http and https URLs can be fetched"
     );
-    anyhow::ensure!(
-        url.host_str().is_some_and(|h| !h.is_empty()),
-        "the URL names no host"
-    );
+    match url.host() {
+        Some(url::Host::Domain(h)) if !h.is_empty() => {}
+        Some(url::Host::Ipv4(ip)) => ensure_public(ip.into())?,
+        Some(url::Host::Ipv6(ip)) => ensure_public(ip.into())?,
+        _ => bail!("the URL names no host"),
+    }
     Ok(url)
+}
+
+fn ensure_public(ip: std::net::IpAddr) -> Result<()> {
+    anyhow::ensure!(
+        public(ip),
+        "{ip} is not a public address, and only public hosts are fetched from"
+    );
+    Ok(())
+}
+
+/// Whether `ip` is reachable on the internet at large, rather than this
+/// machine, its network or a reserved range. URLs come from callers, and the
+/// internal listener trusts whoever reaches it.
+fn public(ip: std::net::IpAddr) -> bool {
+    use std::net::{IpAddr, Ipv4Addr};
+    let v4 = |ip: Ipv4Addr| {
+        let [a, b, ..] = ip.octets();
+        !(ip.is_unspecified()
+            || ip.is_loopback()
+            || ip.is_private()
+            || ip.is_link_local()
+            || ip.is_broadcast()
+            || ip.is_documentation()
+            || ip.is_multicast()
+            || a == 0
+            || a >= 240
+            || (a == 100 && (64..128).contains(&b))
+            || (a == 192 && b == 0 && ip.octets()[2] == 0)
+            || (a == 198 && (18..20).contains(&b)))
+    };
+    match ip {
+        IpAddr::V4(ip) => v4(ip),
+        IpAddr::V6(ip) => {
+            if let Some(mapped) = ip.to_ipv4_mapped() {
+                return v4(mapped);
+            }
+            let [a, b, ..] = ip.segments();
+            !(ip.is_unspecified()
+                || ip.is_loopback()
+                || ip.is_multicast()
+                || (a & 0xfe00) == 0xfc00
+                || (a & 0xffc0) == 0xfe80
+                || (a == 0x2001 && b == 0x0db8)
+                // Forms that reach an IPv4 address, private or not, through
+                // a relay: NAT64 (well-known and local-use), 6to4, Teredo
+                // and the deprecated IPv4-compatible form.
+                || (a == 0x0064 && b == 0xff9b)
+                || (a == 0x0064 && b == 0xff9b + 1)
+                || a == 0x2002
+                || (a == 0x2001 && b == 0)
+                || ip.segments()[..6] == [0; 6])
+        }
+    }
+}
+
+/// Resolves names as the system does, then drops every address that is not
+/// [`public`]: a name pointing at this machine, whether to begin with or on
+/// a redirect, reaches nothing.
+struct PublicResolver;
+
+impl reqwest::dns::Resolve for PublicResolver {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        let host = name.as_str().to_string();
+        Box::pin(async move {
+            let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host((host.as_str(), 0))
+                .await?
+                .filter(|a| public(a.ip()))
+                .collect();
+            if addrs.is_empty() {
+                return Err(format!("{host} resolves to no public address").into());
+            }
+            Ok(Box::new(addrs.into_iter()) as reqwest::dns::Addrs)
+        })
+    }
+}
+
+/// An HTTP client for URLs a caller names: only public hosts, at every
+/// redirect too.
+/// No proxy: through one, the target is resolved where this cannot check it.
+pub(crate) fn web_client() -> reqwest::ClientBuilder {
+    reqwest::Client::builder()
+        .no_proxy()
+        .user_agent(concat!("slsk-mcp/", env!("CARGO_PKG_VERSION")))
+        .connect_timeout(Duration::from_secs(30))
+        .dns_resolver(Arc::new(PublicResolver))
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            if attempt.previous().len() >= 10 {
+                attempt.error("too many redirects")
+            } else if let Err(e) = check_url(attempt.url().as_str()) {
+                attempt.error(e.to_string())
+            } else {
+                attempt.follow()
+            }
+        }))
 }
 
 /// A URL's host, which is all of it that is logged or shown: download links
@@ -1820,6 +1992,14 @@ mod tests {
             "example.com/a.zip",
             "",
             "https://",
+            "http://127.0.0.1:8081/graphql",
+            "http://[::1]/",
+            "http://10.0.0.5/a.zip",
+            "http://169.254.169.254/latest/meta-data",
+            "http://[::ffff:192.168.1.1]/",
+            "http://0.0.0.0/",
+            "http://100.64.1.1/",
+            "http://[fd00::1]/",
         ] {
             assert!(check_url(bad).is_err(), "{bad} was accepted");
         }
@@ -1827,6 +2007,46 @@ mod tests {
             host("https://p4.bcbits.com/download?token=secret"),
             "p4.bcbits.com"
         );
+    }
+
+    #[test]
+    fn only_public_addresses_are_public() {
+        for ip in ["1.1.1.1", "151.101.1.1", "2606:4700::1111"] {
+            assert!(public(ip.parse().unwrap()), "{ip}");
+        }
+        for ip in [
+            "127.0.0.1",
+            "10.1.2.3",
+            "172.16.0.1",
+            "192.168.0.1",
+            "169.254.1.1",
+            "100.100.0.1",
+            "0.1.2.3",
+            "255.255.255.255",
+            "::1",
+            "::",
+            "fe80::1",
+            "fc00::1",
+            "::ffff:127.0.0.1",
+            "64:ff9b::7f00:1",
+            "64:ff9b:1::a00:1",
+            "2002:7f00:1::",
+            "2001:0:4136:e378::1",
+            "::7f00:1",
+        ] {
+            assert!(!public(ip.parse().unwrap()), "{ip}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_name_for_this_machine_is_not_fetched() {
+        let client = web_client().build().unwrap();
+        let err = client
+            .get("http://localhost:9/")
+            .send()
+            .await
+            .expect_err("localhost was reached");
+        assert!(format!("{err:?}").contains("no public address"), "{err:?}");
     }
 
     #[test]
