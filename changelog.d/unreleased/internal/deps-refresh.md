@@ -1,0 +1,1 @@
+- **Dependencies refreshed.** Every crate moved to its latest compatible release; rusqlite stays on 0.40 because sift-music links the same libsqlite3.
