@@ -645,6 +645,8 @@ struct JobsView {
     more: bool,
     /// Queue places by job id, for those waiting in a peer's queue.
     places: HashMap<String, u32>,
+    /// Whether a Discogs release can be applied as well as a MusicBrainz one.
+    discogs: bool,
 }
 
 impl JobsView {
@@ -914,6 +916,7 @@ async fn jobs_html(app: &App, shown: i64) -> String {
         settled: done.into_iter().map(Settled::from).collect(),
         more,
         places,
+        discogs: app.jobs.discogs(),
     };
     for j in jobs {
         match j.status.as_str() {
@@ -1433,9 +1436,9 @@ async fn resolve(
     Path((id, release)): Path<(Uuid, String)>,
     body: Bytes,
 ) -> Response {
-    if Uuid::parse_str(&release).is_err() {
+    let Some(release) = crate::library::release_id(&release) else {
         return StatusCode::BAD_REQUEST.into_response();
-    }
+    };
     match s.app.jobs.import_soon(id, false, Some(release)).await {
         Ok(()) => done(&s.app, jobs_shown(&body)).await,
         Err(e) => failed(&e),
@@ -1447,26 +1450,19 @@ struct ReleaseForm {
     release: String,
 }
 
-/// A release named by hand, for when MusicBrainz has it but the matcher
-/// did not offer it. Takes the bare ID or a pasted release URL.
+/// A release named by hand, for when MusicBrainz or Discogs has it but the
+/// matcher did not offer it. Takes the bare id or a pasted release link.
 async fn resolve_pasted(
     State(s): State<UiState>,
     Path(id): Path<Uuid>,
     axum::Form(form): axum::Form<ReleaseForm>,
 ) -> Response {
-    let Some(release) = form
-        .release
-        .split(['/', '?', '#'])
-        .find_map(|p| Uuid::parse_str(p.trim()).ok())
-    else {
-        return one(flash_err("That is not a MusicBrainz release ID or URL."));
+    let Some(release) = crate::library::release_id(&form.release) else {
+        return one(flash_err(
+            "That is not a MusicBrainz or Discogs release id or link.",
+        ));
     };
-    match s
-        .app
-        .jobs
-        .import_soon(id, false, Some(release.to_string()))
-        .await
-    {
+    match s.app.jobs.import_soon(id, false, Some(release)).await {
         Ok(()) => done(&s.app, PAGE).await,
         Err(e) => failed(&e),
     }
@@ -1592,18 +1588,24 @@ impl JobCompare {
     }
 }
 
+/// The element a job's comparison with a release fills. Discogs ids hold a
+/// colon, which a selector would read as a pseudo-class.
+pub(crate) fn compare_id(job: impl std::fmt::Display, release: &str) -> String {
+    format!("{job}-{}", release.replace(':', "-"))
+}
+
 async fn job_compare(
     State(s): State<UiState>,
     Path((id, release)): Path<(Uuid, String)>,
 ) -> Response {
-    if Uuid::parse_str(&release).is_err() {
+    let Some(release) = crate::library::release_id(&release) else {
         return StatusCode::BAD_REQUEST.into_response();
-    }
+    };
     let (cmp, error) = match s.app.jobs.compare(id, &release).await {
         Ok(c) => (Some(c), None),
         Err(e) => (None, Some(format!("Couldn't compare: {e:#}"))),
     };
-    let id = format!("{id}-{release}");
+    let id = compare_id(id, &release);
     let html = JobCompare {
         id: id.clone(),
         error,

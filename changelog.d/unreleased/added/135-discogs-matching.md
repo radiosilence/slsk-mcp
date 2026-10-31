@@ -1,0 +1,1 @@
+- **Discogs matching is usable.** `DISCOGS_TOKEN` alone turns it on, without listing the beets plugin. Discogs candidates in review can be used and compared, a Discogs release id or link can be pasted on a job or a library album, candidates link to their own site, and Settings and the `tagger` query say whether Discogs is on.
