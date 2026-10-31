@@ -66,9 +66,9 @@ pub async fn apply_credentials(app: &Arc<App>, headers: &http::HeaderMap) -> Res
 }
 
 impl SlskMcp {
-    pub fn new(app: Arc<App>) -> Self {
+    pub fn new(app: Arc<App>, schema: SlskSchema) -> Self {
         Self {
-            schema: graphql::schema(app.clone()),
+            schema,
             app,
             tool_router: Self::tool_router(),
         }

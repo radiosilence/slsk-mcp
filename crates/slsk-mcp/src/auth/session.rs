@@ -12,10 +12,10 @@ use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use parking_lot::Mutex;
 use rand::Rng as _;
 use rusqlite::{OptionalExtension, params};
 use sha2::{Digest, Sha256};
-use tokio::sync::RwLock;
 
 use crate::db::ts;
 
@@ -42,7 +42,7 @@ pub struct Flow {
 #[derive(Clone)]
 pub struct Sessions {
     db: crate::db::Db,
-    flows: Arc<RwLock<HashMap<String, Flow>>>,
+    flows: Arc<Mutex<HashMap<String, Flow>>>,
 }
 
 fn hash(id: &str) -> Vec<u8> {
@@ -113,7 +113,7 @@ impl Sessions {
         }
     }
 
-    pub async fn begin_flow(&self, verifier: &str, csrf: &str, ttl: Duration) -> String {
+    pub fn begin_flow(&self, verifier: &str, csrf: &str, ttl: Duration) -> String {
         let id = Self::token();
         let flow = Flow {
             verifier: verifier.to_string(),
@@ -123,7 +123,7 @@ impl Sessions {
         // Anyone can start a login, and most never finish one: expired flows
         // go, and past a cap the oldest make room.
         const MAX_FLOWS: usize = 1024;
-        let mut flows = self.flows.write().await;
+        let mut flows = self.flows.lock();
         let now = Instant::now();
         flows.retain(|_, f| f.expires > now);
         while flows.len() >= MAX_FLOWS {
@@ -141,8 +141,8 @@ impl Sessions {
     }
 
     /// One-shot: taking a flow consumes it, so a callback cannot be replayed.
-    pub async fn take_flow(&self, id: &str) -> Option<Flow> {
-        let flow = self.flows.write().await.remove(id)?;
+    pub fn take_flow(&self, id: &str) -> Option<Flow> {
+        let flow = self.flows.lock().remove(id)?;
         (Instant::now() < flow.expires).then_some(flow)
     }
 }
@@ -158,11 +158,9 @@ mod tests {
     #[tokio::test]
     async fn take_flow_returns_once_then_none() {
         let sessions = sessions().await;
-        let id = sessions
-            .begin_flow("verifier", "csrf", Duration::from_secs(60))
-            .await;
-        assert!(sessions.take_flow(&id).await.is_some());
-        assert!(sessions.take_flow(&id).await.is_none());
+        let id = sessions.begin_flow("verifier", "csrf", Duration::from_secs(60));
+        assert!(sessions.take_flow(&id).is_some());
+        assert!(sessions.take_flow(&id).is_none());
     }
 
     #[test]
@@ -170,10 +168,30 @@ mod tests {
         assert_ne!(Sessions::token(), Sessions::token());
     }
 
-    #[test]
-    fn the_stored_key_is_not_the_cookie() {
-        let id = Sessions::token();
-        assert_ne!(hash(&id), id.as_bytes());
-        assert_eq!(hash(&id), hash(&id));
+    #[tokio::test]
+    async fn a_created_session_is_found_and_a_deleted_one_is_not() {
+        let sessions = sessions().await;
+        let id = sessions
+            .create("someone", Duration::from_secs(60))
+            .await
+            .unwrap();
+        assert_eq!(sessions.get(&id).await.unwrap().sub, "someone");
+        assert!(sessions.get("not-a-session").await.is_none());
+        sessions.delete(&id).await;
+        assert!(sessions.get(&id).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn an_expired_session_is_not_found() {
+        let sessions = sessions().await;
+        let id = sessions.create("someone", Duration::ZERO).await.unwrap();
+        assert!(sessions.get(&id).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn an_expired_flow_is_not_taken() {
+        let sessions = sessions().await;
+        let id = sessions.begin_flow("verifier", "csrf", Duration::ZERO);
+        assert!(sessions.take_flow(&id).is_none());
     }
 }

@@ -28,15 +28,16 @@ pub fn authorize_url(oidc: &Oidc, redirect_uri: &str, csrf: &str, challenge: &st
 }
 
 /// A fresh PKCE verifier and its S256 challenge.
-///
-/// Used even though this client holds a secret: it costs one hash and removes
-/// the class of attack where a leaked authorization code is enough on its own.
 pub fn pkce() -> (String, String) {
     let mut bytes = [0u8; 32];
     rand::rng().fill_bytes(&mut bytes);
     let verifier = URL_SAFE_NO_PAD.encode(bytes);
-    let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
+    let challenge = challenge(&verifier);
     (verifier, challenge)
+}
+
+fn challenge(verifier: &str) -> String {
+    URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
 }
 
 #[derive(serde::Deserialize)]
@@ -113,11 +114,24 @@ mod tests {
     use super::*;
     use crate::config::Oidc;
 
+    /// RFC 7636 appendix B: the verifier and challenge Hydra will check against.
     #[test]
-    fn pkce_challenge_is_the_sha256_of_the_verifier() {
-        let (verifier, challenge) = pkce();
-        let expected = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
-        assert_eq!(challenge, expected);
+    fn pkce_challenge_matches_the_rfc_example() {
+        assert_eq!(
+            challenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"),
+            "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+        );
+    }
+
+    #[test]
+    fn pkce_verifier_is_a_valid_rfc_verifier() {
+        let (verifier, _) = pkce();
+        assert!((43..=128).contains(&verifier.len()));
+        assert!(
+            verifier
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "-._~".contains(c))
+        );
     }
 
     #[test]
