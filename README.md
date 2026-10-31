@@ -207,6 +207,24 @@ pick by what the host already runs.
   (`@radiosilence/slsk-mcp-pulumi`, at the image's version): local volumes for
   the library and downloads pinned to the node that holds them, state on the
   node's own disk, a UPnP mapper for the peer port, and a NetworkPolicy confining it.
+- **Windows** — `slsk-mcp-windows-amd64.zip` on each release, built and tested
+  in CI but run by its users rather than the maintainer, so Windows-only
+  problems need a Windows user to reproduce them. See below.
+
+### On Windows
+
+The defaults are Linux paths, so set `LIBRARY_DIR`, `STAGING_DIR`,
+`COMPLETE_DIR` and `STATE_DIR`; unset, `/music` means `\music` on the current
+drive. Bind `UI_ADDR`, `INTERNAL_ADDR` and `METRICS_ADDR` to `127.0.0.1`: a
+native process listens on the LAN once the firewall prompt is allowed, and the
+internal port trusts credential headers. For use on one machine,
+`UI_INSECURE_NO_AUTH=1` with a loopback `UI_ADDR` stands in for OIDC. The
+executable is unsigned, so SmartScreen asks before the first run.
+
+Ctrl-C or closing the console window stops it cleanly. Running it as a
+Windows service, and antivirus holding newly downloaded files open (which
+delays tidying the download directory, not the import), are outside what is
+tested.
 
 Whatever runs it, three things matter:
 
