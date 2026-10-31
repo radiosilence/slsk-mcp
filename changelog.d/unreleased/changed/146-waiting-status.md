@@ -1,0 +1,1 @@
+- **Imports waiting on MusicBrainz or Discogs have their own status.** A job put off by an outage is `waiting` rather than `importing`, can be cancelled or removed, names the service that is down, and keeps its count of tries across a restart.

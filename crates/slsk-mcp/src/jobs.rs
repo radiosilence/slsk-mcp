@@ -1,9 +1,10 @@
 //! Jobs: a folder (usually an album) on its way from a peer into the library.
 //!
 //! downloading → importing → imported, or → review when the tagger cannot
-//! match it confidently, → suspect when its audio looks transcoded, or →
-//! failed. A downloading job can be cancelled, and any job but one being
-//! filed goes through removing on its way out. A folder whose peer fails
+//! match it confidently, → suspect when its audio looks transcoded, →
+//! waiting (and back to importing) while MusicBrainz or Discogs is
+//! unavailable, or → failed. A downloading or waiting job can be cancelled,
+//! and any job but one being filed goes through removing on its way out. A folder whose peer fails
 //! falls back to the next folder that matched the same request before
 //! giving up.
 //!
@@ -57,6 +58,7 @@ pub mod cause {
     pub const LOSSY_SOURCE: &str = "lossy_source";
     pub const UPSAMPLED: &str = "upsampled";
     pub const MB_UNAVAILABLE: &str = "mb_unavailable";
+    pub const DISCOGS_UNAVAILABLE: &str = "discogs_unavailable";
     pub const IMPORT_ERROR: &str = "import_error";
     /// Import as-is refused: the files' tags do not describe one album.
     pub const UNTAGGED: &str = "untagged";
@@ -80,8 +82,8 @@ const LEAVING: &[&str] = &["downloading", "review", "suspect", "failed"];
 /// another source is tried.
 const RETRY_ROUNDS: u32 = 2;
 
-/// How long an import waits for MusicBrainz to come back, and how many times,
-/// before the job fails for a person to retry.
+/// How long an import waits for MusicBrainz or Discogs to come back, and how
+/// many times, before the job fails for a person to retry.
 const DEFER: Duration = Duration::from_secs(300);
 const DEFER_TRIES: u32 = 24;
 
@@ -126,11 +128,6 @@ pub struct Jobs {
     /// Imports touch the library tree; one at a time keeps two albums from
     /// racing for the same destination.
     import_lock: Mutex<()>,
-    /// Imports put off while MusicBrainz is unavailable: when to try again,
-    /// and how.
-    deferred: parking_lot::Mutex<HashMap<Uuid, (tokio::time::Instant, How)>>,
-    /// Times each job's import has been put off, kept while it runs.
-    deferrals: parking_lot::Mutex<HashMap<Uuid, u32>>,
     /// Set once the jobs a previous process left are picked up again.
     resumed: std::sync::atomic::AtomicBool,
     /// Rounds of retrying a job's failed files from the same peer, and when
@@ -178,8 +175,6 @@ impl Jobs {
             spectrograms,
             tagger,
             import_lock: Mutex::new(()),
-            deferred: Default::default(),
-            deferrals: Default::default(),
             resumed: Default::default(),
             retried: Default::default(),
             closing: Default::default(),
@@ -639,21 +634,23 @@ impl Jobs {
         });
     }
 
+    /// Import again the jobs that have waited long enough on a metadata
+    /// service.
+    async fn import_due(self: &Arc<Self>) -> Result<()> {
+        for job in db::due_waiting(&self.db, DEFER.as_secs()).await? {
+            let how = job.import_how.unwrap_or(How::Match(None));
+            if db::claim_import(&self.db, job.id, &["waiting"], &how).await? {
+                self.import_in_background(job.id, how);
+            }
+        }
+        Ok(())
+    }
+
     async fn tick(self: &Arc<Self>) -> Result<()> {
-        let due: Vec<_> = {
-            let mut deferred = self.deferred.lock();
-            let now = tokio::time::Instant::now();
-            let ids: Vec<Uuid> = deferred
-                .iter()
-                .filter(|(_, (at, _))| *at <= now)
-                .map(|(id, _)| *id)
-                .collect();
-            ids.into_iter()
-                .filter_map(|id| deferred.remove(&id).map(|(_, how)| (id, how)))
-                .collect()
-        };
-        for (id, how) in due {
-            self.import_in_background(id, how);
+        // Its own failure is logged rather than returned, so the downloads
+        // below are still followed this tick.
+        if let Err(e) = self.import_due().await {
+            tracing::warn!(error = %e, "could not pick up waiting imports");
         }
         let Some(engine) = self.session.engine().cloned() else {
             return Ok(());
@@ -980,7 +977,6 @@ impl Jobs {
                 .await
                 .unwrap_or_else(|e| Err(anyhow::anyhow!("the import stopped: {e}")));
             if let Err(e) = &outcome {
-                jobs.deferrals.lock().remove(&id);
                 let reason = format!("{e:#}");
                 if let Err(e) =
                     db::move_status(&jobs.db, id, &["importing"], "failed", Some(&reason)).await
@@ -1117,9 +1113,6 @@ impl Jobs {
             Ok(sift::Outcome::Review { .. }) => tracing::info!(%id, "import finished: review"),
             Err(e) => tracing::info!(%id, error = %e, "import finished: not filed"),
         }
-        if !matches!(&outcome, Err(e) if e.is_transient()) {
-            self.deferrals.lock().remove(&id);
-        }
         match outcome {
             Ok(sift::Outcome::Imported { dir: path, log, .. }) => {
                 db::set_import_log(&self.db, id, &log).await?;
@@ -1180,47 +1173,32 @@ impl Jobs {
                 };
                 self.event(&job, "review", Some(c), Some(&reason)).await;
             }
-            // MusicBrainz being busy says nothing about the files, so the job
-            // waits rather than asking a person to retry it.
-            // Within a limit: an outage that outlasts it fails the job for a
-            // person to retry, rather than leave it importing for good.
+            // A metadata service being busy says nothing about the files, so
+            // the job waits rather than asking a person to retry it. Within a
+            // limit: an outage that outlasts it fails the job for a person to
+            // retry, rather than leave it waiting for good.
             Err(e) if e.is_transient() => {
-                let tries = {
-                    let mut deferrals = self.deferrals.lock();
-                    let tries = deferrals.entry(id).or_default();
-                    *tries += 1;
-                    *tries
+                let (service, c) = match &e {
+                    sift::ImportError::Discogs(_) => ("Discogs", cause::DISCOGS_UNAVAILABLE),
+                    _ => ("MusicBrainz", cause::MB_UNAVAILABLE),
                 };
-                if tries > DEFER_TRIES {
-                    self.deferrals.lock().remove(&id);
-                    let reason = format!(
-                        "{e:#}; MusicBrainz stayed unavailable through {DEFER_TRIES} tries: retry it later"
-                    );
-                    db::set_status(&self.db, id, "failed", Some(&reason)).await?;
-                    self.event(&job, "failed", Some(cause::MB_UNAVAILABLE), Some(&reason))
+                let waiting = format!("{e:#}; trying again in {} minutes", DEFER.as_secs() / 60);
+                if db::defer_import(&self.db, id, &waiting, DEFER_TRIES)
+                    .await?
+                    .is_some()
+                {
+                    self.event(&job, "deferred", Some(c), Some(&format!("{e:#}")))
                         .await;
-                    return Ok(());
+                } else {
+                    let reason = format!(
+                        "{e:#}; {service} stayed unavailable through {DEFER_TRIES} tries: retry it later"
+                    );
+                    if db::move_status(&self.db, id, &["importing"], "failed", Some(&reason))
+                        .await?
+                    {
+                        self.event(&job, "failed", Some(c), Some(&reason)).await;
+                    }
                 }
-                db::set_status(
-                    &self.db,
-                    id,
-                    "importing",
-                    Some(&format!(
-                        "{e:#}; trying again in {} minutes",
-                        DEFER.as_secs() / 60
-                    )),
-                )
-                .await?;
-                self.event(
-                    &job,
-                    "deferred",
-                    Some(cause::MB_UNAVAILABLE),
-                    Some(&format!("{e:#}")),
-                )
-                .await;
-                self.deferred
-                    .lock()
-                    .insert(id, (tokio::time::Instant::now() + DEFER, how));
             }
             // Another copy of this album is already filed, in this format's
             // folder. What was asked for is in the library, so the job is
@@ -1466,13 +1444,17 @@ impl Jobs {
             .join(format!("{n:02}.png"))
     }
 
-    /// Stop a download. Only while downloading: a job further on is filed,
-    /// or waiting on a decision, and `remove` is the way to drop it. What
-    /// arrived stays, so a retry resumes rather than starts again.
+    /// Stop a download, or an import waiting on a metadata service. A job
+    /// being filed, or waiting on a decision, is not stopped: `remove` is
+    /// the way to drop it. What arrived stays, so a retry resumes the
+    /// download, or imports again what had already arrived.
     pub async fn cancel(&self, id: Uuid) -> Result<()> {
-        if !db::move_status(&self.db, id, &["downloading"], "cancelled", None).await? {
+        if !db::move_status(&self.db, id, &["downloading", "waiting"], "cancelled", None).await? {
             let job = db::job(&self.db, id).await?.context("no such job")?;
-            bail!("job is {}; only a downloading job cancels", job.status);
+            bail!(
+                "job is {}; only a downloading or waiting job cancels",
+                job.status
+            );
         }
         if let Some(engine) = self.session.engine() {
             for f in db::job_files(&self.db, id).await? {
@@ -1486,11 +1468,8 @@ impl Jobs {
         Ok(())
     }
 
-    /// Drop what this process remembers about a job between ticks: a
-    /// deferred import in particular would otherwise run after it stopped.
+    /// Drop what this process remembers about a job between ticks.
     fn forget(&self, id: Uuid) {
-        self.deferred.lock().remove(&id);
-        self.deferrals.lock().remove(&id);
         self.retried.lock().remove(&id);
         self.stalled.lock().remove(&id);
         self.places.lock().remove(&id);
@@ -1592,7 +1571,9 @@ impl Jobs {
             .unwrap_or(false);
         match job.status.as_str() {
             "review" | "suspect" => {}
-            "failed" if downloaded => {}
+            // A job cancelled while it waited on a metadata service has its
+            // files in complete/ already.
+            "failed" | "cancelled" if downloaded => {}
             "failed" | "cancelled" => {
                 let engine = match job.source.0 {
                     Source::Url { .. } => None,
@@ -1633,17 +1614,13 @@ impl Jobs {
     }
 
     pub async fn remove(&self, id: Uuid) -> Result<()> {
-        // An import put off until MusicBrainz is back is not filing
-        // anything: taken off the waiting list, it can go like any other.
-        if self.deferred.lock().remove(&id).is_some() {
-            db::move_status(&self.db, id, &["importing"], "removing", None).await?;
-        }
         // Its files may be on their way into the library, and deleting the
         // folder then would leave the album half there. One statement takes
         // it out of every state an import can start from, so none starts
         // between the check and the delete.
         const NOT_IMPORTING: &[&str] = &[
             "downloading",
+            "waiting",
             "review",
             "suspect",
             "failed",

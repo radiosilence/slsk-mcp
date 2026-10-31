@@ -548,17 +548,17 @@
     color: var(--bad);
   }
 
-  .pill:is(.warn, .spare, .away), :is(.review, .downloading, .importing, .left) .pill {
+  .pill:is(.warn, .spare, .away), :is(.review, .downloading, .importing, .waiting, .left) .pill {
     background-color: var(--warn);
   }
 
   @supports (color: color-mix(in lab, red, red)) {
-    .pill:is(.warn, .spare, .away), :is(.review, .downloading, .importing, .left) .pill {
+    .pill:is(.warn, .spare, .away), :is(.review, .downloading, .importing, .waiting, .left) .pill {
       background-color: color-mix(in oklab, var(--warn) 20%, transparent);
     }
   }
 
-  .pill:is(.warn, .spare, .away), :is(.review, .downloading, .importing, .left) .pill {
+  .pill:is(.warn, .spare, .away), :is(.review, .downloading, .importing, .waiting, .left) .pill {
     color: var(--warn);
   }
 
@@ -1231,6 +1231,11 @@
     -webkit-text-decoration-color: var(--rule);
     -webkit-text-decoration-color: var(--rule);
     text-decoration-color: var(--rule);
+  }
+
+  .shadow {
+    --tw-shadow: 0 1px 3px 0 var(--tw-shadow-color, #0000001a), 0 1px 2px -1px var(--tw-shadow-color, #0000001a);
+    box-shadow: var(--tw-inset-shadow), var(--tw-inset-ring-shadow), var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow);
   }
 
   .shadow-\[0_-6px_24px_rgba\(0\,0\,0\,\.3\)\] {

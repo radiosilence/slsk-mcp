@@ -307,6 +307,7 @@ fn status_label(status: &str) -> &'static str {
         "review" => "needs a choice",
         "suspect" => "check quality",
         "importing" => "filing",
+        "waiting" => "waiting",
         "downloading" => "downloading",
         "imported" => "in library",
         "failed" => "failed",
@@ -675,7 +676,7 @@ struct Advice {
 struct JobsView {
     /// Waiting on a decision: review, suspect, failed.
     attention: Vec<Job>,
-    /// Downloading or importing.
+    /// Downloading, importing, or waiting on a metadata service.
     underway: Vec<Job>,
     /// Imported, or cancelled by someone: the newest few hundred.
     settled: Vec<Settled>,
@@ -899,7 +900,7 @@ impl JobsView {
             "as-is" => j.status == "review" && self.as_is_blocked(j).is_none(),
             "retry" => j.status == "failed",
             "match" => j.status == "review",
-            "cancel" => j.status == "downloading",
+            "cancel" => matches!(j.status.as_str(), "downloading" | "waiting"),
             _ => false,
         };
         applies && self.advice(j).is_none_or(|a| a.action != action)

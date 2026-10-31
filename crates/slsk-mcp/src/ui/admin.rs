@@ -283,6 +283,7 @@ impl TriageView {
             "lossy_source" => "Lossy audio",
             "upsampled" => "Upsampled audio",
             "mb_unavailable" => "MusicBrainz unavailable",
+            "discogs_unavailable" => "Discogs unavailable",
             "import_error" => "Import error",
             _ => "Other",
         }
