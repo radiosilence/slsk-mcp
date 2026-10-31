@@ -1,1 +1,1 @@
-- **The web UI's cookies are named for this service.** `slsk_session` and `slsk_flow` replace names carried over from another project; existing sessions are not read, so each browser signs in once more.
+- **The web UI's cookies are named for this service.** `__Host-slsk-mcp-session` and `__Host-slsk-mcp-flow` replace names carried over from another project, and the prefix stops a sibling subdomain setting or shadowing them. Every existing session is ended, so each browser signs in once more.
