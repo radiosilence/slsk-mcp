@@ -15,6 +15,7 @@ use uuid::Uuid;
 use crate::App;
 use crate::db::{self, Alternate, Source};
 use crate::folders::{self, Filter, Folder};
+use crate::library::within;
 
 pub type SlskSchema = Schema<Query, Mutation, EmptySubscription>;
 
@@ -127,7 +128,8 @@ pub(crate) struct Job {
     pub id: ID,
     pub title: String,
     /// downloading, importing, imported, review (the tagger could not choose a
-    /// release), suspect (the audio looks transcoded), failed or cancelled.
+    /// release), suspect (the audio looks transcoded), failed, cancelled, or
+    /// removing (on its way out after `removeJob`).
     pub status: String,
     pub error: Option<String>,
     pub username: Option<String>,
@@ -347,14 +349,6 @@ async fn matching_at_most(
         )));
     }
     Ok(albums)
-}
-
-/// A file's path within the album at `dir`.
-fn within(dir: &str, path: &std::path::Path) -> String {
-    path.strip_prefix(dir)
-        .unwrap_or(path)
-        .to_string_lossy()
-        .into_owned()
 }
 
 /// Edits to one library album for `editTracks`: the album at `path`, and
@@ -1102,6 +1096,9 @@ pub(crate) async fn search(
 /// what the network already said.
 const SEARCH_REUSE: Duration = Duration::from_secs(600);
 
+/// The most peers' answers one search keeps.
+const MOST_RESPONSES: usize = 1000;
+
 /// What a search has heard so far.
 #[derive(Clone, Default)]
 pub(crate) struct Heard {
@@ -1218,7 +1215,14 @@ where
             let before = responses.len();
             while open {
                 match tokio::time::timeout_at(tick, rx.recv()).await {
-                    Ok(Some(r)) => responses.push(r),
+                    Ok(Some(r)) => {
+                        responses.push(r);
+                        // Enough to choose from: the rest would only grow
+                        // what every watcher is sent each second.
+                        if responses.len() >= MOST_RESPONSES {
+                            open = false;
+                        }
+                    }
                     Ok(None) => open = false,
                     Err(_) => break,
                 }
@@ -1244,9 +1248,6 @@ where
     heard
 }
 
-/// Search, pick the best relevant folder, keep four fallbacks, start a job.
-/// Without a filter it prefers lossless and settles for lossy only when
-/// there is no lossless copy at all.
 /// Peers holding downloads of ours in their queue while sending none.
 fn stuck_peers(downloads: &[slsk_engine::TransferView]) -> std::collections::HashSet<String> {
     let mut queued = std::collections::HashSet::new();
@@ -1266,6 +1267,9 @@ fn stuck_peers(downloads: &[slsk_engine::TransferView]) -> std::collections::Has
     queued
 }
 
+/// Search, pick the best relevant folder, keep four fallbacks, start a job.
+/// Without a filter it prefers lossless and settles for lossy only when
+/// there is no lossless copy at all.
 pub(crate) async fn grab(
     app: &App,
     query: &str,
@@ -1362,6 +1366,11 @@ impl Mutation {
     ) -> Result<Vec<crate::library::DuplicateSet>> {
         let library = &app(ctx).library;
         if !preview {
+            if query.iter().all(|q| q.trim().is_empty()) {
+                return Err(Error::new(
+                    "give a query; without one this bins every spare in the library",
+                ));
+            }
             return Ok(library.duplicates(&query, true).await?);
         }
         let mut sets = library.duplicates(&query, false).await?;
@@ -1388,27 +1397,31 @@ impl Mutation {
         #[graphql(default)] preview: bool,
     ) -> Result<Vec<crate::library::AlbumMove>> {
         let library = &app(ctx).library;
-        let mut moves = Vec::new();
-        for album in matching_at_most(library, &query).await? {
-            let to = if preview {
-                library
-                    .bin_destination(&album.path)
-                    .map_err(anyhow::Error::msg)
-            } else {
-                library.bin_album(&album.path).await
-            };
-            let (to, refused) = match to {
-                Ok(to) => (Some(to.to_string_lossy().into_owned()), None),
-                Err(e) => (None, Some(e.to_string())),
-            };
-            moves.push(crate::library::AlbumMove {
-                from: album.path,
-                to,
-                refused,
-                files: album.tracks,
-            });
-        }
-        Ok(moves)
+        let albums = matching_at_most(library, &query).await?;
+        let dirs: Vec<&str> = albums.iter().map(|a| a.path.as_str()).collect();
+        let tos = if preview {
+            dirs.iter()
+                .map(|d| library.bin_destination(d).map_err(anyhow::Error::msg))
+                .collect()
+        } else {
+            library.bin_albums(&dirs).await?
+        };
+        Ok(albums
+            .iter()
+            .zip(tos)
+            .map(|(album, to)| {
+                let (to, refused) = match to {
+                    Ok(to) => (Some(to.to_string_lossy().into_owned()), None),
+                    Err(e) => (None, Some(e.to_string())),
+                };
+                crate::library::AlbumMove {
+                    from: album.path.clone(),
+                    to,
+                    refused,
+                    files: album.tracks,
+                }
+            })
+            .collect())
     }
 
     /// Credit each artist on a collaboration (`ARTISTS`, `ALBUMARTISTS` and

@@ -160,9 +160,7 @@ async fn main() -> anyhow::Result<()> {
     jobs.spawn();
     social.spawn();
     uploads_log::spawn(app.clone());
-    if app.session.engine().is_some()
-        && let Err(e) = jobs.resume().await
-    {
+    if let Err(e) = jobs.resume().await {
         tracing::warn!(error = %e, "could not resume jobs");
     }
 

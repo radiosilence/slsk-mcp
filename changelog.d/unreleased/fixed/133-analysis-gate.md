@@ -1,0 +1,1 @@
+- **All-V0 transcodes are caught.** An album most of whose tracks look lossy goes to `suspect` at any confidence, as the album verdict already said, instead of importing clean; a spectrogram that cannot be written no longer fails a good album as damaged.

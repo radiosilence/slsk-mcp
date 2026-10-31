@@ -1,0 +1,1 @@
+- **Jobs resume without a stored account.** Fetches from URLs and imports interrupted by a restart pick up at boot whether or not a Soulseek account is configured, and an import resumes with the release or as-is edits it was given rather than matching afresh.

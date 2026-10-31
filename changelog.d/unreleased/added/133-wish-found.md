@@ -1,0 +1,1 @@
+- **Wishes report what their last search found.** `Wish.found` counts the complete copies the latest search turned up, so a wish that does not grab says when one is there to choose.
