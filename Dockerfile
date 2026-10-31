@@ -10,7 +10,7 @@ ARG TARGETARCH
 # rustls-platform-verifier needs a system trust store on Linux and does not
 # fall back to compiled-in roots; without this, every HTTPS request —
 # MusicBrainz, the Cover Art Archive, the identity provider — fails.
-COPY --from=gcr.io/distroless/static:latest \
+COPY --from=gcr.io/distroless/static:latest@sha256:15f8637509792e05b97d83451b0b6ccfa4abd548f997e406ac1e72c87fe1fa78 \
      /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 
 COPY ${TARGETARCH}/slsk-mcp /slsk-mcp

@@ -331,7 +331,7 @@ jobs:
       - env:
           EVENT: ${{ github.event_name }}
         run: |
-          if [ "$EVENT" = "pull_request" ] && git diff --name-only HEAD^1 HEAD | grep -qx CHANGELOG.md; then
+          if [ "$EVENT" = "pull_request" ] && git diff --name-only HEAD^1 HEAD | grep -x CHANGELOG.md >/dev/null; then
             python3 scripts/changelog.py --check
           else
             python3 scripts/changelog.py --lint
@@ -481,7 +481,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12 -color
+      - run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 -color
 
   # The one status a ruleset should require. Skipped jobs are domains the
   # change does not touch and pass; anything failed or cancelled fails it.

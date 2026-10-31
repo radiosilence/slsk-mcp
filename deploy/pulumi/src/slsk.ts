@@ -20,7 +20,10 @@ const secretRef = (key: string) => ({
   valueFrom: { secretKeyRef: { name: SECRETS_NAME, key } },
 });
 
-/** Keeps a UPnP forward for the peer port on the router. See mariastew's. */
+/**
+ * Keeps a UPnP forward for the peer port on the router, renewed at half the
+ * lease so a router that forgets mappings on reboot gets it back.
+ */
 const PORTMAP = `set -eu
 apk add --no-cache miniupnpc >/dev/null
 lan() { ip -4 route get 1.1.1.1 | awk '{for (i = 1; i < NF; i++) if ($i == "src") print $(i + 1)}'; }
@@ -81,6 +84,10 @@ export function createSlsk(
      * match; without a token it does not.
      */
     discogsToken?: pulumi.Input<string>;
+    /** Pod labels of the ingress controller allowed to reach the UI. Traefik's by default. */
+    ingressPodLabels?: Record<string, string>;
+    /** Where the nodes' addresses lie, so the kubelet's probes are admitted. */
+    nodeCidr?: string;
     /** Pod labels allowed to reach the internal port. */
     gatewayPodLabels?: Record<string, string>;
     /** Pod labels allowed to scrape the metrics port. */
@@ -230,7 +237,12 @@ export function createSlsk(
                 command: [
                   "sh",
                   "-c",
-                  `test -d ${conf.library} && mkdir -p ${state}/data ${downloads}/incomplete ${downloads}/complete && chown 1000:1000 ${state} ${state}/data ${downloads} ${downloads}/incomplete ${downloads}/complete && chmod 700 ${state}/data`,
+                  'test -d "$LIBRARY" && mkdir -p "$STATE/data" "$DOWNLOADS/incomplete" "$DOWNLOADS/complete" && chown 1000:1000 "$STATE" "$STATE/data" "$DOWNLOADS" "$DOWNLOADS/incomplete" "$DOWNLOADS/complete" && chmod 700 "$STATE/data"',
+                ],
+                env: [
+                  { name: "LIBRARY", value: conf.library },
+                  { name: "STATE", value: state },
+                  { name: "DOWNLOADS", value: downloads },
                 ],
                 securityContext: {
                   runAsUser: 0,
@@ -353,7 +365,14 @@ export function createSlsk(
                     { name: "PORT", value: String(conf.listenPort) },
                     { name: "LEASE", value: String(lease) },
                   ],
-                  securityContext: { allowPrivilegeEscalation: false },
+                  // Root only because the script installs miniupnpc as it
+                  // starts; with every capability dropped that is all root
+                  // can do here.
+                  securityContext: {
+                    allowPrivilegeEscalation: false,
+                    capabilities: { drop: ["ALL"] },
+                    seccompProfile: { type: "RuntimeDefault" },
+                  },
                   resources: {
                     requests: { cpu: "5m", memory: "16Mi" },
                     limits: { memory: "128Mi" },
@@ -396,11 +415,12 @@ export function createSlsk(
         podSelector: { matchLabels: { app: NAME } },
         policyTypes: ["Ingress", "Egress"],
         ingress: [
-          // The UI, through Traefik; the node for the kubelet's probes.
+          // The UI, through the ingress controller; the node for the
+          // kubelet's probes.
           {
             from: [
-              { podSelector: { matchLabels: { "app.kubernetes.io/name": "traefik" } } },
-              { ipBlock: { cidr: "192.168.0.0/16" } },
+              { podSelector: { matchLabels: opts.ingressPodLabels ?? { "app.kubernetes.io/name": "traefik" } } },
+              { ipBlock: { cidr: opts.nodeCidr ?? "192.168.0.0/16" } },
             ],
             ports: [{ protocol: "TCP", port: UI_PORT }],
           },
@@ -425,21 +445,9 @@ export function createSlsk(
           },
         ],
         egress: [
-          {
-            to: [
-              {
-                namespaceSelector: {
-                  matchLabels: { "kubernetes.io/metadata.name": "kube-system" },
-                },
-              },
-            ],
-            ports: [
-              { protocol: "UDP", port: 53 },
-              { protocol: "TCP", port: 53 },
-            ],
-          },
-          // The Soulseek network, MusicBrainz and the identity provider are
-          // all public; nothing inside the cluster or the house is.
+          // The Soulseek network, MusicBrainz, the identity provider and the
+          // public resolvers in `dnsConfig` are all public; nothing inside the
+          // cluster or the house is.
           { to: [{ ipBlock: { cidr: "0.0.0.0/0", except: PRIVATE } }] },
         ],
       },
