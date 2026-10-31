@@ -949,7 +949,7 @@ pub async fn claim_import(
 pub async fn defer_import(db: &Db, id: Uuid, error: &str, limit: u32) -> Result<Option<u32>> {
     let error = error.to_string();
     db.run(move |c| {
-        Ok(c.query_row(
+        c.query_row(
             concat!(
                 "UPDATE jobs SET status = 'waiting', error = ?2, defer_tries = defer_tries + 1, updated_at = ",
                 now!(),
@@ -958,7 +958,7 @@ pub async fn defer_import(db: &Db, id: Uuid, error: &str, limit: u32) -> Result<
             params![id, error, limit],
             |r| r.get(0),
         )
-        .optional()?)
+        .optional()
     })
     .await
 }
