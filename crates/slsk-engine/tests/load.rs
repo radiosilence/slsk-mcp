@@ -38,6 +38,8 @@ async fn engine(
     // point here, not abuse to be refused.
     cfg.max_queued_files_per_user = 1_000_000;
     cfg.max_queued_bytes_per_user = u64::MAX;
+    // Every peer here connects from loopback.
+    cfg.max_inbound_per_address = usize::MAX;
     tune(&mut cfg);
     let engine = Engine::start(cfg).await.unwrap();
     let mut status = engine.status();

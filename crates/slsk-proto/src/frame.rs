@@ -62,8 +62,6 @@ pub fn decode(
         return Err(DecodeError::TooLarge(max));
     }
     if buf.len() < 4 + len {
-        // A length is only a claim: grow as bytes arrive, not to it at once.
-        buf.reserve((4 + len - buf.len()).min(64 << 10));
         return Ok(None);
     }
     buf.advance(4);
