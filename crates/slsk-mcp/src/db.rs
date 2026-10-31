@@ -1241,6 +1241,36 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn a_jobs_history_is_in_order_and_outlives_it() {
+        let db = Db::memory().await;
+        let j = job("a", "downloading");
+        insert_job(&db, &j, &[]).await.unwrap();
+        for outcome in ["fallback", "failed"] {
+            record_event(
+                &db,
+                j.id,
+                "a",
+                Some("peer"),
+                outcome,
+                Some("peer_failed"),
+                None,
+            )
+            .await
+            .unwrap();
+        }
+        record_event(&db, Uuid::new_v4(), "b", None, "imported", None, None)
+            .await
+            .unwrap();
+        delete_job(&db, j.id).await.unwrap();
+        let events = job_events(&db, j.id).await.unwrap();
+        let seen: Vec<_> = events
+            .iter()
+            .map(|e| (e.outcome.as_str(), e.peer.as_deref()))
+            .collect();
+        assert_eq!(seen, [("fallback", Some("peer")), ("failed", Some("peer"))]);
+    }
+
     fn job(title: &str, status: &str) -> Job {
         let mut job = Job::new(
             "me".into(),

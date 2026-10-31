@@ -20,6 +20,52 @@ fn only_hashed_asset_urls_are_cached_for_good() {
     assert!(!cache(None).contains("immutable"));
 }
 
+#[test]
+fn a_job_page_is_named_by_its_id_alone() {
+    let id = Uuid::new_v4();
+    assert_eq!(job_of_path(&format!("/jobs/{id}")), Some(id));
+    assert_eq!(job_of_path(&format!("/jobs/{id}/files")), None);
+    assert_eq!(job_of_path("/jobs/nope"), None);
+}
+
+#[test]
+fn sources_link_folders_by_their_bytes_and_skip_unrecorded_counts() {
+    use crate::db::{Alternate, Job as Row, Source};
+    let raw = b"music\\caf\xe9".to_vec();
+    let row = Row::new(
+        "me".into(),
+        "a".into(),
+        Source::Soulseek {
+            username: "peer".into(),
+            folder: String::from_utf8_lossy(&raw).into_owned(),
+            folder_raw: raw.clone(),
+        },
+        vec![
+            Alternate {
+                username: "old".into(),
+                folder: "x".into(),
+                folder_raw: b"x".to_vec(),
+                files: Vec::new(),
+            },
+            Alternate {
+                username: "new".into(),
+                folder: "y".into(),
+                folder_raw: b"y".to_vec(),
+                files: vec![(b"y\\1.flac".to_vec(), 10), (b"y\\2.flac".to_vec(), 5)],
+            },
+        ],
+    );
+    let view = SourcesView::new("t".into(), Some(&row), Vec::new());
+    let current = view.current.as_ref().unwrap();
+    assert_eq!(
+        current.folder.as_ref().unwrap().1,
+        browse_href("peer", &browse::key(&raw))
+    );
+    let found: Vec<_> = view.others.iter().map(|o| o.found).collect();
+    assert_eq!(found, [None, Some((2, 15))]);
+    assert!(view.render().unwrap().contains("2 files · 15 B"));
+}
+
 mod library {
     use axum::extract::Query;
 
