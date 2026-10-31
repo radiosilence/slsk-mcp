@@ -265,8 +265,9 @@ jobs:
   # changes the code. Clippy there sees the code behind `cfg(windows)` and
   # misses the code behind `cfg(unix)`, which the Linux lint covers. Pull
   # requests only, so main's checks, and with them CD and releases, never wait
-  # on a Windows runner. Its cache is saved per pull request, since main never
-  # builds it.
+  # on a Windows runner. It saves no cache: one saved per pull request could
+  # not be read by the next, and would evict main's caches, which the release
+  # builds use.
   windows:
     name: Windows
     runs-on: windows-latest
@@ -285,6 +286,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: windows
+          save-if: false
           cache-on-failure: true
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
@@ -450,9 +452,11 @@ jobs:
           # Long enough to re-run a failed publish weeks later.
           retention-days: ${{ needs.changes.outputs.release == 'true' && 90 || 7 }}
 
-  # The Windows release download, built only by a run that releases, and off
-  # the release's path: `windows-release` attaches it once the release exists,
-  # so a slow or failed Windows build never holds a release up.
+  # The Windows release download, built only by a run that releases (the
+  # release pull request's too, which shows it links before the merge), and
+  # off the release's path: `windows-release` attaches it once the release
+  # exists, so a slow or failed Windows build never holds a release up. No
+  # cache, for the reason given at `windows`.
   windows-build:
     name: Build (windows-amd64)
     runs-on: windows-latest
@@ -469,7 +473,7 @@ jobs:
           toolchain: stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: false
           shared-key: windows-release
           cache-on-failure: true
       - shell: pwsh
@@ -757,7 +761,8 @@ jobs:
           files: artifacts/**/*.tar.gz
 
   # The Windows zip, added to the release `create-release` made. Re-running
-  # this job alone retries it.
+  # the release run's failed jobs retries it; a manual run does not, since the
+  # release already exists. Needs releases to stay mutable.
   windows-release:
     name: Attach the Windows build
     runs-on: ubuntu-latest
