@@ -21,7 +21,7 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::{Notify, oneshot};
 
 use crate::net::READ_CHUNK;
-use crate::{Direction, Error, Inner, Key, TransferView, peers};
+use crate::{Direction, Error, Inner, Key, Metrics, TransferView, peers};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -79,6 +79,14 @@ impl Upload {
         self.state.store(s as u8, Ordering::Release);
     }
 
+    /// Move `from` → `to` only if nothing else (a cancel, a ban) moved it
+    /// first.
+    fn transition(&self, from: UploadState, to: UploadState) -> bool {
+        self.state
+            .compare_exchange(from as u8, to as u8, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
     fn view(&self, place: Option<u32>) -> TransferView {
         let state = self.state();
         TransferView {
@@ -120,13 +128,16 @@ pub(crate) struct Uploads {
     /// Bytes per second of the last completed upload, which is what the
     /// protocol reports as our speed.
     last_speed: AtomicU64,
-    served: Mutex<HashSet<String>>,
+    /// Hashes of the users an upload has completed to, for
+    /// [`Metrics::upload_users`]: eight bytes a user rather than a name.
+    served: Mutex<HashSet<u64>>,
+    metrics: Arc<Metrics>,
 }
 
 const HISTORY: usize = 500;
 
 impl Uploads {
-    pub fn new(slots: usize) -> Self {
+    pub fn new(slots: usize, metrics: Arc<Metrics>) -> Self {
         Self {
             queue: Mutex::new(Queue::default()),
             slots: AtomicUsize::new(slots.max(1)),
@@ -135,7 +146,15 @@ impl Uploads {
             next_id: AtomicU64::new(0),
             last_speed: AtomicU64::new(0),
             served: Mutex::new(HashSet::new()),
+            metrics,
         }
+    }
+
+    fn publish_waiting(&self, q: &Queue) {
+        let waiting: usize = q.by_user.values().map(VecDeque::len).sum();
+        self.metrics
+            .uploads_queued
+            .store(waiting as u64, Ordering::Relaxed);
     }
 
     pub fn set_slots(&self, slots: usize) {
@@ -199,6 +218,7 @@ impl Uploads {
             }
             u.set(UploadState::Cancelled);
             push_history(&mut q.history, u);
+            self.publish_waiting(&q);
             return true;
         }
         false
@@ -213,6 +233,7 @@ impl Uploads {
                 u.set(UploadState::Cancelled);
             }
         }
+        self.publish_waiting(&q);
     }
 
     pub fn views(&self) -> Vec<TransferView> {
@@ -285,12 +306,8 @@ pub(crate) fn enqueue(
     if !q.order.iter().any(|u| u == username) {
         q.order.push_back(username.to_string());
     }
-    let waiting: usize = q.by_user.values().map(VecDeque::len).sum();
+    inner.uploads.publish_waiting(&q);
     drop(q);
-    inner
-        .metrics
-        .uploads_queued
-        .store(waiting as u64, Ordering::Relaxed);
     inner.uploads.wake.notify_one();
     Ok(())
 }
@@ -308,7 +325,9 @@ pub(crate) async fn schedule(inner: Arc<Inner>) {
                 if q.active.len() >= inner.uploads.slots.load(Ordering::Relaxed) {
                     break;
                 }
-                pick(&mut q, &inner.privileged.read())
+                let next = pick(&mut q, &inner.privileged.read());
+                inner.uploads.publish_waiting(&q);
+                next
             };
             let Some(upload) = next else { break };
             tokio::spawn(run(inner.clone(), upload));
@@ -342,21 +361,36 @@ fn pick(q: &mut Queue, privileged: &HashSet<String>) -> Option<Arc<Upload>> {
 }
 
 async fn run(inner: Arc<Inner>, u: Arc<Upload>) {
-    u.set(UploadState::Starting);
+    // Cancelled between being picked and starting: it never goes out.
+    if u.transition(UploadState::Queued, UploadState::Starting) {
+        serve(&inner, &u).await;
+    }
+    let mut q = inner.uploads.queue.lock();
+    if let Some(done) = q.active.remove(&(u.username.clone(), u.filename.0.clone())) {
+        push_history(&mut q.history, done);
+    }
+    drop(q);
+    inner.uploads.wake.notify_one();
+}
+
+async fn serve(inner: &Arc<Inner>, u: &Arc<Upload>) {
     inner.metrics.uploads_active.fetch_add(1, Ordering::Relaxed);
-    let result = send(&inner, &u).await;
+    let result = send(inner, u).await;
     inner.metrics.uploads_active.fetch_sub(1, Ordering::Relaxed);
     match result {
         Ok(speed) => {
-            u.set(UploadState::Completed);
+            u.transition(UploadState::Transferring, UploadState::Completed);
             inner
                 .metrics
                 .uploads_completed
                 .fetch_add(1, Ordering::Relaxed);
             inner.uploads.last_speed.store(speed, Ordering::Relaxed);
             let served = {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::hash::DefaultHasher::new();
+                u.username.to_lowercase().hash(&mut h);
                 let mut s = inner.uploads.served.lock();
-                s.insert(u.username.to_lowercase());
+                s.insert(h.finish());
                 s.len()
             };
             inner
@@ -368,14 +402,13 @@ async fn run(inner: Arc<Inner>, u: Arc<Upload>) {
             });
         }
         Err(e) => {
-            if u.state() != UploadState::Cancelled {
-                u.set(UploadState::Failed);
-            }
+            let failed = u.transition(UploadState::Starting, UploadState::Failed)
+                || u.transition(UploadState::Transferring, UploadState::Failed);
             *u.error.lock() = Some(e.to_string());
             inner.metrics.uploads_failed.fetch_add(1, Ordering::Relaxed);
             // Told whether or not a byte went: a downloader not told waits
             // in a queue we have already left, and never asks again.
-            if u.state() != UploadState::Cancelled {
+            if failed {
                 let frame = PeerMessage::UploadFailed {
                     filename: u.filename.clone(),
                 }
@@ -388,17 +421,6 @@ async fn run(inner: Arc<Inner>, u: Arc<Upload>) {
             }
         }
     }
-    let mut q = inner.uploads.queue.lock();
-    if let Some(done) = q.active.remove(&(u.username.clone(), u.filename.0.clone())) {
-        push_history(&mut q.history, done);
-    }
-    let waiting: usize = q.by_user.values().map(VecDeque::len).sum();
-    drop(q);
-    inner
-        .metrics
-        .uploads_queued
-        .store(waiting as u64, Ordering::Relaxed);
-    inner.uploads.wake.notify_one();
 }
 
 /// Offer the file, open the file connection, stream from the requested
@@ -440,7 +462,9 @@ async fn send(inner: &Arc<Inner>, u: &Upload) -> Result<u64, Error> {
     }
     file.seek(SeekFrom::Start(offset)).await?;
     u.bytes.store(offset, Ordering::Relaxed);
-    u.set(UploadState::Transferring);
+    if !u.transition(UploadState::Starting, UploadState::Transferring) {
+        return Err(std::io::Error::other(reason::CANCELLED).into());
+    }
 
     let started = Instant::now();
     let mut sent = offset;
@@ -515,7 +539,7 @@ mod tests {
 
     #[test]
     fn cancelling_a_users_last_file_leaves_nothing_queued_for_them() {
-        let uploads = Uploads::new(1);
+        let uploads = Uploads::new(1, Arc::default());
         *uploads.queue.lock() = queue(&[("a", "1"), ("b", "1")]);
         assert!(uploads.cancel("a", &"1".into()));
         let q = uploads.queue.lock();
@@ -537,6 +561,26 @@ mod tests {
         );
         q.active.clear();
         assert_eq!(pick(&mut q, &none).unwrap().filename.to_string_lossy(), "2");
+    }
+
+    #[tokio::test]
+    async fn an_upload_cancelled_before_it_starts_never_goes_out() {
+        let (e, _tmp) = crate::offline_engine().await;
+        let inner = &e.0;
+        let u = upload("peer", "f", 0);
+        u.set(UploadState::Cancelled);
+        inner
+            .uploads
+            .queue
+            .lock()
+            .active
+            .insert(("peer".into(), u.filename.0.clone()), u.clone());
+        run(inner.clone(), u.clone()).await;
+        assert_eq!(u.state(), UploadState::Cancelled);
+        assert_eq!(inner.metrics.uploads_failed.load(Ordering::Relaxed), 0);
+        let q = inner.uploads.queue.lock();
+        assert!(q.active.is_empty());
+        assert_eq!(q.history.len(), 1);
     }
 
     #[test]

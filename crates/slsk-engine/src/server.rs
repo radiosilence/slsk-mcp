@@ -2,7 +2,6 @@
 //! reconnect when it drops — unless the server said to stop.
 
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use slsk_proto::CodeWidth;
@@ -68,8 +67,9 @@ enum End {
 
 async fn session(inner: &Arc<Inner>) -> Result<(), End> {
     let io = |e: std::io::Error| End::Io(e.to_string());
-    let addr = lookup_host(&inner.cfg.server)
+    let addr = tokio::time::timeout(Duration::from_secs(20), lookup_host(&inner.cfg.server))
         .await
+        .map_err(|_| End::Io("resolving the server address timed out".into()))?
         .map_err(io)?
         .next()
         .ok_or_else(|| End::Io("server address did not resolve".into()))?;
@@ -80,7 +80,7 @@ async fn session(inner: &Arc<Inner>) -> Result<(), End> {
     );
     let (username, password) = {
         let c = inner.credentials.read();
-        (c.0.clone(), c.1.to_string())
+        (c.0.clone(), c.1.clone())
     };
     use tokio::io::AsyncWriteExt;
     conn.stream
@@ -236,7 +236,6 @@ fn dispatch(inner: &Arc<Inner>, msg: &FromServer) {
             distributed::on_root_search(inner, payload.clone())
         }
         FromServer::ResetDistributed => distributed::reset(inner, true),
-        FromServer::ParentSpeedRatio { ratio } => inner.dist.set_ratio(*ratio),
         FromServer::ExcludedSearchPhrases { phrases } => *inner.excluded.write() = phrases.clone(),
         FromServer::PrivilegedUsers { usernames } => {
             *inner.privileged.write() = usernames.iter().map(|u| u.to_lowercase()).collect();
@@ -250,10 +249,6 @@ fn dispatch(inner: &Arc<Inner>, msg: &FromServer) {
         }
         _ => {}
     }
-    inner
-        .metrics
-        .peer_connections
-        .store(inner.peers.links.len() as u64, Ordering::Relaxed);
 }
 
 /// The length of a ban the server announces: "You have been banned for 30

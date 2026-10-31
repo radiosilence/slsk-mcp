@@ -71,6 +71,8 @@ impl DownloadState {
 const MAX_ATTEMPTS: u32 = 8;
 /// How long a peer that offered a file has to open the connection for it.
 const START_TIMEOUT: Duration = Duration::from_secs(120);
+/// The largest file accepted from a peer, whatever it announces.
+const MAX_FILE_BYTES: u64 = 8 << 30;
 
 pub(crate) struct Download {
     id: u64,
@@ -85,6 +87,12 @@ pub(crate) struct Download {
     attempts: AtomicU32,
     error: Mutex<Option<String>>,
     wake: Notify,
+    /// The token of the peer's current offer, held while `Starting`.
+    token: Mutex<Option<u32>>,
+    /// Whether a `drive` task owns this download.
+    driving: Mutex<bool>,
+    /// Held while a file connection writes the `.part`.
+    receiving: tokio::sync::Mutex<()>,
 }
 
 impl Download {
@@ -109,9 +117,15 @@ impl Download {
         ok
     }
 
-    fn fail(&self, error: impl Into<String>) {
-        *self.error.lock() = Some(error.into());
-        self.set(DownloadState::Failed);
+    fn cancel(&self) -> bool {
+        let mut from = self.state();
+        while !from.is_terminal() {
+            if self.transition(from, DownloadState::Cancelled) {
+                return true;
+            }
+            from = self.state();
+        }
+        false
     }
 
     fn view(&self) -> TransferView {
@@ -172,24 +186,30 @@ impl Downloads {
     }
 
     pub fn cancel(&self, username: &str, filename: &RawStr) -> bool {
-        match self.get(username, filename) {
-            Some(d) if !d.state().is_terminal() => {
-                d.set(DownloadState::Cancelled);
-                true
-            }
-            _ => false,
-        }
+        let Some(d) = self.get(username, filename) else {
+            return false;
+        };
+        let cancelled = d.cancel();
+        self.forget_token(&d);
+        cancelled
     }
 
     pub fn remove(&self, username: &str, filename: &RawStr) -> bool {
         match self.map.remove(&key(username, filename)) {
             Some((_, d)) => {
-                if !d.state().is_terminal() {
-                    d.set(DownloadState::Cancelled);
-                }
+                d.cancel();
+                self.forget_token(&d);
                 true
             }
             None => false,
+        }
+    }
+
+    /// Drop the route from an offer's token to this download.
+    fn forget_token(&self, d: &Download) {
+        if let Some(token) = d.token.lock().take() {
+            self.by_token
+                .remove_if(&token, |_, t| std::ptr::eq(Arc::as_ptr(t), d));
         }
     }
 
@@ -226,6 +246,9 @@ pub(crate) fn add(
         attempts: AtomicU32::new(0),
         error: Mutex::new(None),
         wake: Notify::new(),
+        token: Mutex::new(None),
+        driving: Mutex::new(false),
+        receiving: tokio::sync::Mutex::new(()),
     });
     if let Ok(meta) = std::fs::metadata(d.part()) {
         d.bytes.store(meta.len(), Ordering::Relaxed);
@@ -252,7 +275,47 @@ pub(crate) fn retry(inner: &Arc<Inner>, username: &str, filename: &RawStr) -> bo
     true
 }
 
+/// Count a failed attempt from `from`: back to `Queued`, or `Failed` once
+/// they are spent. Nothing happens if something else moved it first.
+fn attempt_failed(inner: &Inner, d: &Download, from: DownloadState, error: String) -> u32 {
+    if d.state() != from {
+        return 0;
+    }
+    let attempts = d.attempts.fetch_add(1, Ordering::Relaxed) + 1;
+    if attempts >= MAX_ATTEMPTS {
+        fail(inner, d, from, error);
+    } else {
+        inner.downloads.forget_token(d);
+        *d.error.lock() = Some(error);
+        if from != DownloadState::Queued {
+            d.transition(from, DownloadState::Queued);
+        }
+    }
+    attempts
+}
+
+fn fail(inner: &Inner, d: &Download, from: DownloadState, error: String) {
+    inner.downloads.forget_token(d);
+    if d.transition(from, DownloadState::Failed) {
+        *d.error.lock() = Some(error);
+        inner
+            .metrics
+            .downloads_failed
+            .fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// Runs until the download reaches a terminal state. At most one runs per
+/// download: a retry landing while the last one is still winding down hands
+/// the download back to it rather than starting a second.
 async fn drive(inner: Arc<Inner>, d: Arc<Download>) {
+    {
+        let mut driving = d.driving.lock();
+        if *driving {
+            return;
+        }
+        *driving = true;
+    }
     loop {
         match d.state() {
             DownloadState::Queued => {
@@ -272,16 +335,11 @@ async fn drive(inner: Arc<Inner>, d: Arc<Download>) {
                         d.transition(DownloadState::Queued, DownloadState::Remote);
                     }
                     Err(e) => {
-                        let attempts = d.attempts.fetch_add(1, Ordering::Relaxed) + 1;
-                        if attempts >= MAX_ATTEMPTS {
-                            inner
-                                .metrics
-                                .downloads_failed
-                                .fetch_add(1, Ordering::Relaxed);
-                            d.fail(e.to_string());
+                        let attempts =
+                            attempt_failed(&inner, &d, DownloadState::Queued, e.to_string());
+                        if d.state() != DownloadState::Queued {
                             continue;
                         }
-                        *d.error.lock() = Some(e.to_string());
                         let wait = Duration::from_secs(30 * u64::from(attempts))
                             .min(Duration::from_secs(900));
                         tokio::select! {
@@ -311,22 +369,18 @@ async fn drive(inner: Arc<Inner>, d: Arc<Download>) {
                 tokio::select! {
                     _ = d.wake.notified() => {}
                     _ = tokio::time::sleep(START_TIMEOUT) => {
-                        if d.transition(DownloadState::Starting, DownloadState::Queued) {
-                            inner.downloads.by_token.retain(|_, t| !Arc::ptr_eq(t, &d));
-                            let attempts = d.attempts.fetch_add(1, Ordering::Relaxed) + 1;
-                            if attempts >= MAX_ATTEMPTS {
-                                inner
-                                    .metrics
-                                    .downloads_failed
-                                    .fetch_add(1, Ordering::Relaxed);
-                                d.fail("offered and never sent");
-                            }
-                        }
+                        attempt_failed(&inner, &d, DownloadState::Starting, "offered and never sent".into());
                     }
                 }
             }
             DownloadState::Transferring => d.wake.notified().await,
-            _ => return,
+            _ => {
+                let mut driving = d.driving.lock();
+                if d.state().is_terminal() {
+                    *driving = false;
+                    return;
+                }
+            }
         }
     }
 }
@@ -349,12 +403,42 @@ pub(crate) fn on_transfer_request(
     ) {
         return false;
     }
-    if size > 0 {
-        d.size.store(size, Ordering::Relaxed);
+    // The size is what `receive` writes up to, so a peer does not get to
+    // choose it: an offer that disagrees with what was queued, or that is
+    // larger than any album track, fails the download.
+    let queued = d.size.load(Ordering::Relaxed);
+    if size > 0 && queued > 0 && size != queued {
+        fail(
+            inner,
+            &d,
+            from,
+            format!("the peer offered {size} bytes, not the {queued} queued"),
+        );
+        return false;
+    }
+    let size = if size > 0 { size } else { queued };
+    if size > MAX_FILE_BYTES {
+        fail(
+            inner,
+            &d,
+            from,
+            format!("the peer offered {size} bytes, more than the {MAX_FILE_BYTES} allowed"),
+        );
+        return false;
+    }
+    // Held across the transition, so a cancel that lands meanwhile waits to
+    // forget this token rather than missing it.
+    let mut current = d.token.lock();
+    if !d.transition(from, DownloadState::Starting) {
+        return false;
+    }
+    d.size.store(size, Ordering::Relaxed);
+    d.place.store(0, Ordering::Relaxed);
+    if let Some(old) = current.replace(token) {
+        inner.downloads.by_token.remove(&old);
     }
     inner.downloads.by_token.insert(token, d.clone());
-    d.place.store(0, Ordering::Relaxed);
-    d.transition(from, DownloadState::Starting)
+    true
 }
 
 pub(crate) fn on_upload_failed(inner: &Inner, username: &str, filename: &RawStr) {
@@ -364,33 +448,18 @@ pub(crate) fn on_upload_failed(inner: &Inner, username: &str, filename: &RawStr)
         // Counted like any other attempt: a peer that fails the same file
         // every time it reaches it would otherwise be asked forever.
         let from = d.state();
-        if !matches!(from, DownloadState::Starting | DownloadState::Remote) {
-            return;
-        }
-        if d.attempts.fetch_add(1, Ordering::Relaxed) + 1 >= MAX_ATTEMPTS {
-            // Only from where it was: an offer landing meanwhile wins.
-            if d.transition(from, DownloadState::Failed) {
-                *d.error.lock() = Some("the peer failed to send it".into());
-                inner
-                    .metrics
-                    .downloads_failed
-                    .fetch_add(1, Ordering::Relaxed);
-            }
-        } else {
-            d.transition(from, DownloadState::Queued);
+        if matches!(from, DownloadState::Starting | DownloadState::Remote) {
+            attempt_failed(inner, &d, from, "the peer failed to send it".into());
         }
     }
 }
 
 pub(crate) fn on_denied(inner: &Inner, username: &str, filename: &RawStr, reason: String) {
-    if let Some(d) = inner.downloads.get(username, filename)
-        && !d.state().is_terminal()
-    {
-        inner
-            .metrics
-            .downloads_failed
-            .fetch_add(1, Ordering::Relaxed);
-        d.fail(reason);
+    if let Some(d) = inner.downloads.get(username, filename) {
+        let from = d.state();
+        if !from.is_terminal() {
+            fail(inner, &d, from, reason);
+        }
     }
 }
 
@@ -411,6 +480,11 @@ pub(crate) async fn on_file_connection(inner: Arc<Inner>, username: String, mut 
         tracing::debug!(%username, token, "file connection for an unknown transfer");
         return;
     };
+    d.token.lock().take_if(|t| *t == token);
+    // A receive from before a cancel and retry may still be winding down;
+    // it stops at its next read, and two writers to one `.part` would
+    // interleave.
+    let _receiving = d.receiving.lock().await;
     if !d.transition(DownloadState::Starting, DownloadState::Transferring) {
         return;
     }
@@ -432,21 +506,11 @@ pub(crate) async fn on_file_connection(inner: Arc<Inner>, username: String, mut 
                 .fetch_add(1, Ordering::Relaxed);
             d.set(DownloadState::Completed);
         }
-        Err(e) if d.state() == DownloadState::Cancelled => {
-            tracing::debug!(error = %e, "download cancelled")
+        Err(e) if d.state() != DownloadState::Transferring => {
+            tracing::debug!(error = %e, state = d.state().as_str(), "download stopped")
         }
         Err(e) => {
-            let attempts = d.attempts.fetch_add(1, Ordering::Relaxed) + 1;
-            *d.error.lock() = Some(e.to_string());
-            if attempts >= MAX_ATTEMPTS {
-                inner
-                    .metrics
-                    .downloads_failed
-                    .fetch_add(1, Ordering::Relaxed);
-                d.fail(e.to_string());
-            } else {
-                d.transition(DownloadState::Transferring, DownloadState::Queued);
-            }
+            attempt_failed(&inner, &d, DownloadState::Transferring, e.to_string());
         }
     }
 }
@@ -474,8 +538,10 @@ async fn receive(inner: &Inner, d: &Download, mut conn: Conn) -> Result<(), Erro
         .await?;
     let mut offset = file.metadata().await?.len();
     if offset > size {
-        file.set_len(0).await?;
-        offset = 0;
+        return Err(std::io::Error::other(format!(
+            "the partial file holds {offset} bytes, more than the {size} offered"
+        ))
+        .into());
     }
     d.bytes.store(offset, Ordering::Relaxed);
     conn.stream.write_all(&file_offset(offset)).await?;
@@ -544,7 +610,7 @@ async fn receive(inner: &Inner, d: &Download, mut conn: Conn) -> Result<(), Erro
     }
     let mut buf = vec![0u8; READ_CHUNK];
     while offset < size {
-        if d.state() == DownloadState::Cancelled {
+        if d.state() != DownloadState::Transferring {
             file.flush().await?;
             return Err(std::io::Error::other("cancelled").into());
         }
@@ -583,5 +649,66 @@ mod resume_tests {
         assert!(restarted(head, file));
         // Too little arrived to tell: not assumed to be a restart.
         assert!(!restarted(head, &file[..8]));
+    }
+}
+
+#[cfg(test)]
+mod offer_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn an_offer_of_another_size_fails_the_download() {
+        let (e, tmp) = crate::offline_engine().await;
+        let name: RawStr = "m\\a.flac".into();
+        add(&e.0, "peer", name.clone(), 1000, tmp.path().join("a.flac"));
+        assert!(!on_transfer_request(&e.0, "peer", 1, &name, 1001));
+        let view = e.0.downloads.view("peer", &name).unwrap();
+        assert_eq!(view.state, "failed", "{view:?}");
+        assert!(e.0.downloads.by_token.is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_offer_past_the_cap_fails_the_download() {
+        let (e, tmp) = crate::offline_engine().await;
+        let name: RawStr = "m\\a.flac".into();
+        add(&e.0, "peer", name.clone(), 0, tmp.path().join("a.flac"));
+        assert!(!on_transfer_request(
+            &e.0,
+            "peer",
+            1,
+            &name,
+            MAX_FILE_BYTES + 1
+        ));
+        assert_eq!(e.0.downloads.view("peer", &name).unwrap().state, "failed");
+    }
+
+    #[tokio::test]
+    async fn offers_leave_no_tokens_behind() {
+        let (e, tmp) = crate::offline_engine().await;
+        let inner = &e.0;
+        let name: RawStr = "m\\a.flac".into();
+        add(inner, "peer", name.clone(), 1000, tmp.path().join("a.flac"));
+        let tokens = || {
+            let mut t: Vec<u32> = inner.downloads.by_token.iter().map(|e| *e.key()).collect();
+            t.sort_unstable();
+            t
+        };
+
+        assert!(on_transfer_request(inner, "peer", 1, &name, 1000));
+        assert!(on_transfer_request(inner, "peer", 2, &name, 1000));
+        assert_eq!(tokens(), [2], "a second offer replaces the first");
+
+        on_upload_failed(inner, "peer", &name);
+        assert_eq!(inner.downloads.view("peer", &name).unwrap().state, "queued");
+        assert!(tokens().is_empty());
+
+        assert!(on_transfer_request(inner, "peer", 3, &name, 1000));
+        assert!(inner.downloads.cancel("peer", &name));
+        assert!(tokens().is_empty());
+
+        assert!(retry(inner, "peer", &name));
+        assert!(on_transfer_request(inner, "peer", 4, &name, 1000));
+        assert!(inner.downloads.remove("peer", &name));
+        assert!(tokens().is_empty());
     }
 }

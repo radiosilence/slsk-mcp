@@ -12,7 +12,7 @@
 
 use std::net::{SocketAddr, SocketAddrV4};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -22,7 +22,7 @@ use slsk_proto::peer::{DistribMessage, PeerInit};
 use slsk_proto::server::{PossibleParent, ToServer};
 use slsk_proto::{CodeWidth, ConnKind};
 use tokio::io::AsyncWriteExt;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 use crate::net::{self, Conn};
 use crate::{Inner, peers};
@@ -35,36 +35,21 @@ struct Child {
     tx: mpsc::Sender<Bytes>,
 }
 
+#[derive(Default)]
 pub(crate) struct Dist {
     /// The adopted parent's username and connection id.
     parent: Mutex<Option<(String, u64)>>,
     level: AtomicI32,
     root: Mutex<String>,
     children: DashMap<String, Child>,
-    max_children: AtomicUsize,
-    ratio: AtomicU32,
     candidates: DashMap<String, u64>,
     next_id: AtomicU64,
+    /// Bumped by every reset; the tasks reading parents and children from
+    /// before it stop.
+    generation: watch::Sender<u64>,
 }
 
 impl Dist {
-    pub fn new(max_children: usize) -> Self {
-        Self {
-            parent: Mutex::new(None),
-            level: AtomicI32::new(0),
-            root: Mutex::new(String::new()),
-            children: DashMap::new(),
-            max_children: AtomicUsize::new(max_children),
-            ratio: AtomicU32::new(0),
-            candidates: DashMap::new(),
-            next_id: AtomicU64::new(0),
-        }
-    }
-
-    pub fn set_ratio(&self, ratio: u32) {
-        self.ratio.store(ratio, Ordering::Relaxed);
-    }
-
     pub fn summary(&self) -> (Option<String>, i32, String, usize) {
         (
             self.parent.lock().as_ref().map(|p| p.0.clone()),
@@ -107,6 +92,7 @@ impl Dist {
 /// `announce` is false when the server connection is already gone.
 pub(crate) fn reset(inner: &Inner, announce: bool) {
     let own = inner.username();
+    inner.dist.generation.send_modify(|g| *g += 1);
     inner.dist.parent.lock().take();
     inner.dist.candidates.clear();
     inner.dist.children.clear();
@@ -134,6 +120,7 @@ pub(crate) fn on_possible_parents(inner: &Arc<Inner>, parents: &[PossibleParent]
         }
         let id = inner.dist.next_id.fetch_add(1, Ordering::Relaxed);
         inner.dist.candidates.insert(p.username.clone(), id);
+        let reset = inner.dist.generation.subscribe();
         let inner = inner.clone();
         let p = p.clone();
         tokio::spawn(async move {
@@ -162,8 +149,10 @@ pub(crate) fn on_possible_parents(inner: &Arc<Inner>, parents: &[PossibleParent]
                     .ok(),
             };
             match conn {
-                Some(conn) => run_parent(inner, p.username, id, conn).await,
-                None => {
+                Some(conn) if !reset.has_changed().unwrap_or(true) => {
+                    run_parent(inner, p.username, id, conn, reset).await
+                }
+                _ => {
                     inner
                         .dist
                         .candidates
@@ -176,17 +165,25 @@ pub(crate) fn on_possible_parents(inner: &Arc<Inner>, parents: &[PossibleParent]
 
 /// A candidate parent. It becomes our parent if it is the first to send a
 /// search after telling us its position; the rest are dropped.
-async fn run_parent(inner: Arc<Inner>, username: String, id: u64, conn: Conn) {
+async fn run_parent(
+    inner: Arc<Inner>,
+    username: String,
+    id: u64,
+    conn: Conn,
+    mut reset: watch::Receiver<u64>,
+) {
     let (mut reader, _writer) = conn.split();
     let mut position: (Option<i32>, Option<String>) = (None, None);
     let is_parent = |inner: &Inner| inner.dist.parent.lock().as_ref().is_some_and(|p| p.1 == id);
     loop {
-        let frame = match tokio::time::timeout(
-            Duration::from_secs(600),
-            reader.frame(CodeWidth::U8, MAX_DIST_FRAME),
-        )
-        .await
-        {
+        let frame = tokio::select! {
+            f = tokio::time::timeout(
+                Duration::from_secs(600),
+                reader.frame(CodeWidth::U8, MAX_DIST_FRAME),
+            ) => f,
+            _ = reset.changed() => break,
+        };
+        let frame = match frame {
             Ok(Ok(Some(f))) => f,
             _ => break,
         };
@@ -318,9 +315,7 @@ fn forward(inner: &Inner, raw: &Bytes) {
 
 /// A peer wants us as its parent.
 pub(crate) fn on_child(inner: Arc<Inner>, username: String, conn: Conn) {
-    if !inner.cfg.accept_children
-        || inner.dist.children.len() >= inner.dist.max_children.load(Ordering::Relaxed)
-    {
+    if !inner.cfg.accept_children || inner.dist.children.len() >= inner.cfg.max_children {
         return;
     }
     let (mut reader, writer) = conn.split();
@@ -330,6 +325,7 @@ pub(crate) fn on_child(inner: Arc<Inner>, username: String, conn: Conn) {
     }
     net::spawn_writer(writer, rx);
     let id = inner.dist.next_id.fetch_add(1, Ordering::Relaxed);
+    let mut reset = inner.dist.generation.subscribe();
     inner
         .dist
         .children
@@ -341,7 +337,16 @@ pub(crate) fn on_child(inner: Arc<Inner>, username: String, conn: Conn) {
     tokio::spawn(async move {
         // Children only send pings and obsolete depth reports. Reading keeps
         // the socket drained and tells us when they leave.
-        while let Ok(Some(_)) = reader.frame(CodeWidth::U8, MAX_DIST_FRAME).await {}
+        loop {
+            tokio::select! {
+                f = reader.frame(CodeWidth::U8, MAX_DIST_FRAME) => {
+                    if !matches!(f, Ok(Some(_))) {
+                        break;
+                    }
+                }
+                _ = reset.changed() => break,
+            }
+        }
         inner.dist.children.remove_if(&username, |_, c| c.id == id);
         inner
             .metrics
