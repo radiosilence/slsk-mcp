@@ -26,7 +26,7 @@ use crate::session::Session;
 
 /// The open wish searched least recently.
 pub(crate) const NEXT_WISH: &str =
-    "SELECT id, query, lossless, grab, searched_at, job_id FROM wishes
+    "SELECT id, query, lossless, grab, searched_at, job_id, found FROM wishes
              WHERE account = ?1 AND job_id IS NULL ORDER BY searched_at NULLS FIRST LIMIT 1";
 
 /// Unread messages for an account.
@@ -74,7 +74,7 @@ pub struct Social {
     statuses: DashMap<String, (UserStatus, bool)>,
     /// Seconds between wishlist searches, as the server sets it.
     wishlist_interval: AtomicU64,
-    nonces: Mutex<HashMap<String, (u64, Instant)>>,
+    nonces: Nonces,
     /// When each peer's anti-bot challenge was last answered.
     answered: Mutex<HashMap<String, Instant>>,
 }
@@ -121,7 +121,7 @@ impl Social {
             room_list: RwLock::new(Vec::new()),
             statuses: DashMap::new(),
             wishlist_interval: AtomicU64::new(720),
-            nonces: Mutex::new(HashMap::new()),
+            nonces: Nonces::default(),
             answered: Mutex::new(HashMap::new()),
         })
     }
@@ -174,7 +174,10 @@ impl Social {
                         .collect::<db::Result<Vec<String>>>()
                 })
                 .await
-                .unwrap_or_default()
+                .unwrap_or_else(|e| {
+                    tracing::warn!(error = %e, "could not read the rooms to rejoin");
+                    Vec::new()
+                })
         };
         for room in rooms {
             let _ = engine.send(ToServer::JoinRoom {
@@ -193,7 +196,10 @@ impl Social {
                     .collect::<db::Result<Vec<(String, bool)>>>()
             })
             .await
-            .unwrap_or_default();
+            .unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "could not read the interests to send");
+                Vec::new()
+            });
         for (item, liked) in interests {
             let _ = engine.send(if liked {
                 ToServer::AddThingILike { item }
@@ -209,7 +215,7 @@ impl Social {
                 username, message, ..
             } => {
                 let (account, peer, body) = (engine.username(), username.clone(), message.clone());
-                let _ = self
+                if let Err(e) = self
                     .db
                     .run(move |c| {
                         c.execute(
@@ -217,7 +223,10 @@ impl Social {
                             params![account, peer, body],
                         )
                     })
-                    .await;
+                    .await
+                {
+                    tracing::warn!(peer = %username, error = %e, "could not keep a private message");
+                }
                 self.answer_challenge(engine, username, message).await;
             }
             FromServer::SayChatroom {
@@ -283,29 +292,11 @@ impl Social {
     /// while. Messages go to people; an assistant shows the user what it is
     /// about to say before it says it.
     pub fn preview(&self, kind: &str, target: &str, body: &str) -> String {
-        let token = Uuid::new_v4().to_string();
-        let mut nonces = self.nonces.lock();
-        nonces.retain(|_, (_, at)| at.elapsed() < NONCE_TTL);
-        nonces.insert(
-            token.clone(),
-            (fingerprint(kind, target, body), Instant::now()),
-        );
-        token
+        self.nonces.preview(kind, target, body)
     }
 
     fn confirm(&self, token: &str, kind: &str, target: &str, body: &str) -> Result<()> {
-        let (print, at) = self
-            .nonces
-            .lock()
-            .remove(token)
-            .context("unknown or used confirmation token: run PREVIEW again")?;
-        if at.elapsed() > NONCE_TTL {
-            bail!("confirmation token expired: run PREVIEW again");
-        }
-        if print != fingerprint(kind, target, body) {
-            bail!("the message changed between PREVIEW and CONFIRM: run PREVIEW again");
-        }
-        Ok(())
+        self.nonces.confirm(token, kind, target, body)
     }
 
     /// Answer a peer's anti-bot check ("type "ABBCCC" in this chat") so the
@@ -706,7 +697,7 @@ impl Social {
         Ok(self
             .db
             .run(move |c| {
-                c.prepare_cached("SELECT id, query, lossless, grab, searched_at, job_id FROM wishes WHERE account = ?1 ORDER BY created_at")?
+                c.prepare_cached("SELECT id, query, lossless, grab, searched_at, job_id, found FROM wishes WHERE account = ?1 ORDER BY created_at")?
                     .query_map(params![account], Wish::from_row)?
                     .collect()
             })
@@ -772,6 +763,15 @@ impl Social {
             &wish.query,
         );
         tracing::info!(query = %wish.query, folders = found.len(), "wishlist search");
+        let count = found.len() as i64;
+        self.db
+            .run(move |c| {
+                c.execute(
+                    "UPDATE wishes SET found = ?2 WHERE id = ?1",
+                    params![id, count],
+                )
+            })
+            .await?;
         if wish.grab {
             let mut found = found.into_iter();
             if let Some(best) = found.next() {
@@ -805,6 +805,10 @@ pub struct Wish {
     pub searched_at: Option<chrono::DateTime<chrono::Utc>>,
     /// The job it became, once found.
     pub job_id: Option<Uuid>,
+    /// Complete copies its latest search found, none until it has searched.
+    /// A wish that does not grab keeps searching; this is how it says one
+    /// has turned up, for `search` to choose from.
+    pub found: Option<i64>,
 }
 
 impl Wish {
@@ -819,7 +823,41 @@ impl Wish {
                 .map(|s| db::ts_from(&s))
                 .transpose()?,
             job_id: r.get("job_id")?,
+            found: r.get("found")?,
         })
+    }
+}
+
+/// Confirmation tokens for messages previewed and not yet sent: each names
+/// one message, to one target, and is good once.
+#[derive(Default)]
+struct Nonces(Mutex<HashMap<String, (u64, Instant)>>);
+
+impl Nonces {
+    fn preview(&self, kind: &str, target: &str, body: &str) -> String {
+        let token = Uuid::new_v4().to_string();
+        let mut nonces = self.0.lock();
+        nonces.retain(|_, (_, at)| at.elapsed() < NONCE_TTL);
+        nonces.insert(
+            token.clone(),
+            (fingerprint(kind, target, body), Instant::now()),
+        );
+        token
+    }
+
+    fn confirm(&self, token: &str, kind: &str, target: &str, body: &str) -> Result<()> {
+        let (print, at) = self
+            .0
+            .lock()
+            .remove(token)
+            .context("unknown or used confirmation token: run PREVIEW again")?;
+        if at.elapsed() > NONCE_TTL {
+            bail!("confirmation token expired: run PREVIEW again");
+        }
+        if print != fingerprint(kind, target, body) {
+            bail!("the message changed between PREVIEW and CONFIRM: run PREVIEW again");
+        }
+        Ok(())
     }
 }
 
@@ -867,21 +905,16 @@ mod tests {
 
     #[test]
     fn a_confirmation_matches_only_what_was_previewed_and_only_once() {
-        let nonces: Mutex<HashMap<String, (u64, Instant)>> = Mutex::new(HashMap::new());
-        let token = "t".to_string();
-        nonces.lock().insert(
-            token.clone(),
-            (fingerprint("pm", "bob", "hi"), Instant::now()),
-        );
-        assert_ne!(
-            fingerprint("pm", "bob", "hi"),
-            fingerprint("pm", "bob", "hi!")
-        );
-        assert_ne!(
-            fingerprint("pm", "bob", "hi"),
-            fingerprint("room", "bob", "hi")
-        );
-        assert!(nonces.lock().remove(&token).is_some());
-        assert!(nonces.lock().remove(&token).is_none());
+        let nonces = Nonces::default();
+        let token = nonces.preview("pm", "bob", "hi");
+        assert!(nonces.confirm(&token, "pm", "bob", "hi!").is_err());
+        let token = nonces.preview("pm", "bob", "hi");
+        assert!(nonces.confirm(&token, "room", "bob", "hi").is_err());
+        let token = nonces.preview("pm", "bob", "hi");
+        assert!(nonces.confirm(&token, "pm", "alice", "hi").is_err());
+        let token = nonces.preview("pm", "bob", "hi");
+        nonces.confirm(&token, "pm", "bob", "hi").unwrap();
+        assert!(nonces.confirm(&token, "pm", "bob", "hi").is_err());
+        assert!(nonces.confirm("made-up", "pm", "bob", "hi").is_err());
     }
 }
