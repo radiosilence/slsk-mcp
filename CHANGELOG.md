@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.0
+
+### Added
+
+- **Windows.** Each release attaches `slsk-mcp-windows-amd64.zip`, and CI builds and tests on Windows so it keeps compiling. File names a peer sends are now made safe for Windows on every platform; before this, a name with a drive prefix such as `C:x.flac` could be written outside the job's download directory on Windows. The container is still the supported deployment; the README lists what Windows needs.
+
 ## 0.9.3
 
 ### Added
