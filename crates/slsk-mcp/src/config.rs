@@ -1,8 +1,7 @@
 //! Everything read from the environment, once, at boot.
 //!
 //! A missing or malformed value fails startup rather than the request that
-//! first needs it. `DISCOGS_TOKEN` is not read here: sift reads it from the
-//! environment when the beets config enables the discogs plugin.
+//! first needs it.
 
 use std::path::PathBuf;
 
@@ -42,6 +41,9 @@ pub struct Config {
     pub download_limit: u64,
     /// 0 for unlimited; see `EngineConfig::searches_per_hour`.
     pub searches_per_hour: usize,
+    /// See `EngineConfig::max_inbound_connections`.
+    pub max_inbound_connections: usize,
+    pub max_inbound_per_address: usize,
     /// MCP, GraphQL and metrics. Trusts credential headers, so it must only
     /// be reachable from the gateway and the metrics scraper.
     pub internal_addr: String,
@@ -54,6 +56,7 @@ pub struct Config {
     pub oidc: Option<Oidc>,
     /// Merged over the built-in beets config.
     pub beets_config: Option<PathBuf>,
+    pub discogs_token: Option<String>,
     pub description: String,
 }
 
@@ -136,6 +139,8 @@ impl Config {
             upload_limit: num("UPLOAD_LIMIT", 0)?,
             download_limit: num("DOWNLOAD_LIMIT", 0)?,
             searches_per_hour: num("SEARCHES_PER_HOUR", 200)?,
+            max_inbound_connections: num("MAX_INBOUND_CONNECTIONS", 512)?,
+            max_inbound_per_address: num("MAX_INBOUND_PER_ADDRESS", 32)?,
             internal_addr: or("INTERNAL_ADDR", "0.0.0.0:8081"),
             metrics_addr: or("METRICS_ADDR", "0.0.0.0:9464"),
             ui_addr,
@@ -144,6 +149,7 @@ impl Config {
                 .to_string(),
             oidc,
             beets_config: opt("BEETS_CONFIG").map(PathBuf::from),
+            discogs_token: opt("DISCOGS_TOKEN"),
             description: or(
                 "DESCRIPTION",
                 concat!(

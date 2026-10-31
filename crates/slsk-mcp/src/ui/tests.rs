@@ -23,7 +23,7 @@ fn only_hashed_asset_urls_are_cached_for_good() {
 mod library {
     use axum::extract::Query;
 
-    use crate::library::{AlbumMove, by_path};
+    use crate::library::{AlbumMove, by_path, release_id};
     use crate::ui::library::*;
 
     #[test]
@@ -420,8 +420,33 @@ mod library {
             release_id(&format!("https://musicbrainz.org/recording/{id}")),
             None
         );
-        assert_eq!(release_id("discogs:123").as_deref(), Some("discogs:123"));
         assert_eq!(release_id("monster"), None);
+    }
+
+    #[test]
+    fn a_discogs_release_is_its_id_or_a_link_to_it() {
+        let ok = Some("discogs:123");
+        assert_eq!(release_id(" discogs:123 ").as_deref(), ok);
+        assert_eq!(
+            release_id("https://www.discogs.com/release/123-Artist-Album").as_deref(),
+            ok
+        );
+        assert_eq!(
+            release_id("https://www.discogs.com/fr/release/123-Artist-Album?ev=rr").as_deref(),
+            ok
+        );
+        assert_eq!(release_id("discogs.com/release/123").as_deref(), ok);
+        assert_eq!(
+            release_id("https://www.discogs.com/Artist-Album/release/123").as_deref(),
+            ok
+        );
+        assert_eq!(
+            release_id("https://www.discogs.com/master/123-Artist-Album"),
+            None
+        );
+        assert_eq!(release_id("discogs:12a"), None);
+        assert_eq!(release_id("discogs:"), None);
+        assert_eq!(release_id("https://musicbrainz.org/release/123"), None);
     }
 
     #[test]

@@ -59,6 +59,12 @@ pub struct EngineConfig {
     /// Concurrent outgoing search responses. Beyond this, requests are
     /// dropped rather than queued: a search answered a minute late is noise.
     pub max_search_responders: usize,
+    /// Inbound peer connections open at once, and from any one address.
+    /// Anyone can connect and claim any name, so these bound what strangers
+    /// can hold open; a host behind a proxy that hides peers' addresses
+    /// needs the per-address limit raised.
+    pub max_inbound_connections: usize,
+    pub max_inbound_per_address: usize,
     pub max_queued_files_per_user: usize,
     pub max_queued_bytes_per_user: u64,
     /// Searches allowed in any rolling hour, 0 for unlimited. Each one is
@@ -85,6 +91,8 @@ impl EngineConfig {
             max_children: 10,
             max_search_results: 300,
             max_search_responders: 64,
+            max_inbound_connections: 512,
+            max_inbound_per_address: 32,
             max_queued_files_per_user: 2000,
             max_queued_bytes_per_user: 50 << 30,
             searches_per_hour: 200,
@@ -543,61 +551,60 @@ impl Engine {
     }
 
     pub async fn browse(&self, username: &str) -> Result<Vec<Directory>> {
+        let _forget = Defer::new(|| forget_closed(&self.0.browse_waiters, username));
         let (tx, rx) = oneshot::channel();
         self.0
             .browse_waiters
             .entry(username.to_string())
             .or_default()
             .push(tx);
-        let result = async {
+        async {
             peers::send(&self.0, username, PeerMessage::GetSharedFileList.encode()).await?;
             tokio::time::timeout(Duration::from_secs(180), rx)
                 .await
                 .map_err(|_| Error::TimedOut)?
                 .map_err(|_| Error::TimedOut)
         }
-        .await;
-        forget_closed(&self.0.browse_waiters, username);
-        result
+        .await
     }
 
     pub async fn folder_contents(&self, username: &str, folder: &RawStr) -> Result<Vec<Directory>> {
         let token = self.0.next_token();
+        let _forget = Defer::new(|| {
+            self.0.folder_waiters.remove(&token);
+        });
         let (tx, rx) = oneshot::channel();
         self.0.folder_waiters.insert(token, tx);
         let msg = PeerMessage::FolderContentsRequest {
             token,
             folder: folder.clone(),
         };
-        let result = async {
+        async {
             peers::send(&self.0, username, msg.encode()).await?;
             tokio::time::timeout(Duration::from_secs(60), rx)
                 .await
                 .map_err(|_| Error::TimedOut)?
                 .map_err(|_| Error::TimedOut)
         }
-        .await;
-        self.0.folder_waiters.remove(&token);
-        result
+        .await
     }
 
     pub async fn user_info(&self, username: &str) -> Result<UserInfo> {
+        let _forget = Defer::new(|| forget_closed(&self.0.info_waiters, username));
         let (tx, rx) = oneshot::channel();
         self.0
             .info_waiters
             .entry(username.to_string())
             .or_default()
             .push(tx);
-        let result = async {
+        async {
             peers::send(&self.0, username, PeerMessage::UserInfoRequest.encode()).await?;
             tokio::time::timeout(Duration::from_secs(60), rx)
                 .await
                 .map_err(|_| Error::TimedOut)?
                 .map_err(|_| Error::TimedOut)
         }
-        .await;
-        forget_closed(&self.0.info_waiters, username);
-        result
+        .await
     }
 
     /// Queue a download. `dest` is the final path; data lands beside it as
@@ -646,6 +653,24 @@ pub(crate) fn forget_closed<T>(waiters: &DashMap<String, Vec<oneshot::Sender<T>>
         w.retain(|tx| !tx.is_closed());
     }
     waiters.remove_if(username, |_, w| w.is_empty());
+}
+
+/// Runs its closure when dropped, so cleanup after an await also happens
+/// when the caller gives up and drops the future part way.
+pub(crate) struct Defer<F: FnOnce()>(Option<F>);
+
+impl<F: FnOnce()> Defer<F> {
+    pub(crate) fn new(f: F) -> Self {
+        Self(Some(f))
+    }
+}
+
+impl<F: FnOnce()> Drop for Defer<F> {
+    fn drop(&mut self) {
+        if let Some(f) = self.0.take() {
+            f();
+        }
+    }
 }
 
 #[cfg(test)]

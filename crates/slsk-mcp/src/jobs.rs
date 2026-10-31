@@ -1358,8 +1358,24 @@ impl Jobs {
         Ok(self.tagger.tracks(&self.files_dir(id).await?).await?)
     }
 
+    /// Whether the tagger consults Discogs, and so can apply a `discogs:`
+    /// release.
+    pub fn discogs(&self) -> bool {
+        self.tagger.cfg.discogs.is_some()
+    }
+
+    /// Refuses a `discogs:` release when Discogs is off, before anything
+    /// starts, for every path that applies or compares a named release.
+    pub fn check_release(&self, release: &str) -> Result<()> {
+        if release.starts_with("discogs:") && !self.discogs() {
+            bail!("Discogs is not enabled; it needs DISCOGS_TOKEN set");
+        }
+        Ok(())
+    }
+
     /// The job's files against one release, track by track.
     pub async fn compare(&self, id: Uuid, release: &str) -> Result<sift::Comparison> {
+        self.check_release(release)?;
         Ok(self
             .tagger
             .compare(&self.files_dir(id).await?, release)
@@ -1378,8 +1394,9 @@ impl Jobs {
         Ok(())
     }
 
-    /// Import a job as the given MusicBrainz release, waiting for the outcome.
+    /// Import a job as the given release, waiting for the outcome.
     pub async fn resolve(self: &Arc<Self>, id: Uuid, release: String) -> Result<()> {
+        self.check_release(&release)?;
         self.claim(id).await?;
         self.import(id, Some(release)).await
     }
@@ -1392,6 +1409,9 @@ impl Jobs {
         approve: bool,
         release: Option<String>,
     ) -> Result<()> {
+        if let Some(r) = &release {
+            self.check_release(r)?;
+        }
         self.claim(id).await?;
         if approve {
             db::set_approved(&self.db, id).await?;

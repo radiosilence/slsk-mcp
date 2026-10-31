@@ -112,6 +112,7 @@ struct SettingsView {
     folders: usize,
     files: usize,
     interests: Vec<(String, bool)>,
+    discogs: bool,
 }
 
 impl SettingsView {
@@ -137,6 +138,7 @@ async fn settings_html(app: &App) -> String {
                 folders,
                 files,
                 interests: app.social.interests().await.unwrap_or_default(),
+                discogs: app.jobs.discogs(),
             }
         }
         None => SettingsView {
@@ -147,6 +149,7 @@ async fn settings_html(app: &App) -> String {
             folders: 0,
             files: 0,
             interests: Vec::new(),
+            discogs: app.jobs.discogs(),
         },
     };
     view.render().unwrap_or_default()
