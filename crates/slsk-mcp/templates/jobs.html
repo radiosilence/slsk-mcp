@@ -5,7 +5,7 @@
       <span class="pill">{{ self.label(j.status) }}</span>
     </div>
     <div class="text-meta text-muted wrap-anywhere">
-      {% match self.asked(j) %}{% when Some with (q) %}asked for “{{ q }}” · {% when None %}{% endmatch %}{% match j.username %}{% when Some with (u) %}from {{ u }}{% when None %}{% match j.host %}{% when Some with (h) %}from {{ h }}{% when None %}{% endmatch %}{% endmatch %}
+      {% match self.asked(j) %}{% when Some with (q) %}asked for “{{ q }}” · {% when None %}{% endmatch %}{% match j.username %}{% when Some with (u) %}from <a class="wrap-anywhere" href="{{ crate::ui::profile_href(u) }}">{{ u }}</a>{% when None %}{% match j.host %}{% when Some with (h) %}from {{ h }}{% when None %}{% endmatch %}{% endmatch %}
       {% if j.status == "downloading" %} · {{ self.progress(j) }}{% endif %}
       {% if j.status == "importing" %} · tagging and filing{% endif %}
     </div>

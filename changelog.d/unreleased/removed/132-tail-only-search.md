@@ -1,0 +1,1 @@
+- **Searches of only `*tail` terms match nothing.** Answering one meant reading every word in the share index for each such search the network relays.

@@ -456,10 +456,11 @@ fn on_message(inner: &Arc<Inner>, username: &str, msg: PeerMessage, reply: &mpsc
         }
         PeerMessage::UserInfoRequest => {
             let (queued, free) = inner.uploads.queue_summary();
+            let profile = inner.profile.read().clone();
             respond(
                 PeerMessage::UserInfoResponse(slsk_proto::peer::UserInfo {
-                    description: inner.cfg.description.clone(),
-                    picture: None,
+                    description: profile.description,
+                    picture: profile.picture,
                     total_uploads: inner.metrics.uploads_completed.load(Ordering::Relaxed) as u32,
                     queue_size: queued as u32,
                     slots_free: free,

@@ -5,6 +5,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use slsk_engine::slsk_proto::RawStr;
 use slsk_engine::{Engine, EngineConfig, Status};
 use slsk_testserver::TestServer;
 
@@ -16,11 +17,9 @@ fn free_port() -> u16 {
         .port()
 }
 
-async fn server() -> Option<TestServer> {
-    Some(TestServer::start().await)
-}
-
-async fn engine(server: &TestServer, name: &str, shares: Vec<PathBuf>, state: &Path) -> Engine {
+/// An engine logged in to `server`, with its own state directory under
+/// `tmp`.
+async fn engine(server: &TestServer, name: &str, shares: Vec<PathBuf>, tmp: &Path) -> Engine {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .with_test_writer()
@@ -29,7 +28,9 @@ async fn engine(server: &TestServer, name: &str, shares: Vec<PathBuf>, state: &P
     cfg.server = server.address();
     cfg.listen_port = 0;
     cfg.share_dirs = shares;
-    cfg.state_dir = state.to_path_buf();
+    let state = tmp.join(format!("state-{name}"));
+    std::fs::create_dir_all(&state).unwrap();
+    cfg.state_dir = state;
     let engine = Engine::start(cfg).await.unwrap();
     let mut status = engine.status();
     tokio::time::timeout(
@@ -53,6 +54,18 @@ fn album(root: &Path) -> Vec<u8> {
     data
 }
 
+async fn wait_completed(e: &Engine, user: &str, file: &RawStr) {
+    for _ in 0..200 {
+        let view = e.download_view(user, file).unwrap();
+        if view.state == "completed" {
+            return;
+        }
+        assert_ne!(view.state, "failed", "{view:?}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("never completed: {:?}", e.download_view(user, file));
+}
+
 async fn wait_for_shares(e: &Engine, files: usize) {
     for _ in 0..100 {
         if e.share_counts().1 >= files {
@@ -65,7 +78,7 @@ async fn wait_for_shares(e: &Engine, files: usize) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn two_engines_search_and_download() {
-    let Some(server) = server().await else { return };
+    let server = TestServer::start().await;
     let tmp = tempfile::tempdir().unwrap();
     let music = tmp.path().join("music");
     let data = album(&music);
@@ -89,14 +102,7 @@ async fn two_engines_search_and_download() {
 
     let dest = tmp.path().join("downloads/01.flac");
     bob.download("alice", file.name.clone(), file.size, dest.clone());
-    for _ in 0..200 {
-        let view = bob.download_view("alice", &file.name).unwrap();
-        if view.state == "completed" {
-            break;
-        }
-        assert_ne!(view.state, "failed", "{view:?}");
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    wait_completed(&bob, "alice", &file.name).await;
     assert_eq!(std::fs::read(&dest).unwrap(), data);
     let uploads = alice.uploads();
     assert_eq!(uploads.len(), 1);
@@ -118,8 +124,27 @@ async fn two_engines_search_and_download() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_partial_download_resumes() {
+async fn a_profile_set_at_runtime_is_what_peers_see() {
     let Some(server) = server().await else { return };
+    let tmp = tempfile::tempdir().unwrap();
+    let alice = engine(&server, "alice", vec![], tmp.path()).await;
+    let bob = engine(&server, "bob", vec![], tmp.path()).await;
+    let picture = bytes::Bytes::from_static(b"\x89PNG\r\n\x1a\nnot really");
+    alice.set_profile(slsk_engine::Profile {
+        description: "dub techno, mostly".into(),
+        picture: Some(picture.clone()),
+    });
+    let info = tokio::time::timeout(Duration::from_secs(10), bob.user_info("alice"))
+        .await
+        .expect("no user info")
+        .unwrap();
+    assert_eq!(info.description, "dub techno, mostly");
+    assert_eq!(info.picture, Some(picture));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_partial_download_resumes() {
+    let server = TestServer::start().await;
     let tmp = tempfile::tempdir().unwrap();
     let music = tmp.path().join("music");
     let data = album(&music);
@@ -130,15 +155,9 @@ async fn a_partial_download_resumes() {
     let dest = tmp.path().join("dl/01.flac");
     std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
     std::fs::write(tmp.path().join("dl/01.flac.part"), &data[..1_000_000]).unwrap();
-    let name: slsk_engine::slsk_proto::RawStr =
-        "music\\Boards of Canada\\Geogaddi\\01 Ready Lets Go.flac".into();
+    let name: RawStr = "music\\Boards of Canada\\Geogaddi\\01 Ready Lets Go.flac".into();
     bob.download("alice", name.clone(), data.len() as u64, dest.clone());
-    for _ in 0..200 {
-        if bob.download_view("alice", &name).unwrap().state == "completed" {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    wait_completed(&bob, "alice", &name).await;
     assert_eq!(std::fs::read(&dest).unwrap(), data);
     let sent = alice
         .metrics()
@@ -152,8 +171,34 @@ async fn a_partial_download_resumes() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn an_offer_of_another_size_is_refused() {
+    let server = TestServer::start().await;
+    let tmp = tempfile::tempdir().unwrap();
+    let music = tmp.path().join("music");
+    let data = album(&music);
+    let alice = engine(&server, "alice", vec![music], tmp.path()).await;
+    wait_for_shares(&alice, 2).await;
+    let bob = engine(&server, "bob", vec![], tmp.path()).await;
+
+    let dest = tmp.path().join("dl/01.flac");
+    let name: RawStr = "music\\Boards of Canada\\Geogaddi\\01 Ready Lets Go.flac".into();
+    bob.download("alice", name.clone(), data.len() as u64 + 1, dest.clone());
+    for _ in 0..200 {
+        let view = bob.download_view("alice", &name).unwrap();
+        if view.state == "failed" {
+            assert!(view.error.unwrap().contains("bytes"));
+            assert!(!dest.exists());
+            return;
+        }
+        assert_ne!(view.state, "completed");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("the download was not refused");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_second_login_displaces_the_first() {
-    let Some(server) = server().await else { return };
+    let server = TestServer::start().await;
     let tmp = tempfile::tempdir().unwrap();
     let first = engine(&server, "carol", vec![], tmp.path()).await;
     let _second = engine(&server, "carol", vec![], tmp.path()).await;
@@ -171,7 +216,7 @@ async fn a_second_login_displaces_the_first() {
 /// it must find and download our files, and we must download theirs.
 #[tokio::test(flavor = "multi_thread")]
 async fn interoperates_with_soulseek_rs() {
-    let Some(server) = server().await else { return };
+    let server = TestServer::start().await;
     let tmp = tempfile::tempdir().unwrap();
     let music = tmp.path().join("music");
     let data = album(&music);
@@ -241,21 +286,14 @@ async fn interoperates_with_soulseek_rs() {
     let file = response.files[0].clone();
     let dest = tmp.path().join("ours/gantz.flac");
     alice.download("dave", file.name.clone(), file.size, dest.clone());
-    for _ in 0..200 {
-        let v = alice.download_view("dave", &file.name).unwrap();
-        if v.state == "completed" {
-            break;
-        }
-        assert_ne!(v.state, "failed", "{v:?}");
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    wait_completed(&alice, "dave", &file.name).await;
     assert_eq!(std::fs::read(&dest).unwrap(), &data[..500_000]);
     drop(client);
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn searches_past_the_hours_budget_are_refused() {
-    let server = server().await.unwrap();
+    let server = TestServer::start().await;
     let state = tempfile::tempdir().unwrap();
     let mut cfg = EngineConfig::new("rationed", "hunter2");
     cfg.server = server.address();
@@ -313,7 +351,7 @@ async fn stranger(engine: &Engine) -> tokio::net::TcpStream {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_peer_announcing_an_oversized_message_is_dropped() {
     use tokio::io::AsyncWriteExt;
-    let server = server().await.unwrap();
+    let server = TestServer::start().await;
     let tmp = tempfile::tempdir().unwrap();
     let engine = engine(&server, "guarded", Vec::new(), tmp.path()).await;
     // A search response, and a share list nobody asked for, each claiming
@@ -332,7 +370,7 @@ async fn a_peer_announcing_an_oversized_message_is_dropped() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn inbound_connections_are_capped_per_address() {
-    let server = server().await.unwrap();
+    let server = TestServer::start().await;
     let state = tempfile::tempdir().unwrap();
     let mut cfg = EngineConfig::new("crowded", "hunter2");
     cfg.server = server.address();
@@ -353,7 +391,7 @@ async fn inbound_connections_are_capped_per_address() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_stranger_claiming_a_name_is_not_taken_for_that_user() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let server = server().await.unwrap();
+    let server = TestServer::start().await;
     let tmp = tempfile::tempdir().unwrap();
     let engine = engine(&server, "asker", Vec::new(), tmp.path()).await;
     // "ghost" is not logged in, so the server places them nowhere and this

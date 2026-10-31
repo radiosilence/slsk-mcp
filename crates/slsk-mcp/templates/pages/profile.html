@@ -1,0 +1,12 @@
+<div class="grid min-w-0 gap-3 *:min-w-0">
+  <form class="flex flex-wrap items-center gap-2" action="/profile" method="get">
+    <input class="basis-full" name="username" value="{{ username }}" placeholder="Username, or empty for your own" autocomplete="off" autocapitalize="off">
+    <button class="flex-auto" type="submit">View profile</button>
+  </form>
+  {% if !signed_in %}
+  <div id="profile"><p class="text-meta text-muted">Sign in to Soulseek first.</p></div>
+  {% else %}
+  {# A peer takes a while to answer, so their profile follows the page. #}
+  <div id="profile" data-init="@get(location.pathname + location.search)"><p class="text-meta text-muted">{% if username.is_empty() %}Loading your profile…{% else %}Asking {{ username }} for their profile…{% endif %}</p></div>
+  {% endif %}
+</div>

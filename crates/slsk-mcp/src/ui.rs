@@ -38,6 +38,7 @@ mod admin;
 mod browse;
 mod chat;
 mod library;
+mod profile;
 #[cfg(test)]
 mod tests;
 mod wishlist;
@@ -53,6 +54,7 @@ pub struct UiState {
     /// Album art previewed and not yet applied.
     art: library::ArtStash,
     browsed: browse::Cache,
+    profiles: profile::Cache,
 }
 
 const CSP: &str = "default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self'; img-src 'self' data:; \
@@ -67,6 +69,7 @@ pub fn router(app: Arc<App>) -> Router {
         run: Default::default(),
         art: Default::default(),
         browsed: Default::default(),
+        profiles: Default::default(),
     };
     let protected = Router::new()
         // Drawn whole by `pages`; nothing fetches a fragment of them.
@@ -90,6 +93,7 @@ pub fn router(app: Arc<App>) -> Router {
         .merge(wishlist::routes())
         .merge(library::routes())
         .merge(browse::routes())
+        .merge(profile::routes())
         .merge(chat::routes())
         .merge(admin::routes())
         .layer(axum::middleware::from_fn(require_datastar_on_post))
@@ -133,10 +137,15 @@ const DATASTAR_JS: &str = include_str!("../assets/datastar.js");
 /// new build fetches its own stylesheet and script rather than a cached copy
 /// of the previous build's.
 fn versioned(path: &str, body: &str) -> String {
-    let hash = body.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
-        (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+    format!("{path}?v={}", fingerprint(body.as_bytes()))
+}
+
+/// A short hash of `bytes` (FNV-1a) for an address that changes with them.
+fn fingerprint(bytes: &[u8]) -> String {
+    let hash = bytes.iter().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
+        (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3)
     });
-    format!("{path}?v={hash:016x}")
+    format!("{hash:016x}")
 }
 
 static CSS_URL: LazyLock<String> = LazyLock::new(|| versioned("/assets/app.css", APP_CSS));
@@ -334,6 +343,7 @@ const PAGES: &[(&str, &str, &str)] = &[
     ("library", "/library", "Library"),
     ("browse", "/browse", "Browse"),
     ("chat", "/chat", "Chat"),
+    ("profile", "/profile", "Profile"),
     ("bans", "/bans", "Bans"),
     ("settings", "/settings", "Settings"),
     ("triage", "/triage", "Triage"),
@@ -429,6 +439,11 @@ fn browse_href(username: &str, key: &str) -> String {
     place_url("/browse", &[("username", username), ("key", key)])
 }
 
+/// A user's profile; this account's own when `username` is empty.
+fn profile_href(username: &str) -> String {
+    place_url("/profile", &[("username", username)])
+}
+
 /// A conversation: `kind` is `room` or `pm`.
 fn chat_href(kind: &str, name: &str) -> String {
     place_url("/chat", &[("kind", kind), ("name", name)])
@@ -520,6 +535,7 @@ async fn render_page(
         "library" => library::page(s, &filter),
         "browse" => browse::page(s, &query::<browse::BrowseQuery>(uri).username),
         "chat" => chat::page(&s.app, &query(uri)).await,
+        "profile" => profile::page(s, &query::<profile::ProfileQuery>(uri).username),
         "bans" => admin::bans_page(&s.app).await,
         "settings" => admin::settings_page(&s.app).await,
         _ => admin::triage_page(&s.app, &query(uri)).await,
