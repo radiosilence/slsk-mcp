@@ -7,6 +7,7 @@
     {% match self.asked(j) %}{% when Some with (q) %}asked for “{{ q }}” · {% when None %}{% endmatch %}{% match j.username %}{% when Some with (u) %}from <a class="wrap-anywhere" href="{{ crate::ui::profile_href(u) }}">{{ u }}</a>{% when None %}{% match j.host %}{% when Some with (h) %}from {{ h }}{% when None %}{% endmatch %}{% endmatch %}
     {% if j.status == "downloading" %} · {{ self.progress(j) }}{% endif %}
     {% if j.status == "importing" %} · tagging and filing{% endif %}
+    {% if let Some(href) = self.filed(j) %} · <a href="{{ href }}">in the library</a>{% endif %}
   </div>
   {% if j.status == "downloading" %}<progress max="100" value="{{ self.pct(j) }}">{{ self.pct(j) }}%</progress>{% endif %}
   {% if (full || !warn) && !j.files.is_empty() %}{% let open = self.open_sig(j) %}
@@ -82,6 +83,7 @@
     {% if self.offer(j, "cancel") %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/cancel')">Cancel</button>{% endif %}
     <span class="flex-1 max-sm:hidden"></span>
     {% if self.offer(j, "match") %}<button class="quiet" data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/retry')">Match again</button>{% endif %}
-    {% if j.status != "importing" %}<button class="quiet" data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="confirm('Remove this album and delete its downloaded files?') && @post('/jobs/{{ j.id.as_str() }}/remove')">Remove</button>{% endif %}
+    {% if j.status == "imported" %}<button class="quiet" data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/remove')" title="Forget this entry; the album stays in the library">Clear</button>
+    {% else if j.status != "importing" %}<button class="quiet" data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="confirm('Remove this album and delete its downloaded files?') && @post('/jobs/{{ j.id.as_str() }}/remove')">Remove</button>{% endif %}
   </div>
 </article>

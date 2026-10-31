@@ -751,6 +751,17 @@ struct CardView {
 }
 
 impl CardView {
+    /// The album's page in the library, once the job filed it.
+    fn filed(&self, j: &Job) -> Option<String> {
+        j.library_path.as_ref().map(|path| {
+            library::Filter {
+                album: path.clone(),
+                ..Default::default()
+            }
+            .url()
+        })
+    }
+
     fn verdict(&self, t: &crate::analysis::TrackAnalysis) -> &'static str {
         use crate::analysis::Verdict as V;
         match t.verdict {
@@ -955,7 +966,7 @@ impl CardView {
                 matches!(j.status.as_str(), "review" | "suspect" | "failed") && j.alternates > 0
             }
             "as-is" => j.status == "review" && self.as_is_blocked(j).is_none(),
-            "retry" => j.status == "failed",
+            "retry" => matches!(j.status.as_str(), "failed" | "cancelled"),
             "match" => j.status == "review",
             "cancel" => matches!(j.status.as_str(), "downloading" | "waiting"),
             _ => false,
@@ -982,7 +993,8 @@ impl CardView {
     }
 }
 
-fn card(app: &App, j: Job, warn: bool, full: bool) -> CardView {
+fn card(app: &App, j: Job, full: bool) -> CardView {
+    let warn = matches!(j.status.as_str(), "review" | "suspect" | "failed");
     let place = Uuid::parse_str(j.id.as_str())
         .ok()
         .and_then(|id| app.jobs.place(id));
@@ -1019,9 +1031,8 @@ async fn jobs_html(app: &App, shown: i64) -> String {
         more,
     };
     for j in jobs {
-        let warn = matches!(j.status.as_str(), "review" | "suspect" | "failed");
-        let card = card(app, j, warn, false);
-        if warn {
+        let card = card(app, j, false);
+        if card.warn {
             view.attention.push(card);
         } else {
             view.underway.push(card);
@@ -1151,9 +1162,8 @@ async fn job_page(app: &App, id: Uuid) -> anyhow::Result<Option<(String, String)
             let view = graphql::job_view(app, job, true)
                 .await
                 .map_err(|e| anyhow::anyhow!("{}", e.message))?;
-            let warn = matches!(view.status.as_str(), "review" | "suspect" | "failed");
             let import_log = view.import_log.clone().filter(|l| !l.trim().is_empty());
-            let card = card(app, view, warn, true);
+            let card = card(app, view, true);
             (card.heading(&card.j), Some(card), import_log)
         }
         None => (
