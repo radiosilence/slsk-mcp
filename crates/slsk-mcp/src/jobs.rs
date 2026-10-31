@@ -1388,6 +1388,10 @@ impl Jobs {
         self.tagger.cfg.discogs.is_some()
     }
 
+    pub fn acoustid(&self) -> bool {
+        self.tagger.cfg.acoustid_client.is_some()
+    }
+
     /// Refuses a `discogs:` release when Discogs is off, before anything
     /// starts, for every path that applies or compares a named release.
     pub fn check_release(&self, release: &str) -> Result<()> {

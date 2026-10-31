@@ -85,6 +85,12 @@ export function createSlsk(
      * beets config change is needed. Without it only MusicBrainz is used.
      */
     discogsToken?: pulumi.Input<string>;
+    /**
+     * An AcoustID application key, registered at
+     * acoustid.org/new-application. With it the importer identifies folders
+     * no release matches strongly by fingerprinting their audio.
+     */
+    acoustidClient?: pulumi.Input<string>;
     /** Pod labels of the ingress controller allowed to reach the UI. Traefik's by default. */
     ingressPodLabels?: Record<string, string>;
     /**
@@ -169,6 +175,9 @@ export function createSlsk(
         }),
         ...(opts.discogsToken && {
           "discogs-token": pulumi.output(opts.discogsToken),
+        }),
+        ...(opts.acoustidClient && {
+          "acoustid-client": pulumi.output(opts.acoustidClient),
         }),
       },
     },
@@ -312,6 +321,9 @@ export function createSlsk(
                     : []),
                   ...(opts.discogsToken
                     ? [{ name: "DISCOGS_TOKEN", ...secretRef("discogs-token") }]
+                    : []),
+                  ...(opts.acoustidClient
+                    ? [{ name: "ACOUSTID_CLIENT", ...secretRef("acoustid-client") }]
                     : []),
                 ],
                 readinessProbe: {

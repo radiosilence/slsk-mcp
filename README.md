@@ -93,6 +93,14 @@ no strong match, and the two compete on distance: a close Discogs release is
 applied without review, and otherwise its releases are offered beside
 MusicBrainz's. The token alone turns this on; the service adds beets'
 `discogs` plugin itself, since nobody setting a token means it to go unused.
+
+### AcoustID
+
+Some downloads arrive untagged or tagged too loosely for any release to match
+strongly. With `ACOUSTID_CLIENT` set to an AcoustID application key (registered
+at acoustid.org/new-application), sift fingerprints such a folder's audio, looks
+the recordings up on AcoustID, and scores the releases they appear on with what
+the audio says. As with Discogs, the key alone turns this on.
 Discogs releases carry the id `discogs:<number>`, and a job in review, a
 library re-tag, `resolveJob`, `compareRelease` and `reimportAlbums` take that
 or a link to the release page. Settings in the web UI and the `tagger` query
@@ -297,6 +305,7 @@ startup.
 | `DESCRIPTION` | names the client as automated | The user info other peers see, until a description is saved from the Profile tab. The default says this is an automated client that shares back, so sharers can decide for themselves. |
 | `BEETS_CONFIG` | — | A beets `config.yaml` for the importer's template and replacements. |
 | `DISCOGS_TOKEN` | — | A Discogs personal access token; consults Discogs when MusicBrainz has no strong match (see Discogs above). |
+| `ACOUSTID_CLIENT` | — | An AcoustID application key; identifies folders no release matches strongly by their audio (see AcoustID above). |
 | `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | — | Required for the UI. `UI_INSECURE_NO_AUTH=1` disables sign-in and is only accepted with a loopback `UI_ADDR`. |
 | `UI_ADDR`, `INTERNAL_ADDR`, `METRICS_ADDR`, `PUBLIC_URL` | `0.0.0.0:8080`, `0.0.0.0:8081`, `0.0.0.0:9464` | |
 
