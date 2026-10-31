@@ -276,9 +276,6 @@ pub fn inflate(data: &[u8], limit: usize) -> Result<Bytes> {
     if read > limit {
         return Err(DecodeError::TooLarge(limit));
     }
-    // Strings decoded from it are slices of it, and some are kept for hours:
-    // the growth slack would be kept with them.
-    out.shrink_to_fit();
     Ok(Bytes::from(out))
 }
 

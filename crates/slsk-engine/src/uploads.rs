@@ -179,6 +179,15 @@ impl Uploads {
         Some((rounds_ahead * q.order.len() + users_ahead + 1) as u32)
     }
 
+    /// Whether `username`'s `filename` finished, failed or was cancelled
+    /// lately: asked about again, it is not queued again.
+    pub fn settled(&self, username: &str, filename: &RawStr) -> bool {
+        let q = self.queue.lock();
+        q.history
+            .iter()
+            .any(|u| u.username == username && &u.filename == filename)
+    }
+
     pub fn on_response(&self, token: u32, allowed: bool, reason: Option<String>) {
         if let Some((_, tx)) = self.responses.remove(&token) {
             let _ = tx.send((allowed, reason));
@@ -403,7 +412,9 @@ async fn run(inner: Arc<Inner>, u: Arc<Upload>) {
             // Each of a gone peer's queued files would otherwise hold a slot
             // through its own lookup and connection timeouts, one after
             // another, for up to the whole queue. They ask again once back.
-            if matches!(e, Error::Offline(_) | Error::Unreachable(_)) {
+            // Offline only: the server says so. Unreachable can be a link
+            // that dropped for a moment, and the queue is not told.
+            if matches!(e, Error::Offline(_)) {
                 inner.uploads.drop_queue(&u.username);
             }
             if u.state() != UploadState::Cancelled {

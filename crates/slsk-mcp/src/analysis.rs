@@ -232,7 +232,11 @@ fn decode(path: &Path) -> Result<Option<Decoded>> {
     let mut bit_mask = 0u32;
     let mut interleaved: Vec<i32> = Vec::new();
     let mut columns: Vec<Vec<f32>> = Vec::new();
-    let mut analysed = 0usize;
+    // How much of the track each column stands for, relative to the first
+    // step, and the sum of it: columns taken after the step doubles count
+    // for more, so the average is over time, not over columns.
+    let mut scale = 1f64;
+    let mut weight = 0f64;
     let mut mean_power = vec![0f64; FFT / 2];
     let mut buf = vec![Complex32::default(); FFT];
 
@@ -277,12 +281,12 @@ fn decode(path: &Path) -> Result<Option<Decoded>> {
                 .enumerate()
                 .map(|(i, c)| {
                     let p = c.norm_sqr() / window_power;
-                    mean_power[i] += f64::from(p);
+                    mean_power[i] += f64::from(p) * scale;
                     10.0 * (p + 1e-20).log10()
                 })
                 .collect();
             columns.push(column);
-            analysed += 1;
+            weight += scale;
             // A stream that does not say how long it is gets a column every
             // quarter second, which for an hour-long file is a hundred
             // megabytes of them. Past twice the picture's width, neighbours
@@ -298,6 +302,7 @@ fn decode(path: &Path) -> Result<Option<Decoded>> {
                     })
                     .collect();
                 hop *= 2;
+                scale *= 2.0;
             }
             next_column += hop;
             let drain = (next_column - pending_start).min(pending.len());
@@ -306,8 +311,8 @@ fn decode(path: &Path) -> Result<Option<Decoded>> {
         }
     }
 
-    if analysed > 0 {
-        let n = analysed as f64;
+    if weight > 0.0 {
+        let n = weight;
         mean_power.iter_mut().for_each(|p| *p /= n);
     }
     Ok(Some(Decoded {

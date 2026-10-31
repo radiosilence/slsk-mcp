@@ -366,10 +366,19 @@ fn spawn_peer(
                     break;
                 }
             }
-            // Only on a link known to be that user's: a stranger naming
-            // someone we are browsing would otherwise be let send 128 MiB,
-            // and have it inflated, on each of hundreds of connections. A
-            // browse asks over a link we opened or one verified first.
+            // A share list's larger bound is only for a link known to be
+            // that user's: a stranger naming someone we are browsing would
+            // otherwise be let send 128 MiB, and have it inflated, on each
+            // of hundreds of connections. A peer may answer a browse on a
+            // connection of its own, so while one waits, such a link is
+            // checked before its next frame is read.
+            if !trusted.load(Ordering::Relaxed) && !refused && browsing(&inner, &username) {
+                if verify(&inner, &username, ip).await {
+                    trusted.store(true, Ordering::Relaxed);
+                } else {
+                    refused = true;
+                }
+            }
             let max = |code| {
                 if code == 5 && trusted.load(Ordering::Relaxed) && browsing(&inner, &username) {
                     MAX_SHARE_LIST
@@ -594,8 +603,10 @@ fn on_message(inner: &Arc<Inner>, username: &str, msg: PeerMessage, reply: &mpsc
             // the peer was offline, or queued before a restart of ours. The
             // peer still has it queued and would wait for it for good, so it
             // is queued again, with the same checks as a fresh request.
+            // Not one we finished, failed or cancelled lately: a poll that
+            // crossed the end of an upload, or one cancelled here.
             let mut place = inner.uploads.place(username, &filename);
-            if place.is_none() {
+            if place.is_none() && !inner.uploads.settled(username, &filename) {
                 if let Err(r) = uploads::enqueue(inner, username, filename.clone()) {
                     respond(
                         PeerMessage::UploadDenied {
