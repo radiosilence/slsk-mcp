@@ -14,7 +14,7 @@
       <input class="mx-0.5 mt-0.5 size-[18px] flex-none" type="checkbox" name="path" value="{{ r.album.path }}" aria-label="Select {{ self.rel(r.album.path) }}"{% if r.spare().is_some() %} data-spare{% endif %}>
       <div class="min-w-0 flex-1">
         <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
-          {% let (href, get) = self.opening(r.album.path) %}<a class="min-w-0 font-semibold wrap-anywhere" href="{{ href }}" data-on:click="evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || (evt.preventDefault(), @get('{{ get }}'), document.getElementById('lib-album').scrollIntoView({block: 'start'}))">{% if let Some(a) = r.album.album %}{{ a }}{% else %}{{ self.rel(r.album.path) }}{% endif %}</a>
+          {% let (href, get) = self.opening(r.album.path) %}<a class="min-w-0 font-semibold wrap-anywhere" href="{{ href }}" data-on:click="{{ crate::ui::follow("", "@get('" ~ get ~ "'), document.getElementById('lib-album').scrollIntoView({block: 'start'})") }}">{% if let Some(a) = r.album.album %}{{ a }}{% else %}{{ self.rel(r.album.path) }}{% endif %}</a>
           {% if r.spare().is_some() %}<span class="pill spare">spare</span>{% endif %}
           {% if r.kept() %}<span class="pill keep">kept</span>{% endif %}
           {% if let Some((_, to)) = r.refile() %}{% if to.is_some() %}<span class="pill">would move</span>{% else %}<span class="pill">can't file</span>{% endif %}{% endif %}

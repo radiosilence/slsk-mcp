@@ -21,7 +21,7 @@
     {% endif %}
     <form id="composer" class="mt-2.5 flex items-end gap-2" data-indicator="_sending" data-on:submit__prevent="@post('/chat/send', {contentType: 'form', selector: '#composer'})">
       <input type="hidden" name="kind" value="{{ kind }}"><input type="hidden" name="name" value="{{ name }}">
-      <textarea class="min-w-0 flex-1 resize-y" name="message" rows="2" data-bind:_msg placeholder="Message" required></textarea>
+      <textarea class="min-w-0 flex-1 resize-y" name="message" rows="2" data-bind:_msg placeholder="Message" aria-label="Message" required></textarea>
       <button type="submit" class="primary" data-attr:disabled="$_sending" data-class:busy="$_sending">Send</button>
     </form>
     {{ lines|safe }}

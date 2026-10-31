@@ -1,10 +1,10 @@
 //! Rooms, private messages and buddies.
 //!
-//! The open conversation lives in a hidden form on the page, not in a URL
-//! or a signal, since room and user names are peer-chosen. The tab polls
-//! with that form while it is showing. Sending goes through the same
-//! preview-then-confirm tokens the API uses, with the Send button (after a
-//! fixed-text confirm) as the confirmation.
+//! The open conversation is in the address (`kind` and `name`), which every
+//! action that opens or leaves one moves, and in a hidden form the tab
+//! polls with while it is showing. Sending goes through the same
+//! preview-then-confirm tokens the API uses, with the Send button as the
+//! confirmation.
 
 use askama::Template;
 use axum::Router;
@@ -198,15 +198,14 @@ impl LinesView {
     }
 }
 
+/// The most lines drawn of a conversation; the poll redraws them every few
+/// seconds.
+const LINES: usize = 200;
+
 /// Newest first, so the latest is under the composer without scrolling.
 async fn lines_html(app: &App, t: &Thread) -> String {
     let view = match t.kind {
-        Kind::Room => match app
-            .social
-            .rooms(usize::MAX)
-            .into_iter()
-            .find(|r| r.0 == t.name)
-        {
+        Kind::Room => match app.social.rooms(LINES).into_iter().find(|r| r.0 == t.name) {
             Some((_, _, lines)) => LinesView {
                 note: lines
                     .is_empty()
@@ -236,7 +235,7 @@ async fn lines_html(app: &App, t: &Thread) -> String {
         Kind::Private => {
             // The person is looking at it, so it has been read.
             let _ = app.social.mark_read(&t.name).await;
-            match app.social.messages(&t.name, i64::MAX).await {
+            match app.social.messages(&t.name, LINES as i64).await {
                 Ok(rows) => LinesView {
                     note: rows.is_empty().then(|| "No messages yet.".into()),
                     lines: rows
@@ -448,12 +447,15 @@ async fn leave(State(s): State<UiState>, body: Bytes) -> Response {
         return failed(&anyhow::anyhow!("Say which room."));
     };
     match s.app.social.leave_room(room).await {
-        Ok(()) => one(format!(
-            "{}\n{}\n{}",
-            thread_html(&s.app, None).await,
-            side_html(&s.app).await,
-            flash_ok(&format!("Left {room}"))
-        )),
+        Ok(()) => many(vec![
+            patch(&format!(
+                "{}\n{}\n{}",
+                thread_html(&s.app, None).await,
+                side_html(&s.app).await,
+                flash_ok(&format!("Left {room}"))
+            )),
+            super::place("/chat"),
+        ]),
         Err(e) => failed(&e),
     }
 }

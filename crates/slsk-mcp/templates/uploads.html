@@ -11,9 +11,9 @@
     <ul class="mt-2">
     {% for t in p.files %}
       <li class="flex min-w-0 items-center gap-2 py-1">
-        <span class="min-w-0 flex-auto truncate" title="{{ t.filename }}">{{ self.short(t.filename) }}</span>
+        <span class="min-w-0 flex-auto truncate" title="{{ t.filename }}">{{ self.leaf(t.filename) }}</span>
         <span class="flex-none text-meta text-muted">{{ self.label(t) }}{% if t.state == "transferring" %} · {{ self.pct(t) }}%{% endif %}</span>
-        <form id="up-{{ t.id.as_str() }}"><input type="hidden" name="username" value="{{ t.username }}"><input type="hidden" name="filename" value="{{ t.filename }}"></form>
+        <form id="up-{{ t.id.as_str() }}"><input type="hidden" name="history" value="{{ crate::ui::PAGE }}" data-attr:value="$history"><input type="hidden" name="username" value="{{ t.username }}"><input type="hidden" name="filename" value="{{ t.filename }}"></form>
         <button class="quiet flex-none px-2 py-[3px] text-meta" data-indicator="_up_{{ t.id.as_str() }}" data-attr:disabled="$_up_{{ t.id.as_str() }}" data-on:click="@post('/uploads/cancel', {contentType: 'form', selector: '#up-{{ t.id.as_str() }}'})">Cancel</button>
       </li>
     {% endfor %}

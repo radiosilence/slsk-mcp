@@ -4,7 +4,7 @@
   {% if rooms.is_empty() %}<p class="text-meta text-muted">In no rooms.</p>{% endif %}
   <ul class="rows">
   {% for r in rooms %}
-    <li><a class="wrap-anywhere" href="{{ crate::ui::chat_href("room", r.0) }}" data-indicator="_opening" data-on:click="evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || (evt.preventDefault(), $_opening || ($_msg = '', @get(el.getAttribute('href'))))">{{ r.0 }}</a><span class="text-meta text-muted wrap-anywhere">{{ r.1 }} in the room</span></li>
+    <li><a class="wrap-anywhere" href="{{ crate::ui::chat_href("room", r.0) }}" data-indicator="_opening" data-on:click="{{ crate::ui::follow("$_opening", "$_msg = '', @get(el.getAttribute('href'))") }}">{{ r.0 }}</a><span class="text-meta text-muted wrap-anywhere">{{ r.1 }} in the room</span></li>
   {% endfor %}
   </ul>
   <h3>Messages</h3>
@@ -13,7 +13,7 @@
   {% for c in conversations %}
     <li>
       <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5 basis-full">
-        <a class="wrap-anywhere{% if c.unread > 0 %} font-semibold{% endif %}" href="{{ crate::ui::chat_href("pm", c.username) }}" data-indicator="_opening" data-on:click="evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || (evt.preventDefault(), $_opening || ($_msg = '', @get(el.getAttribute('href'))))">{{ c.username }}</a>
+        <a class="wrap-anywhere{% if c.unread > 0 %} font-semibold{% endif %}" href="{{ crate::ui::chat_href("pm", c.username) }}" data-indicator="_opening" data-on:click="{{ crate::ui::follow("$_opening", "$_msg = '', @get(el.getAttribute('href'))") }}">{{ c.username }}</a>
         {% if c.unread > 0 %}<span class="rounded-full bg-brand px-[7px] text-fine font-semibold text-bg">{{ c.unread }}</span>{% endif %}
         <span class="text-meta text-muted wrap-anywhere">{{ self.ago(c) }}</span>
       </div>
@@ -27,7 +27,7 @@
   {% for b in buddies %}
     <li class="[&.busy]:opacity-70" data-class:busy="$_bud_{{ loop.index }}">
       <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5 basis-full">
-        <a class="wrap-anywhere" href="{{ crate::ui::chat_href("pm", b.username) }}" data-indicator="_opening" data-on:click="evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || (evt.preventDefault(), $_opening || ($_msg = '', @get(el.getAttribute('href'))))">{{ b.username }}</a>
+        <a class="wrap-anywhere" href="{{ crate::ui::chat_href("pm", b.username) }}" data-indicator="_opening" data-on:click="{{ crate::ui::follow("$_opening", "$_msg = '', @get(el.getAttribute('href'))") }}">{{ b.username }}</a>
         <span class="pill {{ b.status }}">{{ b.status }}</span>
         <span class="flex-1 max-sm:hidden"></span>
         <a class="button quiet" href="{{ crate::ui::profile_href(b.username) }}">Profile</a>

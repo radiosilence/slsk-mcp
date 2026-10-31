@@ -2,15 +2,15 @@
   {{ thread|safe }}
   {{ side|safe }}
   <form id="chat-who" class="flex flex-wrap items-center gap-2" data-on:submit__prevent="@post('/chat/open', {contentType: 'form', selector: '#chat-who'})">
-    <input class="basis-full" name="username" data-bind:_buddy placeholder="Username" autocomplete="off" autocapitalize="off" required>
-    <input class="basis-full" name="note" data-bind:_buddynote placeholder="Note (for buddies)" autocomplete="off">
+    <input class="basis-full" name="username" data-bind:_buddy placeholder="Username" aria-label="Username" autocomplete="off" autocapitalize="off" required>
+    <input class="basis-full" name="note" data-bind:_buddynote placeholder="Note (for buddies)" aria-label="Note for buddies" autocomplete="off">
     <button class="flex-auto" type="submit" data-indicator="_msgto" data-attr:disabled="$_msgto" data-class:busy="$_msgto">Message</button>
     <button class="flex-auto" type="button" data-indicator="_budadd" data-attr:disabled="$_budadd" data-class:busy="$_budadd" data-on:click="@post('/chat/buddy/add', {contentType: 'form', selector: '#chat-who'})">Add buddy</button>
   </form>
   <details>
     <summary class="text-muted">Public rooms</summary>
     <form id="room-join" class="flex flex-wrap items-center gap-2" data-indicator="_joining" data-on:submit__prevent="@post('/chat/join', {contentType: 'form', selector: '#room-join'})">
-      <input class="basis-full" name="room" placeholder="Room name" autocomplete="off" autocapitalize="off" required>
+      <input class="basis-full" name="room" placeholder="Room name" aria-label="Room name" autocomplete="off" autocapitalize="off" required>
       <button class="flex-auto" type="submit" data-attr:disabled="$_joining" data-class:busy="$_joining">Join</button>
     </form>
     {{ rooms|safe }}

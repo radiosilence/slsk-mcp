@@ -17,7 +17,7 @@ use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 
-use super::{UiState, failed, fields, flash_ok, patch, sse};
+use super::{UiState, escape, failed, fields, flash_ok, patch, sse};
 use crate::art::{AlbumArt, ArtRemoved, ArtSet, Image, Target};
 use crate::library::{
     AlbumEdit, AlbumMove, CreditWrite, LibraryAlbum, Overview, Preview, TagEdits, by_path,
@@ -663,7 +663,7 @@ async fn album(State(s): State<UiState>, uri: http::Uri) -> Response {
 /// file it comes from so a browser keeps it until the art changes.
 async fn cover_url(library: &crate::library::Library, path: &str) -> Option<String> {
     let (_, source) = library.cover(path).await.ok()??;
-    let meta = std::fs::metadata(&source).ok()?;
+    let meta = tokio::fs::metadata(&source).await.ok()?;
     let modified = meta
         .modified()
         .ok()?
@@ -1888,13 +1888,6 @@ async fn ask(
     }
 }
 
-fn escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-}
-
 /// A background run of one action over albums, and how far it has got.
 /// Each album takes from a moment (a move) to seconds (a MusicBrainz
 /// lookup, decoding for gain), so it runs apart from the request that
@@ -1941,12 +1934,6 @@ struct RunView<'a> {
     root: &'a str,
 }
 
-impl RunView<'_> {
-    fn rel<'a>(&self, p: &'a str) -> &'a str {
-        rel(self.root, p)
-    }
-}
-
 #[derive(Template)]
 #[template(path = "library_run_head.html")]
 struct RunHead<'a> {
@@ -1954,23 +1941,11 @@ struct RunHead<'a> {
     root: &'a str,
 }
 
-impl RunHead<'_> {
-    fn rel<'a>(&self, p: &'a str) -> &'a str {
-        rel(self.root, p)
-    }
-}
-
 #[derive(Template)]
 #[template(path = "library_run_row.html")]
 struct RunRow<'a> {
     r: &'a Outcome,
     root: &'a str,
-}
-
-impl RunRow<'_> {
-    fn rel<'a>(&self, p: &'a str) -> &'a str {
-        rel(self.root, p)
-    }
 }
 
 /// What a page's stream last sent of the run panel.
