@@ -1464,6 +1464,9 @@ impl Mutation {
             ));
         }
         let release_id = release_id.as_deref().map(release_arg).transpose()?;
+        if let Some(r) = &release_id {
+            app(ctx).jobs.check_release(r)?;
+        }
         let library = &app(ctx).library;
         let albums = library.albums(&query).await?;
         if release_id.is_some() && albums.len() > 1 {

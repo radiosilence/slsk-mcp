@@ -42,7 +42,7 @@
     {% if !credits.is_empty() %}<p class="text-meta text-muted wrap-anywhere">Artist credits:</p>{% include "library_credits.html" %}{% endif %}
     <p class="text-meta text-muted wrap-anywhere">ReplayGain: measured on apply.</p>
     {% when Body::Reimport with { release, files, missing, untouched, cover, companions } %}
-    <p class="text-meta text-muted wrap-anywhere">{% let (site, href) = self.link(release.id) %}<a href="{{ href }}" target="_blank" rel="noopener">{{ site }} release</a>{% if let Some(m) = release.media %} · {{ m }}{% endif %}{% if let Some(co) = release.country %} · {{ co }}{% endif %} · {{ release.tracks }} tracks</p>
+    <p class="text-meta text-muted wrap-anywhere">{% let (site, href) = crate::library::release_link(release.id) %}<a href="{{ href }}" target="_blank" rel="noopener">{{ site }} release</a>{% if let Some(m) = release.media %} · {{ m }}{% endif %}{% if let Some(co) = release.country %} · {{ co }}{% endif %} · {{ release.tracks }} tracks</p>
     {% include "library_changes.html" %}
     {% if !missing.is_empty() %}<p class="my-0.5 text-meta text-warn">No file for: {{ missing.join(", ") }}</p>{% endif %}
     {% if !untouched.is_empty() %}<p class="my-0.5 text-meta text-warn">Matched to no track, left as they are: {{ untouched.join(", ") }}</p>{% endif %}

@@ -158,7 +158,7 @@ impl ServerHandler for SlskMcp {
                  are releases with a distance (0 is perfect): MusicBrainz ids, and `discogs:<number>` ids when \
                  `tagger { discogs }` is on. Pick the right one, asking the user if it is not obvious, and call \
                  `resolveJob(id, releaseId)`; a release the user links to on either site can be passed as its URL. If no candidate fits these files (wrong \
-                 edition, missing discs), `nextSource(id)` drops them and downloads the next copy found. When MusicBrainz has no such release \
+                 edition, missing discs), `nextSource(id)` drops them and downloads the next copy found. When neither MusicBrainz nor Discogs has such a release \
                  (no candidates, and the files' tags look right), `importAsIs(id)` files it by those tags; it is \
                  refused, with the reason, when they do not describe one album.\n\n\
                  Working the review queue, when the user asks you to deal with what is waiting: for each job in \

@@ -12,7 +12,7 @@
         <span class="min-w-0 wrap-anywhere">{{ c.artist }} — {{ c.title }}</span>
       </label>
       <span class="text-meta text-muted wrap-anywhere">{% if let Some(d) = c.date %}{{ d }} · {% endif %}{% if let Some(co) = c.country %}{{ co }} · {% endif %}{% if let Some(m) = c.media %}{{ m }} · {% endif %}{{ c.tracks }} tracks · distance {{ c.distance }}{% if c.missing > 0 %} · {{ c.missing }} missing{% endif %}{% if c.extra > 0 %} · {{ c.extra }} unmatched{% endif %}{% if let Some(d) = c.disambiguation %} · {{ d }}{% endif %}</span>
-      {% let (site, href) = self.link(c.id) %}<a class="text-meta" href="{{ href }}" target="_blank" rel="noopener">{{ site }}</a>
+      {% let (site, href) = crate::library::release_link(c.id) %}<a class="text-meta" href="{{ href }}" target="_blank" rel="noopener">{{ site }}</a>
     </li>
   {% endfor %}
   </ul>

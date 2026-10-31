@@ -45,10 +45,10 @@
         <button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/resolve/{{ c.release_id }}')">Use</button>
         <span>{{ c.artist }} — {{ c.title }}</span>
         <span class="text-meta text-muted wrap-anywhere">{% match c.date %}{% when Some with (d) %}{{ d }}{% when None %}{% endmatch %} {% match c.country %}{% when Some with (x) %}{{ x }}{% when None %}{% endmatch %} {% match c.media %}{% when Some with (m) %}{{ m }}{% when None %}{% endmatch %} · {{ c.tracks }} tracks · distance {{ c.distance }}{% if c.missing > 0 %} · {{ c.missing }} missing{% endif %}{% if c.extra > 0 %} · {{ c.extra }} extra{% endif %}</span>
-        {% let (site, href) = self.link(c.release_id) %}<a class="text-meta" href="{{ href }}" target="_blank" rel="noopener">{{ site }}</a>
+        {% let (site, href) = crate::library::release_link(c.release_id) %}<a class="text-meta" href="{{ href }}" target="_blank" rel="noopener">{{ site }}</a>
         <details class="basis-full" data-ignore-morph data-on:toggle="el.open && @get('/jobs/{{ j.id.as_str() }}/compare/{{ c.release_id }}')">
           <summary class="text-meta text-muted">Compare track by track</summary>
-          <div id="cmp-{{ j.id.as_str() }}-{{ self.dom_id(c.release_id) }}" class="mt-1.5 text-meta text-muted">Fetching the release…</div>
+          <div id="cmp-{{ crate::ui::compare_id(j.id.as_str(), c.release_id) }}" class="mt-1.5 text-meta text-muted">Fetching the release…</div>
         </details>
       </li>
       {% endfor %}
@@ -125,7 +125,7 @@
         <button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/resolve/{{ c.release_id }}')">Use</button>
         <span>{{ c.artist }} — {{ c.title }}</span>
         <span class="text-meta text-muted wrap-anywhere">{% match c.date %}{% when Some with (d) %}{{ d }}{% when None %}{% endmatch %} {% match c.country %}{% when Some with (x) %}{{ x }}{% when None %}{% endmatch %} {% match c.media %}{% when Some with (m) %}{{ m }}{% when None %}{% endmatch %} · {{ c.tracks }} tracks · distance {{ c.distance }}{% if c.missing > 0 %} · {{ c.missing }} missing{% endif %}{% if c.extra > 0 %} · {{ c.extra }} extra{% endif %}</span>
-        {% let (site, href) = self.link(c.release_id) %}<a class="text-meta" href="{{ href }}" target="_blank" rel="noopener">{{ site }}</a>
+        {% let (site, href) = crate::library::release_link(c.release_id) %}<a class="text-meta" href="{{ href }}" target="_blank" rel="noopener">{{ site }}</a>
       </li>
       {% endfor %}
     </ul>

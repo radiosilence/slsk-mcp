@@ -834,12 +834,6 @@ struct ReleasesView<'a> {
     discogs: bool,
 }
 
-impl ReleasesView<'_> {
-    fn link(&self, release: &str) -> (&'static str, String) {
-        crate::library::release_link(release)
-    }
-}
-
 /// The releases MusicBrainz (and Discogs, when enabled) has for an album's
 /// files, closest first, to re-tag it from; or one pasted.
 async fn releases(
@@ -847,7 +841,7 @@ async fn releases(
     Query(AlbumQuery { filter, path }): Query<AlbumQuery>,
 ) -> Response {
     sse(async_stream::stream! {
-        yield Ok(patch(r#"<div id="lib-retag"><p class="text-meta text-muted">Asking MusicBrainz for releases that fit these files…</p></div>"#));
+        yield Ok(patch(r#"<div id="lib-retag"><p class="text-meta text-muted">Asking for releases that fit these files…</p></div>"#));
         let discogs = s.app.jobs.discogs();
         let view = match s.app.library.rematch(&path).await {
             Ok(r) => ReleasesView { path: &path, filter: &filter, candidates: r.candidates, review: r.review, error: None, discogs },
@@ -1288,9 +1282,6 @@ struct PlannedView<'a> {
 }
 
 impl PlannedView<'_> {
-    fn link(&self, release: &str) -> (&'static str, String) {
-        crate::library::release_link(release)
-    }
     fn rel<'b>(&self, p: &'b str) -> &'b str {
         rel(self.root, p)
     }
@@ -1850,7 +1841,8 @@ async fn ask(
                 })?),
                 None => super::field(form, "release").map(str::to_string),
             };
-            if release.is_some() {
+            if let Some(r) = &release {
+                s.app.jobs.check_release(r)?;
                 one()?;
             }
             Ok(Ask {

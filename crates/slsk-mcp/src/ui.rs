@@ -650,14 +650,6 @@ struct JobsView {
 }
 
 impl JobsView {
-    fn link(&self, release: &str) -> (&'static str, String) {
-        crate::library::release_link(release)
-    }
-    /// A release id fit for an element id: Discogs ids hold a colon, which a
-    /// selector would read as a pseudo-class.
-    fn dom_id(&self, release: &str) -> String {
-        release.replace(':', "-")
-    }
     fn verdict(&self, t: &crate::analysis::TrackAnalysis) -> &'static str {
         use crate::analysis::Verdict as V;
         match t.verdict {
@@ -1588,15 +1580,18 @@ struct JobCompare {
 }
 
 impl JobCompare {
-    fn link(&self, release: &str) -> (&'static str, String) {
-        crate::library::release_link(release)
-    }
     fn dist(&self, d: &f64) -> String {
         format!("{d:.2}")
     }
     fn delta(&self, d: &f64) -> String {
         format!("{d:+.0}s")
     }
+}
+
+/// The element a job's comparison with a release fills. Discogs ids hold a
+/// colon, which a selector would read as a pseudo-class.
+pub(crate) fn compare_id(job: impl std::fmt::Display, release: &str) -> String {
+    format!("{job}-{}", release.replace(':', "-"))
 }
 
 async fn job_compare(
@@ -1610,7 +1605,7 @@ async fn job_compare(
         Ok(c) => (Some(c), None),
         Err(e) => (None, Some(format!("Couldn't compare: {e:#}"))),
     };
-    let id = format!("{id}-{}", release.replace(':', "-"));
+    let id = compare_id(id, &release);
     let html = JobCompare {
         id: id.clone(),
         error,
