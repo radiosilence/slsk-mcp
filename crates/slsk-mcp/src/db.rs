@@ -44,8 +44,14 @@ pub(crate) const STALLED_PEERS: &str = "SELECT DISTINCT coalesce(e.peer, j.sourc
          AND coalesce(e.peer, j.source->>'username') IS NOT NULL";
 
 /// Events with a cause, newest first.
-pub(crate) const EVENTS_SINCE: &str = "SELECT job_id, title, at, version, outcome, cause, detail FROM job_events \
+pub(crate) const EVENTS_SINCE: &str = "SELECT job_id, title, at, version, outcome, cause, detail, peer FROM job_events \
          WHERE cause IS NOT NULL AND at >= ?1 ORDER BY at DESC";
+
+/// One job's events, oldest first. `at` has millisecond resolution, so two
+/// outcomes recorded together (a fallback and the failure after it) are
+/// kept in the order they were written.
+pub(crate) const JOB_EVENTS: &str = "SELECT job_id, title, at, version, outcome, cause, detail, peer FROM job_events \
+         WHERE job_id = ?1 ORDER BY at, id";
 
 /// One file's state, before it changes.
 pub(crate) const FILE_STATE: &str =
@@ -807,6 +813,9 @@ pub struct JobEvent {
     pub outcome: String,
     pub cause: Option<String>,
     pub detail: Option<String>,
+    /// The peer, or for a fetch from a URL its host, the job was using when
+    /// the outcome happened: for a fallback, the source it left.
+    pub peer: Option<String>,
 }
 
 impl JobEvent {
@@ -819,8 +828,20 @@ impl JobEvent {
             outcome: r.get("outcome")?,
             cause: r.get("cause")?,
             detail: r.get("detail")?,
+            peer: r.get("peer")?,
         })
     }
+}
+
+/// Everything recorded about one job. It outlives the job, so a removed
+/// job's history can still be read.
+pub async fn job_events(db: &Db, job_id: Uuid) -> Result<Vec<JobEvent>> {
+    db.run(move |c| {
+        c.prepare_cached(JOB_EVENTS)?
+            .query_map(params![job_id], JobEvent::from_row)?
+            .collect()
+    })
+    .await
 }
 
 /// Events with a cause since `since`, newest first.
@@ -1187,6 +1208,7 @@ mod tests {
             FILES_OF_JOBS,
             FILE_STATE,
             EVENTS_SINCE,
+            JOB_EVENTS,
             STALLED_PEERS,
             RECENT_UPLOADS,
             UPLOAD_TOTALS,
@@ -1217,6 +1239,46 @@ mod tests {
                 .collect();
             assert!(scans.is_empty(), "{sql}\n{plan:#?}");
         }
+    }
+
+    #[tokio::test]
+    async fn a_jobs_history_is_in_order_and_outlives_it() {
+        let db = Db::memory().await;
+        let j = job("a", "downloading");
+        insert_job(&db, &j, &[]).await.unwrap();
+        for outcome in ["fallback", "failed"] {
+            record_event(
+                &db,
+                j.id,
+                "a",
+                Some("peer"),
+                outcome,
+                Some("peer_failed"),
+                None,
+            )
+            .await
+            .unwrap();
+        }
+        record_event(&db, Uuid::new_v4(), "b", None, "imported", None, None)
+            .await
+            .unwrap();
+        // The same instant for all, so only insertion order can sort them.
+        db.run(|c| {
+            c.execute(
+                "UPDATE job_events SET at = '2026-01-01T00:00:00.000+00:00'",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+        delete_job(&db, j.id).await.unwrap();
+        let events = job_events(&db, j.id).await.unwrap();
+        let seen: Vec<_> = events
+            .iter()
+            .map(|e| (e.outcome.as_str(), e.peer.as_deref()))
+            .collect();
+        assert_eq!(seen, [("fallback", Some("peer")), ("failed", Some("peer"))]);
     }
 
     fn job(title: &str, status: &str) -> Job {

@@ -632,6 +632,10 @@
     z-index: 2;
   }
 
+  .m-0 {
+    margin: 0;
+  }
+
   .mx-0\.5 {
     margin-inline: calc(var(--spacing) * .5);
   }
@@ -774,6 +778,10 @@
     flex: 12em;
   }
 
+  .flex-\[1_1_40\%\] {
+    flex: 40%;
+  }
+
   .flex-\[1_1_50\%\] {
     flex: 50%;
   }
@@ -884,6 +892,10 @@
 
   .gap-3 {
     gap: calc(var(--spacing) * 3);
+  }
+
+  .gap-4 {
+    gap: calc(var(--spacing) * 4);
   }
 
   .gap-6 {

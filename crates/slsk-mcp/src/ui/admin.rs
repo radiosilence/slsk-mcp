@@ -259,6 +259,28 @@ async fn interest(State(s): State<UiState>, body: Bytes) -> Response {
 
 // --- Triage ----------------------------------------------------------------
 
+/// Why an outcome happened, from the fixed set of causes, as a person would say it.
+pub(super) fn cause_label(cause: &str) -> &'static str {
+    match cause {
+        "peer_failed" => "The peer failed every file",
+        "stalled_peer" => "The peer stalled",
+        "corrupt_copy" => "Files that are not valid audio",
+        "no_audio" => "No audio in the folder",
+        "requested" => "Another copy was asked for",
+        "untagged" => "Tags too poor to import as-is",
+        "no_candidates" => "MusicBrainz had nothing",
+        "incomplete" => "Tracks missing against the release",
+        "extra_files" => "Files the release does not have",
+        "weak_match" => "Match too weak to apply unasked",
+        "lossy_source" => "Lossy audio",
+        "upsampled" => "Upsampled audio",
+        "mb_unavailable" => "MusicBrainz unavailable",
+        "discogs_unavailable" => "Discogs unavailable",
+        "import_error" => "Import error",
+        _ => "Other",
+    }
+}
+
 #[derive(Template)]
 #[template(path = "triage.html")]
 struct TriageView {
@@ -269,24 +291,7 @@ struct TriageView {
 
 impl TriageView {
     fn label(&self, cause: &str) -> &'static str {
-        match cause {
-            "peer_failed" => "The peer failed every file",
-            "stalled_peer" => "The peer stalled",
-            "corrupt_copy" => "Files that are not valid audio",
-            "no_audio" => "No audio in the folder",
-            "requested" => "Another copy was asked for",
-            "untagged" => "Tags too poor to import as-is",
-            "no_candidates" => "MusicBrainz had nothing",
-            "incomplete" => "Tracks missing against the release",
-            "extra_files" => "Files the release does not have",
-            "weak_match" => "Match too weak to apply unasked",
-            "lossy_source" => "Lossy audio",
-            "upsampled" => "Upsampled audio",
-            "mb_unavailable" => "MusicBrainz unavailable",
-            "discogs_unavailable" => "Discogs unavailable",
-            "import_error" => "Import error",
-            _ => "Other",
-        }
+        cause_label(cause)
     }
     fn ago(&self, at: &chrono::DateTime<chrono::Utc>) -> String {
         super::ago(*at)

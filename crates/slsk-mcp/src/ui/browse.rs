@@ -83,7 +83,7 @@ impl Cache {
     }
 }
 
-fn key(raw: &[u8]) -> String {
+pub(super) fn key(raw: &[u8]) -> String {
     URL_SAFE_NO_PAD.encode(raw)
 }
 
