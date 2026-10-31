@@ -32,8 +32,12 @@ pub fn pkce() -> (String, String) {
     let mut bytes = [0u8; 32];
     rand::rng().fill_bytes(&mut bytes);
     let verifier = URL_SAFE_NO_PAD.encode(bytes);
-    let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
+    let challenge = challenge(&verifier);
     (verifier, challenge)
+}
+
+fn challenge(verifier: &str) -> String {
+    URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
 }
 
 #[derive(serde::Deserialize)]
@@ -113,10 +117,9 @@ mod tests {
     /// RFC 7636 appendix B: the verifier and challenge Hydra will check against.
     #[test]
     fn pkce_challenge_matches_the_rfc_example() {
-        let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
         assert_eq!(
-            URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes())),
-            "E9Melhoa2OwvFrEMTJguCHjoiS1mMbTwO9i8jaAQ9-I"
+            challenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"),
+            "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
         );
     }
 
