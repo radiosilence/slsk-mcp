@@ -1,6 +1,6 @@
 import * as k8s from "@pulumi/kubernetes";
 import * as pulumi from "@pulumi/pulumi";
-import type * as z from "zod";
+import * as z from "zod";
 import type { Deployed } from "./contract.ts";
 import { SlskConfSchema, insideMediaRoot } from "./slsk.schemas.ts";
 import { VERSIONS } from "./versions.ts";
@@ -86,15 +86,25 @@ export function createSlsk(
     discogsToken?: pulumi.Input<string>;
     /** Pod labels of the ingress controller allowed to reach the UI. Traefik's by default. */
     ingressPodLabels?: Record<string, string>;
+    /**
+     * Labels of the namespace the ingress controller runs in. Without them
+     * the pod labels match only in this namespace; `{}` matches any.
+     */
+    ingressNamespaceLabels?: Record<string, string>;
     /** Where the nodes' addresses lie, so the kubelet's probes are admitted. */
     nodeCidr?: string;
     /** Pod labels allowed to reach the internal port. */
     gatewayPodLabels?: Record<string, string>;
+    /** The gateway's namespace labels, as `ingressNamespaceLabels`. */
+    gatewayNamespaceLabels?: Record<string, string>;
     /** Pod labels allowed to scrape the metrics port. */
     scraperPodLabels?: Record<string, string>;
+    /** The scraper's namespace labels, as `ingressNamespaceLabels`. */
+    scraperNamespaceLabels?: Record<string, string>;
   },
 ) {
   const conf = SlskConfSchema.parse(confArgs);
+  const nodeCidr = z.cidrv4().parse(opts.nodeCidr ?? "192.168.0.0/16");
   if (!insideMediaRoot(conf)) {
     throw new Error(`slsk: library, downloads and shares must all be inside mediaRoot (${conf.mediaRoot})`);
   }
@@ -419,23 +429,19 @@ export function createSlsk(
           // kubelet's probes.
           {
             from: [
-              { podSelector: { matchLabels: opts.ingressPodLabels ?? { "app.kubernetes.io/name": "traefik" } } },
-              { ipBlock: { cidr: opts.nodeCidr ?? "192.168.0.0/16" } },
+              peer(opts.ingressPodLabels ?? { "app.kubernetes.io/name": "traefik" }, opts.ingressNamespaceLabels),
+              { ipBlock: { cidr: nodeCidr } },
             ],
             ports: [{ protocol: "TCP", port: UI_PORT }],
           },
           // Headers carrying credentials are believed here: the gateway only.
           {
-            from: [
-              { podSelector: { matchLabels: opts.gatewayPodLabels ?? { app: "mcp-gateway" } } },
-            ],
+            from: [peer(opts.gatewayPodLabels ?? { app: "mcp-gateway" }, opts.gatewayNamespaceLabels)],
             ports: [{ protocol: "TCP", port: INTERNAL_PORT }],
           },
           // The metrics agent, to /metrics and nothing else.
           {
-            from: [
-              { podSelector: { matchLabels: opts.scraperPodLabels ?? { app: "metrics-vmagent" } } },
-            ],
+            from: [peer(opts.scraperPodLabels ?? { app: "metrics-vmagent" }, opts.scraperNamespaceLabels)],
             ports: [{ protocol: "TCP", port: METRICS_PORT }],
           },
           // Peers, from anywhere: that is what a peer port is.
@@ -470,6 +476,14 @@ export function createSlsk(
       graphqlPath: "/graphql",
     },
   } satisfies Deployed & Record<string, unknown>;
+}
+
+/** Pods by label, in this namespace unless `namespaces` names others. */
+function peer(pods: Record<string, string>, namespaces?: Record<string, string>) {
+  return {
+    podSelector: { matchLabels: pods },
+    ...(namespaces && { namespaceSelector: { matchLabels: namespaces } }),
+  };
 }
 
 /** Enough of a hash to notice a change; not a security property. */

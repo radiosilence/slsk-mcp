@@ -365,15 +365,10 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - env:
-          CRATE: ${{ needs.changes.outputs.version }}
-        run: |
-          CHART=$(node -p "require('./deploy/pulumi/package.json').version")
-          APP=$(sed -n 's/^export const APP_VERSION = "\(.*\)";/\1/p' deploy/pulumi/src/versions.ts)
-          if [ "$CRATE" != "$CHART" ] || [ "$CRATE" != "$APP" ]; then
-            echo "::error::versions disagree: Cargo.toml $CRATE, package.json $CHART, versions.ts $APP"
-            exit 1
-          fi
+      - uses: jdx/mise-action@8418fedb1110381a0d3ba51a7a415d7c1b884550 # v5.2.2
+        with:
+          install_args: just node
+      - run: just versions
 
   # The static binary, in release, once per architecture: the image copies
   # it in and a release attaches the same tarball, for hosts without

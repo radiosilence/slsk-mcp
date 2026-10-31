@@ -1,1 +1,0 @@
-- **Images and tools are pinned.** The distroless trust store, the Alpine image the package deploys and the actionlint image are pinned by digest, and `just` and `lefthook` by version; `just check` now also covers the stylesheet, the changelog and version agreement, as CI does.

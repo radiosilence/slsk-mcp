@@ -14,3 +14,8 @@ updates:
     directory: /deploy/pulumi
     schedule: { interval: weekly }
     groups: { chart: { patterns: ["*"] } }
+  # The Dockerfile's base image is pinned by digest; this moves the digest.
+  - package-ecosystem: docker
+    directory: /
+    schedule: { interval: weekly }
+    groups: { docker: { patterns: ["*"] } }
