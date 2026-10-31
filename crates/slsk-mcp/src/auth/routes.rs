@@ -57,8 +57,7 @@ async fn dev_login(State(state): State<AppState>) -> AppResult<Response> {
 }
 
 /// Build a redirect response, appending each cookie as its own `Set-Cookie`
-/// header. Needed three times across this file, which is exactly when a
-/// helper earns its place.
+/// header.
 fn redirect(location: &str, cookies: &[String]) -> Response {
     let mut response = (StatusCode::FOUND, [(header::LOCATION, location)]).into_response();
     let headers = response.headers_mut();
@@ -154,7 +153,3 @@ pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Respon
     }
     redirect("/", &[clear_cookie(SESSION_COOKIE)])
 }
-
-// `dev_login` only exists in a debug build, so its tests can't exist in a
-// release one either — `cargo test --release` would otherwise fail to find
-// the function these call.

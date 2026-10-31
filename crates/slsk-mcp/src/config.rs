@@ -51,10 +51,8 @@ pub struct Config {
     pub public_url: String,
     /// `None` only when `UI_INSECURE_NO_AUTH=1`, for local development.
     pub oidc: Option<Oidc>,
-    pub beet_bin: String,
     /// Merged over the built-in beets config.
     pub beets_config: Option<PathBuf>,
-    pub discogs_token: Option<String>,
     pub description: String,
 }
 
@@ -144,9 +142,7 @@ impl Config {
                 .trim_end_matches('/')
                 .to_string(),
             oidc,
-            beet_bin: or("BEET_BIN", "beet"),
             beets_config: opt("BEETS_CONFIG").map(PathBuf::from),
-            discogs_token: opt("DISCOGS_TOKEN"),
             description: or(
                 "DESCRIPTION",
                 concat!(

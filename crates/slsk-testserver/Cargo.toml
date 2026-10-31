@@ -8,6 +8,6 @@ repository.workspace = true
 publish = false
 
 [dependencies]
-slsk-proto = { path = "../slsk-proto" }
+slsk-proto = { path = "../slsk-proto", features = ["mock"] }
 bytes.workspace = true
 tokio = { version = "1", features = ["full"] }

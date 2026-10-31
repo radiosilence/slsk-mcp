@@ -1,8 +1,8 @@
 //! Server messages (u32 codes), both directions.
 //!
-//! Every message the modern network still speaks. Obsolete codes the server no
-//! longer sends are not modelled; anything unrecognised decodes to
-//! [`FromServer::Unknown`] rather than failing the connection.
+//! The messages this client sends or acts on. Anything else the server sends,
+//! including codes it no longer uses, decodes to [`FromServer::Unknown`] rather
+//! than failing the connection.
 
 use std::net::Ipv4Addr;
 
@@ -64,14 +64,6 @@ impl UserStats {
             dirs: r.u32()?,
         })
     }
-
-    fn write(&self, w: &mut Writer) {
-        w.u32(self.avg_speed)
-            .u32(self.upload_num)
-            .u32(0)
-            .u32(self.files)
-            .u32(self.dirs);
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -81,12 +73,6 @@ pub struct RoomUser {
     pub stats: UserStats,
     pub slots_full: bool,
     pub country: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Recommendation {
-    pub item: String,
-    pub score: i32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -121,9 +107,6 @@ pub enum ToServer {
         username: String,
     },
     UnwatchUser {
-        username: String,
-    },
-    GetUserStatus {
         username: String,
     },
     SayChatroom {
@@ -161,9 +144,6 @@ pub enum ToServer {
         dirs: u32,
         files: u32,
     },
-    GetUserStats {
-        username: String,
-    },
     UserSearch {
         username: String,
         token: u32,
@@ -181,11 +161,6 @@ pub enum ToServer {
     RemoveThingIHate {
         item: String,
     },
-    Recommendations,
-    GlobalRecommendations,
-    UserInterests {
-        username: String,
-    },
     RoomList,
     CheckPrivileges,
     HaveNoParent {
@@ -198,17 +173,6 @@ pub enum ToServer {
         token: u32,
         query: String,
     },
-    SimilarUsers,
-    ItemRecommendations {
-        item: String,
-    },
-    ItemSimilarUsers {
-        item: String,
-    },
-    SetRoomTicker {
-        room: String,
-        ticker: String,
-    },
     RoomSearch {
         room: String,
         token: u32,
@@ -217,50 +181,12 @@ pub enum ToServer {
     SendUploadSpeed {
         speed: u32,
     },
-    GivePrivileges {
-        username: String,
-        days: u32,
-    },
     BranchLevel {
         level: u32,
     },
     BranchRoot {
         root: String,
     },
-    AddRoomMember {
-        room: String,
-        username: String,
-    },
-    RemoveRoomMember {
-        room: String,
-        username: String,
-    },
-    CancelRoomMembership {
-        room: String,
-    },
-    CancelRoomOwnership {
-        room: String,
-    },
-    EnableRoomInvitations {
-        enable: bool,
-    },
-    ChangePassword {
-        password: String,
-    },
-    AddRoomOperator {
-        room: String,
-        username: String,
-    },
-    RemoveRoomOperator {
-        room: String,
-        username: String,
-    },
-    MessageUsers {
-        usernames: Vec<String>,
-        message: String,
-    },
-    JoinGlobalRoom,
-    LeaveGlobalRoom,
     CantConnectToPeer {
         token: u32,
         username: String,
@@ -276,7 +202,6 @@ impl ToServer {
             GetPeerAddress { .. } => 3,
             WatchUser { .. } => 5,
             UnwatchUser { .. } => 6,
-            GetUserStatus { .. } => 7,
             SayChatroom { .. } => 13,
             JoinRoom { .. } => 14,
             LeaveRoom { .. } => 15,
@@ -287,40 +212,20 @@ impl ToServer {
             SetStatus { .. } => 28,
             ServerPing => 32,
             SharedFoldersFiles { .. } => 35,
-            GetUserStats { .. } => 36,
             UserSearch { .. } => 42,
             AddThingILike { .. } => 51,
             RemoveThingILike { .. } => 52,
-            Recommendations => 54,
-            GlobalRecommendations => 56,
-            UserInterests { .. } => 57,
             RoomList => 64,
             CheckPrivileges => 92,
             HaveNoParent { .. } => 71,
             AcceptChildren { .. } => 100,
             WishlistSearch { .. } => 103,
-            SimilarUsers => 110,
-            ItemRecommendations { .. } => 111,
-            ItemSimilarUsers { .. } => 112,
-            SetRoomTicker { .. } => 116,
             AddThingIHate { .. } => 117,
             RemoveThingIHate { .. } => 118,
             RoomSearch { .. } => 120,
             SendUploadSpeed { .. } => 121,
-            GivePrivileges { .. } => 123,
             BranchLevel { .. } => 126,
             BranchRoot { .. } => 127,
-            AddRoomMember { .. } => 134,
-            RemoveRoomMember { .. } => 135,
-            CancelRoomMembership { .. } => 136,
-            CancelRoomOwnership { .. } => 137,
-            EnableRoomInvitations { .. } => 141,
-            ChangePassword { .. } => 142,
-            AddRoomOperator { .. } => 143,
-            RemoveRoomOperator { .. } => 144,
-            MessageUsers { .. } => 149,
-            JoinGlobalRoom => 150,
-            LeaveGlobalRoom => 151,
             CantConnectToPeer { .. } => 1001,
         }
     }
@@ -342,12 +247,7 @@ impl ToServer {
             SetWaitPort { port } => {
                 w.u32(*port);
             }
-            GetPeerAddress { username }
-            | WatchUser { username }
-            | UnwatchUser { username }
-            | GetUserStatus { username }
-            | GetUserStats { username }
-            | UserInterests { username } => {
+            GetPeerAddress { username } | WatchUser { username } | UnwatchUser { username } => {
                 w.str(username);
             }
             SayChatroom { room, message } => {
@@ -356,7 +256,7 @@ impl ToServer {
             JoinRoom { room, private } => {
                 w.str(room).u32(*private as u32);
             }
-            LeaveRoom { room } | CancelRoomMembership { room } | CancelRoomOwnership { room } => {
+            LeaveRoom { room } => {
                 w.str(room);
             }
             ConnectToPeer {
@@ -378,14 +278,7 @@ impl ToServer {
             SetStatus { status } => {
                 w.i32(status.code() as i32);
             }
-            ServerPing
-            | Recommendations
-            | GlobalRecommendations
-            | RoomList
-            | CheckPrivileges
-            | SimilarUsers
-            | JoinGlobalRoom
-            | LeaveGlobalRoom => {}
+            ServerPing | RoomList | CheckPrivileges => {}
             SharedFoldersFiles { dirs, files } => {
                 w.u32(*dirs).u32(*files);
             }
@@ -399,9 +292,7 @@ impl ToServer {
             AddThingILike { item }
             | RemoveThingILike { item }
             | AddThingIHate { item }
-            | RemoveThingIHate { item }
-            | ItemRecommendations { item }
-            | ItemSimilarUsers { item } => {
+            | RemoveThingIHate { item } => {
                 w.str(item);
             }
             HaveNoParent { no_parent } => {
@@ -410,38 +301,17 @@ impl ToServer {
             AcceptChildren { accept } => {
                 w.bool(*accept);
             }
-            SetRoomTicker { room, ticker } => {
-                w.str(room).str(ticker);
-            }
             RoomSearch { room, token, query } => {
                 w.str(room).u32(*token).str(query);
             }
             SendUploadSpeed { speed } => {
                 w.u32(*speed);
             }
-            GivePrivileges { username, days } => {
-                w.str(username).u32(*days);
-            }
             BranchLevel { level } => {
                 w.u32(*level);
             }
             BranchRoot { root } => {
                 w.str(root);
-            }
-            AddRoomMember { room, username }
-            | RemoveRoomMember { room, username }
-            | AddRoomOperator { room, username }
-            | RemoveRoomOperator { room, username } => {
-                w.str(room).str(username);
-            }
-            EnableRoomInvitations { enable } => {
-                w.bool(*enable);
-            }
-            ChangePassword { password } => {
-                w.str(password);
-            }
-            MessageUsers { usernames, message } => {
-                w.strings(usernames).str(message);
             }
             CantConnectToPeer { token, username } => {
                 w.u32(*token).str(username);
@@ -523,39 +393,13 @@ pub enum FromServer {
         token: u32,
         query: String,
     },
-    UserStats {
-        username: String,
-        stats: UserStats,
-    },
     Relogged,
-    Recommendations {
-        recommendations: Vec<Recommendation>,
-        unrecommendations: Vec<Recommendation>,
-    },
-    GlobalRecommendations {
-        recommendations: Vec<Recommendation>,
-        unrecommendations: Vec<Recommendation>,
-    },
-    UserInterests {
-        username: String,
-        likes: Vec<String>,
-        hates: Vec<String>,
-    },
     RoomList(RoomList),
-    AdminMessage {
-        message: String,
-    },
     PrivilegedUsers {
         usernames: Vec<String>,
     },
-    ParentMinSpeed {
-        speed: u32,
-    },
     ParentSpeedRatio {
         ratio: u32,
-    },
-    CheckPrivileges {
-        seconds_left: u32,
     },
     /// A distributed message for us, as a branch root, to hand to children.
     EmbeddedMessage {
@@ -568,100 +412,17 @@ pub enum FromServer {
     WishlistInterval {
         seconds: u32,
     },
-    SimilarUsers {
-        users: Vec<(String, u32)>,
-    },
-    ItemRecommendations {
-        item: String,
-        recommendations: Vec<Recommendation>,
-    },
-    ItemSimilarUsers {
-        item: String,
-        usernames: Vec<String>,
-    },
-    RoomTickers {
-        room: String,
-        tickers: Vec<(String, String)>,
-    },
-    RoomTickerAdded {
-        room: String,
-        username: String,
-        ticker: String,
-    },
-    RoomTickerRemoved {
-        room: String,
-        username: String,
-    },
     ResetDistributed,
-    RoomMembers {
-        room: String,
-        members: Vec<String>,
-    },
-    AddRoomMember {
-        room: String,
-        username: String,
-    },
-    RemoveRoomMember {
-        room: String,
-        username: String,
-    },
-    RoomMembershipGranted {
-        room: String,
-    },
-    RoomMembershipRevoked {
-        room: String,
-    },
-    EnableRoomInvitations {
-        enabled: bool,
-    },
-    ChangePassword {
-        password: String,
-    },
-    AddRoomOperator {
-        room: String,
-        username: String,
-    },
-    RemoveRoomOperator {
-        room: String,
-        username: String,
-    },
-    RoomOperatorshipGranted {
-        room: String,
-    },
-    RoomOperatorshipRevoked {
-        room: String,
-    },
-    RoomOperators {
-        room: String,
-        operators: Vec<String>,
-    },
-    GlobalRoomMessage {
-        room: String,
-        username: String,
-        message: String,
-    },
     ExcludedSearchPhrases {
         phrases: Vec<String>,
     },
     CantConnectToPeer {
         token: u32,
     },
-    CantCreateRoom {
-        room: String,
-    },
     Unknown {
         code: u32,
         body: Bytes,
     },
-}
-
-fn recommendations(r: &mut Reader) -> Result<Vec<Recommendation>> {
-    r.list(8, |r| {
-        Ok(Recommendation {
-            item: r.string()?,
-            score: r.i32()?,
-        })
-    })
 }
 
 impl FromServer {
@@ -822,35 +583,7 @@ impl FromServer {
                 token: r.u32()?,
                 query: r.string()?,
             },
-            36 => F::UserStats {
-                username: r.string()?,
-                stats: UserStats::read(r)?,
-            },
             41 => F::Relogged,
-            54 | 56 => {
-                let recommendations = recommendations(r)?;
-                let unrecommendations = if r.is_empty() {
-                    Vec::new()
-                } else {
-                    recommendations_tail(r)?
-                };
-                if code == 54 {
-                    F::Recommendations {
-                        recommendations,
-                        unrecommendations,
-                    }
-                } else {
-                    F::GlobalRecommendations {
-                        recommendations,
-                        unrecommendations,
-                    }
-                }
-            }
-            57 => F::UserInterests {
-                username: r.string()?,
-                likes: r.strings()?,
-                hates: r.strings()?,
-            },
             64 => {
                 let names = r.strings()?;
                 let counts = r.list(4, Reader::u32)?;
@@ -875,17 +608,10 @@ impl FromServer {
                     operated_private,
                 })
             }
-            66 => F::AdminMessage {
-                message: r.string()?,
-            },
             69 => F::PrivilegedUsers {
                 usernames: r.strings()?,
             },
-            83 => F::ParentMinSpeed { speed: r.u32()? },
             84 => F::ParentSpeedRatio { ratio: r.u32()? },
-            92 => F::CheckPrivileges {
-                seconds_left: r.u32()?,
-            },
             93 => F::EmbeddedMessage {
                 code: r.u8()?,
                 payload: r.rest(),
@@ -900,84 +626,19 @@ impl FromServer {
                 })?,
             },
             104 => F::WishlistInterval { seconds: r.u32()? },
-            110 => F::SimilarUsers {
-                users: r.list(8, |r| Ok((r.string()?, r.u32()?)))?,
-            },
-            111 => F::ItemRecommendations {
-                item: r.string()?,
-                recommendations: recommendations(r)?,
-            },
-            112 => F::ItemSimilarUsers {
-                item: r.string()?,
-                usernames: r.strings()?,
-            },
-            113 => F::RoomTickers {
-                room: r.string()?,
-                tickers: r.list(8, |r| Ok((r.string()?, r.string()?)))?,
-            },
-            114 => F::RoomTickerAdded {
-                room: r.string()?,
-                username: r.string()?,
-                ticker: r.string()?,
-            },
-            115 => F::RoomTickerRemoved {
-                room: r.string()?,
-                username: r.string()?,
-            },
             130 => F::ResetDistributed,
-            133 => F::RoomMembers {
-                room: r.string()?,
-                members: r.strings()?,
-            },
-            134 => F::AddRoomMember {
-                room: r.string()?,
-                username: r.string()?,
-            },
-            135 => F::RemoveRoomMember {
-                room: r.string()?,
-                username: r.string()?,
-            },
-            139 => F::RoomMembershipGranted { room: r.string()? },
-            140 => F::RoomMembershipRevoked { room: r.string()? },
-            141 => F::EnableRoomInvitations { enabled: r.bool()? },
-            142 => F::ChangePassword {
-                password: r.string()?,
-            },
-            143 => F::AddRoomOperator {
-                room: r.string()?,
-                username: r.string()?,
-            },
-            144 => F::RemoveRoomOperator {
-                room: r.string()?,
-                username: r.string()?,
-            },
-            145 => F::RoomOperatorshipGranted { room: r.string()? },
-            146 => F::RoomOperatorshipRevoked { room: r.string()? },
-            148 => F::RoomOperators {
-                room: r.string()?,
-                operators: r.strings()?,
-            },
-            152 => F::GlobalRoomMessage {
-                room: r.string()?,
-                username: r.string()?,
-                message: r.string()?,
-            },
             160 => F::ExcludedSearchPhrases {
                 phrases: r.strings()?,
             },
             1001 => F::CantConnectToPeer { token: r.u32()? },
-            1003 => F::CantCreateRoom { room: r.string()? },
             _ => F::Unknown { code, body },
         })
     }
 }
 
-fn recommendations_tail(r: &mut Reader) -> Result<Vec<Recommendation>> {
-    recommendations(r)
-}
-
 /// Test support: the server side of the wire, so a mock server can be written
 /// with the same types.
+#[cfg(any(test, feature = "mock"))]
 pub mod mock {
     use super::*;
 
@@ -1016,13 +677,6 @@ pub mod mock {
         let mut w = Writer::new();
         w.str(username).u32(token).str(query);
         encode(CodeWidth::U32, 26, &w.finish())
-    }
-
-    pub fn user_stats(username: &str, stats: UserStats) -> Bytes {
-        let mut w = Writer::new();
-        w.str(username);
-        stats.write(&mut w);
-        encode(CodeWidth::U32, 36, &w.finish())
     }
 }
 

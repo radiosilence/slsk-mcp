@@ -100,9 +100,7 @@ async fn client(state: Arc<Mutex<State>>, stream: TcpStream, peer: SocketAddr) {
         };
         let Some(f) = f else { break };
         let mut r = Reader::new(f.body);
-        let Ok(()) = handle(&state, &tx, ip, &mut me, f.code, &mut r) else {
-            continue;
-        };
+        let _ = handle(&state, &tx, ip, &mut me, f.code, &mut r);
     }
     if let Some((name, conn)) = me {
         let mut s = state.lock().unwrap();
