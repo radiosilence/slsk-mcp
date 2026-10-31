@@ -1,0 +1,1 @@
+- **The web UI's cookies are named for this service.** `slsk_session` and `slsk_flow` replace names carried over from another project; existing sessions are not read, so each browser signs in once more.
