@@ -135,10 +135,10 @@ itself). Queries read the index as it stands. Refreshing it stats every file,
 which takes seconds to minutes on a large library, so it runs in the
 background at startup, after each import and every 15 minutes, while reads go
 through a separate SQLite connection and never wait for it. Changes
-(`binDuplicates`, `refile`, `modifyAlbums`, `editTracks`) refresh first, so they act on the
+(`binDuplicates`, `binAlbums`, `refile`, `modifyAlbums`, `editTracks`) refresh first, so they act on the
 files as they are now.
-`duplicates` and `refilePlan` only report; `binDuplicates` and `refile` act. Spare copies go to
-`<library>-bin`, beside the library rather than in it, so Navidrome and the
+`duplicates` and `refilePlan` only report; `binDuplicates` and `refile` act. Spare copies, and
+whole albums `binAlbums` is given, go to `<library>-bin`, beside the library rather than in it, so Navidrome and the
 shares stop seeing them and restoring one is a move back. Nothing deletes a
 file. `modifyAlbums` corrects tags on albums already filed (beets' `modify`,
 `field=value`) and re-files what the change moves, so a credit settled wrongly
@@ -153,7 +153,7 @@ Each import is followed by what beets' `replaygain`, `lastgenre` and `lyrics`
 plugins add: loudness normalisation for players, genres from MusicBrainz, and
 synced lyrics from LRCLIB. `enrichLibrary` backfills albums imported before.
 `reimportAlbums` matches albums already filed against MusicBrainz again and
-retags them, as beets' `import -L`. `binDuplicates`, `refile`,
+retags them, as beets' `import -L`. `binDuplicates`, `binAlbums`, `refile`,
 `creditArtists`, `enrichLibrary` and `reimportAlbums` take `preview: true`,
 which returns what they would write and changes nothing, so a client can show
 the change before making it.

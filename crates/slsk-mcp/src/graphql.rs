@@ -1344,6 +1344,43 @@ impl Mutation {
         Ok(sets)
     }
 
+    /// Move the albums `query` matches (as for `libraryAlbums`, 50 at most)
+    /// to the bin beside the library, whether or not another copy is held:
+    /// for an album nobody wants. Nothing is deleted, and the bin is outside
+    /// what Navidrome and the shares see. An album the bin already holds a
+    /// copy of stays, with the reason in `refused`. `preview: true` moves
+    /// nothing and gives each album's `to` as where it would go: show the
+    /// user that first, since the query may match more than was meant.
+    async fn bin_albums(
+        &self,
+        ctx: &Context<'_>,
+        query: Vec<String>,
+        #[graphql(default)] preview: bool,
+    ) -> Result<Vec<crate::library::AlbumMove>> {
+        let library = &app(ctx).library;
+        let mut moves = Vec::new();
+        for album in matching_at_most(library, &query).await? {
+            let to = if preview {
+                library
+                    .bin_destination(&album.path)
+                    .map_err(anyhow::Error::msg)
+            } else {
+                library.bin_album(&album.path).await
+            };
+            let (to, refused) = match to {
+                Ok(to) => (Some(to.to_string_lossy().into_owned()), None),
+                Err(e) => (None, Some(e.to_string())),
+            };
+            moves.push(crate::library::AlbumMove {
+                from: album.path,
+                to,
+                refused,
+                files: album.tracks,
+            });
+        }
+        Ok(moves)
+    }
+
     /// Credit each artist on a collaboration (`ARTISTS`, `ALBUMARTISTS` and
     /// their MusicBrainz ids) on matching albums whose files name them only
     /// in one string, as every new import gets: from the album's
