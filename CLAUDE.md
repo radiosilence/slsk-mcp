@@ -1,6 +1,6 @@
 # slsk-mcp
 
-A Soulseek client that runs as a service: it shares a music library, fetches albums into it through sift, and is driven from a web UI or over MCP. It ships as a container image, a static Linux binary on each GitHub release, and a Pulumi package (`@radiosilence/slsk-mcp-pulumi`, in `deploy/pulumi`) that deploys that image.
+A Soulseek client that runs as a service: it shares a music library, fetches albums into it through sift, and is driven from a web UI or over MCP. It ships as a container image, static Linux binaries and a Windows zip on each GitHub release, and a Pulumi package (`@radiosilence/slsk-mcp-pulumi`, in `deploy/pulumi`) that deploys that image.
 
 ## Git
 
@@ -22,7 +22,7 @@ A Soulseek client that runs as a service: it shares a music library, fetches alb
 
 The `changes` job decides from the diff which domains a change touches (`rust`, `web`, `package`, `docker`, `deps`) and each CI job runs only for its own, so a skipped job means the change could not affect it and passes `Checks`. `deps` is the exception: main audits every push, since a new advisory can land without any change here; a pull request audits only when it touches a manifest, the lockfile or `.cargo/`. Advisories already in the lockfile are acknowledged in `.cargo/audit.toml`, each with the reason it cannot be fixed yet. Pull requests diff against their base, pushes to main against the last commit whose run passed; a manual run or a release runs everything, as does any change under `.github/`. Markdown counts for nothing. Each domain is an allowlist of paths, so a new top-level directory of code needs adding to the domain that builds it, and a new job needs an `if:` on its domain and a place in `Checks`' `needs`. `changes` also answers once whether the run releases, and every release job reads that answer.
 
-The static binaries are built once per architecture (`linux-build`); the image only copies them in, and a release attaches the same tarballs. CI pushes the image as `:<sha>` on main; CD moves `main` onto it, and a release adds the version tags.
+The static binaries are built once per architecture (`linux-build`); the image only copies them in, and a release attaches the same tarballs. Windows is off the release path: the `windows` job lints and tests on pull requests only, and `windows-build` runs only in a release run, with `windows-release` attaching its zip after the release is created, so Windows never delays or blocks a release. A release that went out without its zip is fixed by re-running the release run's failed jobs, not by a manual run, which sees the release exists; the upload after publishing also needs immutable releases left off. Neither Windows job saves a cache, since the 10 GB cap would evict main's Linux caches. CI pushes the image as `:<sha>` on main; CD moves `main` onto it, and a release adds the version tags.
 
 ## Check
 

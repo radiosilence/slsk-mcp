@@ -531,18 +531,14 @@ impl Jobs {
     fn dest(&self, f: &JobFile) -> PathBuf {
         let name = RawStr(f.remote.clone().into()).to_string_lossy();
         let base = name.rsplit('\\').next().unwrap_or(&name);
-        // Peers control these names; nothing they send may climb out of the
-        // job's directory.
-        let clean = |s: &str| {
-            s.replace(['/', '\0'], "_")
-                .trim_start_matches('.')
-                .to_string()
-        };
         let mut path = self.dir(f.job_id);
-        for part in f.subdir.split('/').filter(|p| !p.is_empty() && *p != "..") {
-            path.push(clean(part));
+        for part in f.subdir.split(['/', '\\']).map(path_part) {
+            if !part.is_empty() {
+                path.push(part);
+            }
         }
-        path.push(clean(base));
+        let base = path_part(base);
+        path.push(if base.is_empty() { "file".into() } else { base });
         path
     }
 
@@ -1800,10 +1796,8 @@ fn file_name(disposition: Option<&str>, url: &url::Url) -> Option<String> {
         .map(|(_, v)| decode(v))
         .or_else(|| param("filename").map(|v| v.trim_matches('"').to_string()))
         .or_else(|| url.path_segments()?.next_back().map(decode))?;
-    let name = named.rsplit(['/', '\\']).next().unwrap_or_default();
-    let name = name.replace('\0', "");
-    let name = name.trim().trim_start_matches('.');
-    (!name.is_empty()).then(|| name.to_string())
+    let name = path_part(named.rsplit(['/', '\\']).next().unwrap_or_default());
+    (!name.is_empty()).then_some(name)
 }
 
 /// Unpack the zip at `archive` into `dir`. An entry that would land outside
@@ -1823,6 +1817,13 @@ pub(crate) fn unzip(archive: &std::path::Path, dir: &std::path::Path, limit: u64
         }) else {
             bail!("the zip holds a path outside itself: {}", entry.name()?);
         };
+        // A part Windows would trim to `..` or to nothing, such as `.. `.
+        if path
+            .components()
+            .any(|c| path_part(&c.as_os_str().to_string_lossy()).is_empty())
+        {
+            bail!("the zip holds a path outside itself: {}", entry.name()?);
+        }
         // Folders are made as needed; links and Finder's resource forks
         // are not the album.
         if entry.is_dir()
@@ -1840,7 +1841,11 @@ pub(crate) fn unzip(archive: &std::path::Path, dir: &std::path::Path, limit: u64
             .all(|(_, p)| p.components().count() > 1 && p.components().next() == top);
     let mut left = limit;
     for (i, path) in &entries {
-        let rel: std::path::PathBuf = path.components().skip(usize::from(wrapped)).collect();
+        let rel: std::path::PathBuf = path
+            .components()
+            .skip(usize::from(wrapped))
+            .map(|c| path_part(&c.as_os_str().to_string_lossy()))
+            .collect();
         let out = dir.join(&rel);
         if let Some(parent) = out.parent() {
             std::fs::create_dir_all(parent)?;
@@ -1856,12 +1861,80 @@ pub(crate) fn unzip(archive: &std::path::Path, dir: &std::path::Path, limit: u64
     Ok(())
 }
 
+/// One component of a path under a job's directory, from a name a peer chose.
+/// Nothing it yields may climb out of the directory or name another drive,
+/// and it is a name Windows can create, so a download behaves the same on
+/// every platform: Win32 refuses `<>:"|?*` and control characters, drops
+/// trailing dots and spaces (making `.. ` into `..`), and opens a device for
+/// `CON`, `NUL`, `CONOUT$` and the like whatever the extension. Empty means skip it.
+fn path_part(s: &str) -> String {
+    let s: String = s
+        .chars()
+        .map(|c| {
+            if c.is_control() || matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let s = s.trim_matches(['.', ' ']);
+    let stem = s
+        .split('.')
+        .next()
+        .unwrap_or(s)
+        .trim_end()
+        .to_ascii_uppercase();
+    let reserved = matches!(
+        stem.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+    ) || stem
+        .strip_prefix("COM")
+        .or_else(|| stem.strip_prefix("LPT"))
+        .is_some_and(|n| {
+            n.len() == 1 && n.as_bytes()[0].is_ascii_digit() || matches!(n, "¹" | "²" | "³")
+        });
+    if reserved {
+        format!("_{s}")
+    } else {
+        s.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::Write;
     use std::path::{Path, PathBuf};
 
     use super::*;
+
+    #[test]
+    fn path_parts_stay_inside_the_job_on_every_platform() {
+        for (name, part) in [
+            ("01 Song.flac", "01 Song.flac"),
+            ("What's Going On?.flac", "What's Going On_.flac"),
+            ("C:x.flac", "C_x.flac"),
+            ("a:b", "a_b"),
+            ("..", ""),
+            (".. ", ""),
+            ("... ", ""),
+            (" . ", ""),
+            ("Vol. 1.", "Vol. 1"),
+            (".hidden", "hidden"),
+            ("a\\..\\b", "a_.._b"),
+            ("tab\there", "tab_here"),
+            ("CON.flac", "_CON.flac"),
+            ("nul", "_nul"),
+            ("com1.txt", "_com1.txt"),
+            ("Con Funk Shun.flac", "Con Funk Shun.flac"),
+            ("CONSOLE.flac", "CONSOLE.flac"),
+            ("COM10", "COM10"),
+            ("conout$.txt", "_conout$.txt"),
+            ("COM¹.flac", "_COM¹.flac"),
+        ] {
+            assert_eq!(path_part(name), part, "{name:?}");
+        }
+    }
 
     fn zip_of(files: &[(&str, &[u8])]) -> PathBuf {
         let path = std::env::temp_dir().join(format!("slsk-zip-{}.zip", Uuid::new_v4()));
@@ -1895,7 +1968,12 @@ mod tests {
                 if p.is_dir() {
                     stack.push(p);
                 } else {
-                    out.push(p.strip_prefix(dir).unwrap().to_string_lossy().into_owned());
+                    let rel = p.strip_prefix(dir).unwrap().components();
+                    out.push(
+                        rel.map(|c| c.as_os_str().to_string_lossy())
+                            .collect::<Vec<_>>()
+                            .join("/"),
+                    );
                 }
             }
         }
@@ -1944,7 +2022,12 @@ mod tests {
 
     #[test]
     fn a_path_out_of_the_zip_refuses_it() {
-        for name in ["../escape.flac", "/etc/escape.flac", "a/../../escape.flac"] {
+        for name in [
+            "../escape.flac",
+            "/etc/escape.flac",
+            "a/../../escape.flac",
+            ".. /.. /escape.flac",
+        ] {
             let (r, dir) = unpacked(&[("01.flac", b"a"), (name, b"x")], 1 << 20);
             assert!(r.is_err(), "{name} was unpacked");
             assert!(!dir.parent().unwrap().join("escape.flac").exists());
@@ -2053,6 +2136,10 @@ mod tests {
         assert_eq!(
             file_name(Some("attachment; filename=\"../../.ssh/keys\""), &url).as_deref(),
             Some("keys")
+        );
+        assert_eq!(
+            file_name(Some("attachment; filename=\"C:escape.flac\""), &url).as_deref(),
+            Some("C_escape.flac")
         );
         let bare = url::Url::parse("https://example.com/").unwrap();
         assert_eq!(file_name(None, &bare), None);

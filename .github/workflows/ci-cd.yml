@@ -260,6 +260,37 @@ jobs:
           cache-on-failure: true
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
+  # Windows is supported on a best-effort basis and nothing deploys it: this
+  # keeps it compiling and its tests passing on every pull request that
+  # changes the code. Clippy there sees the code behind `cfg(windows)` and
+  # misses the code behind `cfg(unix)`, which the Linux lint covers. Pull
+  # requests only, so main's checks, and with them CD and releases, never wait
+  # on a Windows runner. It saves no cache: one saved per pull request could
+  # not be read by the next, and would evict main's caches, which the release
+  # builds use.
+  windows:
+    name: Windows
+    runs-on: windows-latest
+    needs: changes
+    if: needs.changes.outputs.rust == 'true' && github.event_name == 'pull_request'
+    timeout-minutes: 45
+    concurrency:
+      group: windows-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
+        with:
+          toolchain: stable
+          components: clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: windows
+          save-if: false
+          cache-on-failure: true
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+
   format:
     name: Check Formatting
     runs-on: ubuntu-latest
@@ -421,6 +452,41 @@ jobs:
           # Long enough to re-run a failed publish weeks later.
           retention-days: ${{ needs.changes.outputs.release == 'true' && 90 || 7 }}
 
+  # The Windows release download, built only by a run that releases (the
+  # release pull request's too, which shows it links before the merge), and
+  # off the release's path: `windows-release` attaches it once the release
+  # exists, so a slow or failed Windows build never holds a release up. No
+  # cache, for the reason given at `windows`.
+  windows-build:
+    name: Build (windows-amd64)
+    runs-on: windows-latest
+    needs: changes
+    if: needs.changes.outputs.release == 'true'
+    timeout-minutes: 45
+    concurrency:
+      group: windows-build-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: false
+          shared-key: windows-release
+          cache-on-failure: true
+      - shell: pwsh
+        run: |
+          cargo build --release --locked -p slsk-mcp
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Compress-Archive -Path target/release/slsk-mcp.exe -DestinationPath slsk-mcp-windows-amd64.zip
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: slsk-mcp-windows-amd64
+          path: slsk-mcp-windows-amd64.zip
+          retention-days: ${{ needs.changes.outputs.release == 'true' && 90 || 7 }}
+
   # The binaries above on `scratch`, for both architectures. Nothing runs in
   # the image's build, so neither architecture needs emulation. A pull request
   # builds it to prove it builds. Main pushes it under the commit, in parallel
@@ -484,7 +550,7 @@ jobs:
     name: Checks
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: [changes, actionlint, make-room, test, lint, format, audit, chart, changelog, css, version, linux-build, container]
+    needs: [changes, actionlint, make-room, test, lint, windows, format, audit, chart, changelog, css, version, linux-build, container]
     if: always()
     steps:
       - env:
@@ -649,7 +715,7 @@ jobs:
   # Last, so a release never names an image or a package that does not exist.
   # Creates the tag through the API, on the commit that was built; the notes
   # are the version's section of CHANGELOG.md, and the downloads are the
-  # tarballs the image was built from.
+  # tarballs the image was built from. The Windows zip follows.
   create-release:
     name: Create Release
     runs-on: ubuntu-latest
@@ -693,3 +759,23 @@ jobs:
           name: v${{ env.VERSION }}
           body_path: notes.md
           files: artifacts/**/*.tar.gz
+
+  # The Windows zip, added to the release `create-release` made. Re-running
+  # the release run's failed jobs retries it; a manual run does not, since the
+  # release already exists. Needs releases to stay mutable.
+  windows-release:
+    name: Attach the Windows build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [changes, create-release, windows-build]
+    if: ${{ !cancelled() && needs.create-release.result == 'success' && needs.windows-build.result == 'success' }}
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: slsk-mcp-windows-amd64
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.changes.outputs.version }}
+        run: gh release upload "v$VERSION" slsk-mcp-windows-amd64.zip --clobber --repo "$GITHUB_REPOSITORY"
