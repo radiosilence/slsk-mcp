@@ -3,12 +3,13 @@
 {% if !kind.is_empty() %}
   <article class="card">
     <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
-      <strong class="min-w-0 flex-auto wrap-anywhere">{{ name }}</strong>
+      <strong class="min-w-0 flex-auto wrap-anywhere">{% if kind == "pm" %}<a href="{{ crate::ui::profile_href(name) }}">{{ name }}</a>{% else %}{{ name }}{% endif %}</strong>
       <span class="pill">{% if kind == "room" %}room{% else %}private{% endif %}</span>
     </div>
     {% if kind == "pm" %}
     <form id="thread-peer"><input type="hidden" name="username" value="{{ name }}"></form>
     <div class="mt-2.5 flex flex-wrap items-center gap-2">
+      <a class="button quiet" href="{{ crate::ui::profile_href(name) }}">Profile</a>
       <a class="button quiet" href="{{ crate::ui::browse_href(name, "") }}">Browse shares</a>
       <button type="button" class="quiet" data-indicator="_bud_add" data-attr:disabled="$_bud_add" data-class:busy="$_bud_add" data-on:click="@post('/chat/buddy/add', {contentType: 'form', selector: '#thread-peer'})">Add buddy</button>
     </div>
@@ -16,7 +17,7 @@
     <div class="mt-2.5 flex flex-wrap items-center gap-2">
       <button type="button" class="quiet" name="room" value="{{ name }}" data-indicator="_leaving" data-attr:disabled="$_leaving" data-class:busy="$_leaving" data-on:click="@post('/chat/leave', {contentType: 'form', selector: '#act'})">Leave room</button>
     </div>
-    {% if !members.is_empty() %}<details><summary class="text-muted">{{ members.len() }} in the room</summary><p class="text-meta text-muted wrap-anywhere">{{ members.join(", ") }}</p></details>{% endif %}
+    {% if !members.is_empty() %}<details><summary class="text-muted">{{ members.len() }} in the room</summary><p class="text-meta text-muted wrap-anywhere">{% for m in members %}{% if !loop.first %}, {% endif %}<a href="{{ crate::ui::profile_href(m) }}">{{ m }}</a>{% endfor %}</p></details>{% endif %}
     {% endif %}
     <form id="composer" class="mt-2.5 flex items-end gap-2" data-indicator="_sending" data-on:submit__prevent="@post('/chat/send', {contentType: 'form', selector: '#composer'})">
       <input type="hidden" name="kind" value="{{ kind }}"><input type="hidden" name="name" value="{{ name }}">

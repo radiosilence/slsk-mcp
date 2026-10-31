@@ -694,7 +694,7 @@ async fn cover(State(s): State<UiState>, Query(q): Query<CoverQuery>) -> Respons
     image_response(bytes, !q.v.is_empty())
 }
 
-fn image_response(bytes: Vec<u8>, immutable: bool) -> Response {
+pub(super) fn image_response(bytes: Vec<u8>, immutable: bool) -> Response {
     let Some(mime) = crate::art::mime_of(&bytes) else {
         return http::StatusCode::NOT_FOUND.into_response();
     };

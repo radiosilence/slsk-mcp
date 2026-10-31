@@ -239,6 +239,28 @@ pub fn prepare(bytes: &[u8], cfg: &sift::Config) -> anyhow::Result<Image> {
     })
 }
 
+/// The longest side a profile picture is kept at. Clients show it small,
+/// and it travels whole in every answer to a peer asking about this user.
+const AVATAR_SIDE: u32 = 512;
+
+/// `bytes` as a profile picture: a JPEG or PNG, scaled down to fit
+/// [`AVATAR_SIDE`] and kept as a JPEG.
+pub fn avatar(bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
+    let img = image::load_from_memory(bytes)
+        .map_err(|_| anyhow::anyhow!("not a JPEG or PNG image that can be read"))?;
+    let img = if img.width() > AVATAR_SIDE || img.height() > AVATAR_SIDE {
+        img.thumbnail(AVATAR_SIDE, AVATAR_SIDE)
+    } else {
+        img
+    };
+    let mut out = Vec::new();
+    img.to_rgb8()
+        .write_with_encoder(image::codecs::jpeg::JpegEncoder::new_with_quality(
+            &mut out, 85,
+        ))?;
+    Ok(out)
+}
+
 /// Where a cover image replaced in the album at `dir` goes: under the
 /// bin's `.art`, by the album's path and the time, so it never takes the
 /// place binning the album itself would use, and a second replacement
@@ -376,6 +398,15 @@ mod tests {
             .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
             .unwrap();
         out
+    }
+
+    #[test]
+    fn an_avatar_is_scaled_to_fit_and_kept_as_a_jpeg() {
+        let out = avatar(&png(2000, 1000)).unwrap();
+        assert_eq!(mime_of(&out), Some("image/jpeg"));
+        assert_eq!(dimensions(&out), Some((512, 256)));
+        assert_eq!(dimensions(&avatar(&png(64, 64)).unwrap()), Some((64, 64)));
+        assert!(avatar(b"not an image").is_err());
     }
 
     #[test]

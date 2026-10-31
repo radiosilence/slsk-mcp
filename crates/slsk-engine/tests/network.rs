@@ -118,6 +118,25 @@ async fn two_engines_search_and_download() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_profile_set_at_runtime_is_what_peers_see() {
+    let Some(server) = server().await else { return };
+    let tmp = tempfile::tempdir().unwrap();
+    let alice = engine(&server, "alice", vec![], tmp.path()).await;
+    let bob = engine(&server, "bob", vec![], tmp.path()).await;
+    let picture = bytes::Bytes::from_static(b"\x89PNG\r\n\x1a\nnot really");
+    alice.set_profile(slsk_engine::Profile {
+        description: "dub techno, mostly".into(),
+        picture: Some(picture.clone()),
+    });
+    let info = tokio::time::timeout(Duration::from_secs(10), bob.user_info("alice"))
+        .await
+        .expect("no user info")
+        .unwrap();
+    assert_eq!(info.description, "dub techno, mostly");
+    assert_eq!(info.picture, Some(picture));
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_partial_download_resumes() {
     let Some(server) = server().await else { return };
     let tmp = tempfile::tempdir().unwrap();

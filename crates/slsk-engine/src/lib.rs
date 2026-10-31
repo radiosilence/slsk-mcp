@@ -101,6 +101,13 @@ impl EngineConfig {
     }
 }
 
+/// What a peer asking about this user is shown.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Profile {
+    pub description: String,
+    pub picture: Option<Bytes>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Status {
     Connecting,
@@ -190,6 +197,7 @@ pub(crate) struct Inner {
     browse_waiters: DashMap<String, Vec<oneshot::Sender<Vec<Directory>>>>,
     folder_waiters: DashMap<u32, oneshot::Sender<Vec<Directory>>>,
     info_waiters: DashMap<String, Vec<oneshot::Sender<UserInfo>>>,
+    profile: RwLock<Profile>,
     downloads: downloads::Downloads,
     uploads: uploads::Uploads,
     dist: distributed::Dist,
@@ -311,6 +319,10 @@ impl Engine {
             browse_waiters: DashMap::new(),
             folder_waiters: DashMap::new(),
             info_waiters: DashMap::new(),
+            profile: RwLock::new(Profile {
+                description: cfg.description.clone(),
+                picture: None,
+            }),
             downloads: downloads::Downloads::default(),
             uploads: uploads::Uploads::new(cfg.upload_slots),
             dist: distributed::Dist::new(cfg.max_children),
@@ -392,6 +404,14 @@ impl Engine {
     pub fn set_limits(&self, upload: u64, download: u64) {
         self.0.up_limit.set_rate(upload);
         self.0.down_limit.set_rate(download);
+    }
+
+    pub fn set_profile(&self, profile: Profile) {
+        *self.0.profile.write() = profile;
+    }
+
+    pub fn profile(&self) -> Profile {
+        self.0.profile.read().clone()
     }
 
     pub fn upload_slots(&self) -> usize {

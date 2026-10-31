@@ -1,5 +1,5 @@
 <div id="status" class="{{ state }} flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1.5">
-  {% match username %}{% when Some with (u) %}<strong>{{ u }}</strong>{% when None %}{% endmatch %}
+  {% match username %}{% when Some with (u) %}<strong><a href="{{ crate::ui::profile_href("") }}">{{ u }}</a></strong>{% when None %}{% endmatch %}
   <span class="pill">{{ state }}</span>
   {% match detail %}{% when Some with (d) %}<span class="basis-full text-meta text-muted">{{ d }}</span>{% when None %}{% endmatch %}
   {% if state == "displaced" || state == "disconnected" %}<button data-indicator="_reconnecting" data-attr:disabled="$_reconnecting" data-class:busy="$_reconnecting" data-on:click="@post('/reconnect')">Reconnect</button>{% endif %}

@@ -89,6 +89,7 @@ pub(crate) use now;
 const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0001_init.sql"),
     include_str!("../migrations/0002_active_jobs.sql"),
+    include_str!("../migrations/0003_profiles.sql"),
 ];
 
 /// How many idle connections to keep. More than the concurrency the service
@@ -653,6 +654,39 @@ fn add_total(c: &Connection, name: &str, by: i64) -> Result<()> {
 pub async fn delete_job(db: &Db, id: Uuid) -> Result<()> {
     db.run(move |c| {
         c.execute("DELETE FROM jobs WHERE id = ?1", params![id])?;
+        Ok(())
+    })
+    .await
+}
+
+/// The account's description and picture, if it has saved one.
+pub async fn profile(db: &Db, account: &str) -> Result<Option<(String, Option<Vec<u8>>)>> {
+    let account = account.to_string();
+    db.run(move |c| {
+        c.prepare_cached("SELECT description, picture FROM profiles WHERE account = ?1")?
+            .query_row(params![account], |r| Ok((r.get(0)?, r.get(1)?)))
+            .optional()
+    })
+    .await
+}
+
+pub async fn save_profile(
+    db: &Db,
+    account: &str,
+    description: &str,
+    picture: Option<&[u8]>,
+) -> Result<()> {
+    let (account, description, picture) = (
+        account.to_string(),
+        description.to_string(),
+        picture.map(<[u8]>::to_vec),
+    );
+    db.run(move |c| {
+        c.execute(
+            "INSERT INTO profiles (account, description, picture) VALUES (?1, ?2, ?3) \
+             ON CONFLICT (account) DO UPDATE SET description = EXCLUDED.description, picture = EXCLUDED.picture",
+            params![account, description, picture],
+        )?;
         Ok(())
     })
     .await

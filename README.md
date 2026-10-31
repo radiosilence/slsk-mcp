@@ -40,7 +40,8 @@ to give back at least as much as it takes, and its defaults reflect that.
   minutes reuse the earlier answers.
 - **It says what it is.** The default user info (`DESCRIPTION`) identifies it
   as an automated client that shares its library, so sharers can decide for
-  themselves how to treat it.
+  themselves how to treat it. A description saved from the Profile tab
+  replaces it.
 
 Lowering these defaults (fewer slots, a speed limit, a smaller share) reduces
 what the client gives while leaving what it takes unchanged. Change them only
@@ -270,7 +271,7 @@ startup.
 | `UPLOAD_SLOTS`, `UPLOAD_LIMIT`, `DOWNLOAD_LIMIT` | `500`, `0`, `0` | Uploads at once, then limits in bytes per second (0 is unlimited). Each running upload holds a socket and a 256 KiB buffer; past what saturates the uplink, more slots split it more ways rather than send more. |
 | `SEARCHES_PER_HOUR` | `200` | Searches allowed in any rolling hour, 0 for unlimited. Every search is relayed to thousands of peers, and the server temporarily bans accounts that search in floods; past the budget a search is refused with when the next is free. |
 | `MAX_INBOUND_CONNECTIONS`, `MAX_INBOUND_PER_ADDRESS` | `512`, `32` | Connections other peers may hold open to the peer port, in total and from one address. Anyone can connect, so these bound what strangers can hold. Behind a proxy that hides peers' source addresses (Docker's userland proxy, Docker Desktop), every peer arrives from one address: raise the per-address limit to the total. |
-| `DESCRIPTION` | names the client as automated | The user info other peers see. The default says this is an automated client that shares back, so sharers can decide for themselves. |
+| `DESCRIPTION` | names the client as automated | The user info other peers see, until a description is saved from the Profile tab. The default says this is an automated client that shares back, so sharers can decide for themselves. |
 | `BEETS_CONFIG` | — | A beets `config.yaml` for the importer's template and replacements. |
 | `DISCOGS_TOKEN` | — | A Discogs personal access token; consults Discogs when MusicBrainz has no strong match (see Discogs above). |
 | `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | — | Required for the UI. `UI_INSECURE_NO_AUTH=1` disables sign-in and is only accepted with a loopback `UI_ADDR`. |
@@ -290,7 +291,7 @@ the other, and nothing else to either.
 
 The UI reaches everything GraphQL and MCP do, so a phone is a full client:
 search, albums and uploads, then the wishlist, the library (one list of albums to
-re-file, credit, enrich, re-import, edit or bin), browsing a user's shares, rooms and private messages, bans,
+re-file, credit, enrich, re-import, edit or bin), browsing a user's shares, profiles, rooms and private messages, bans,
 settings and triage. Each has its own address, and the server draws that
 page whole around a shared layout, so a link or a reload costs one request
 and nothing for the other pages; Datastar then patches parts of it in place,
@@ -355,6 +356,19 @@ per album. Each folder draws 500 rows at a time, with "Show more" adding a
 page that the address also records. A peer sends its whole share list at
 once, so it is fetched once, kept for ten minutes, and every step through it
 after that is local.
+
+Every username in the UI links to that user's profile (`/profile?username=…`).
+The server answers for their status, what they share, their average speed
+and their interests within a few seconds; the description, picture, upload
+count and queue come from the peer itself, which needs a connection to them
+and fails when they are offline, so the server's part is drawn first and the
+peer's follows. A peer's answer is kept for ten minutes, which is also where
+its picture is served from. The Profile tab on its own shows this account's
+profile as peers see it, with the shares and lifetime upload and download
+totals, and edits the description and picture. Both are kept in the
+database per account and set on every login, replacing `DESCRIPTION` once
+saved. A picture is scaled to fit 512 pixels and kept as a JPEG, since it
+travels whole in every answer to a peer who asks.
 
 ## Security notes
 

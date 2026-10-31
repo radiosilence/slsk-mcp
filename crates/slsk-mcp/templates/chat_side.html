@@ -30,6 +30,7 @@
         <a class="wrap-anywhere" href="{{ crate::ui::chat_href("pm", b.username) }}" data-indicator="_opening" data-on:click="evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || (evt.preventDefault(), $_opening || ($_msg = '', @get(el.getAttribute('href'))))">{{ b.username }}</a>
         <span class="pill {{ b.status }}">{{ b.status }}</span>
         <span class="flex-1 max-sm:hidden"></span>
+        <a class="button quiet" href="{{ crate::ui::profile_href(b.username) }}">Profile</a>
         <a class="button quiet" href="{{ crate::ui::browse_href(b.username, "") }}">Browse</a>
         <button type="button" class="quiet" name="username" value="{{ b.username }}" data-indicator="_bud_{{ loop.index }}" data-attr:disabled="$_bud_{{ loop.index }}" data-class:busy="$_bud_{{ loop.index }}" data-on:click="@post('/chat/buddy/remove', {contentType: 'form', selector: '#act'})">Remove</button>
       </div>
