@@ -6,13 +6,14 @@
 //! keeps whichever lands first. Doing them in sequence, as older clients do,
 //! costs a full timeout for every firewalled peer.
 
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use dashmap::DashMap;
+use dashmap::mapref::entry::Entry;
 use slsk_proto::peer::{PeerInit, PeerMessage, SearchResponse};
 use slsk_proto::server::ToServer;
 use slsk_proto::{CodeWidth, ConnKind, reason};
@@ -21,20 +22,30 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex, mpsc, oneshot};
 
 use crate::net::{self, Conn};
-use crate::{Error, Inner, Result, distributed, downloads, uploads};
+use crate::{Defer, Error, Inner, Result, distributed, downloads, uploads};
 
 /// A peer connection that carries nothing for this long is closed. Peers
 /// reconnect on demand, and an idle socket is a file descriptor and two
 /// tasks for nothing.
 const IDLE: Duration = Duration::from_secs(600);
+/// Once a message has begun to arrive, the whole of it must arrive within
+/// this; a browse gives up waiting after as long.
+const FRAME_DEADLINE: Duration = Duration::from_secs(180);
+/// Every peer message but a share list fits in this compressed.
+const MAX_PEER_MESSAGE: usize = 1 << 20;
 /// Share lists of very large collections are tens of megabytes compressed.
-const MAX_PEER_FRAME: usize = 128 << 20;
+/// One is buffered only while a browse of that peer is waiting for it.
+const MAX_SHARE_LIST: usize = 128 << 20;
+/// Messages larger than this are decoded off the async workers: inflating
+/// and parsing a big share list takes long enough to stall them.
+const INLINE_DECODE: usize = 64 << 10;
 const DIRECT_TIMEOUT: Duration = Duration::from_secs(8);
 const INDIRECT_TIMEOUT: Duration = Duration::from_secs(30);
 const ADDRESS_TTL: Duration = Duration::from_secs(600);
 
 pub(crate) struct Link {
     id: u64,
+    ip: Option<IpAddr>,
     pub tx: mpsc::Sender<Bytes>,
 }
 
@@ -51,6 +62,48 @@ pub(crate) struct Peers {
     /// kills a socket the peer has already started sending on.
     settled: DashMap<u32, (String, ConnKind, Instant)>,
     next_id: AtomicU64,
+    inbound: AtomicUsize,
+    inbound_by_ip: DashMap<IpAddr, usize>,
+}
+
+/// One inbound connection's place under the limits on how many strangers
+/// may hold open. Released on drop.
+pub(crate) struct Inbound {
+    inner: Arc<Inner>,
+    ip: IpAddr,
+}
+
+impl Inbound {
+    fn admit(inner: &Arc<Inner>, ip: IpAddr) -> Option<Self> {
+        let peers = &inner.peers;
+        if peers.inbound.fetch_add(1, Ordering::Relaxed) >= inner.cfg.max_inbound_connections {
+            peers.inbound.fetch_sub(1, Ordering::Relaxed);
+            return None;
+        }
+        let mut n = peers.inbound_by_ip.entry(ip).or_default();
+        if *n >= inner.cfg.max_inbound_per_address {
+            drop(n);
+            peers.inbound.fetch_sub(1, Ordering::Relaxed);
+            peers.inbound_by_ip.remove_if(&ip, |_, n| *n == 0);
+            return None;
+        }
+        *n += 1;
+        Some(Self {
+            inner: inner.clone(),
+            ip,
+        })
+    }
+}
+
+impl Drop for Inbound {
+    fn drop(&mut self) {
+        let peers = &self.inner.peers;
+        peers.inbound.fetch_sub(1, Ordering::Relaxed);
+        if let Some(mut n) = peers.inbound_by_ip.get_mut(&self.ip) {
+            *n -= 1;
+        }
+        peers.inbound_by_ip.remove_if(&self.ip, |_, n| *n == 0);
+    }
 }
 
 pub(crate) fn on_address(inner: &Inner, username: &str, ip: Ipv4Addr, port: u32) {
@@ -83,6 +136,7 @@ async fn address(inner: &Inner, username: &str) -> Result<SocketAddrV4> {
     {
         return Ok(entry.0);
     }
+    let _forget = Defer::new(|| crate::forget_closed(&inner.peers.address_waiters, username));
     let (tx, rx) = oneshot::channel();
     inner
         .peers
@@ -93,9 +147,8 @@ async fn address(inner: &Inner, username: &str) -> Result<SocketAddrV4> {
     inner.send_server(ToServer::GetPeerAddress {
         username: username.to_string(),
     })?;
-    let addr = tokio::time::timeout(Duration::from_secs(15), rx).await;
-    crate::forget_closed(&inner.peers.address_waiters, username);
-    let addr = addr
+    let addr = tokio::time::timeout(Duration::from_secs(15), rx)
+        .await
         .map_err(|_| Error::TimedOut)?
         .map_err(|_| Error::TimedOut)?;
     if addr.port() == 0 || addr.ip().is_unspecified() {
@@ -118,6 +171,15 @@ pub(crate) async fn connect(inner: &Arc<Inner>, username: &str, kind: ConnKind) 
             kind,
         })
         .is_ok();
+    // A pierce that arrives after this attempt is over, whether it finished
+    // or its caller gave up on it, is adopted rather than left waiting.
+    let _settle = Defer::new(|| {
+        if inner.peers.pierce.remove(&token).is_some() && indirect_requested {
+            let settled = &inner.peers.settled;
+            settled.retain(|_, v| v.2.elapsed() < INDIRECT_TIMEOUT * 2);
+            settled.insert(token, (username.to_string(), kind, Instant::now()));
+        }
+    });
 
     let direct = async {
         let addr = address(inner, username).await?;
@@ -157,16 +219,6 @@ pub(crate) async fn connect(inner: &Arc<Inner>, username: &str, kind: ConnKind) 
             Err(_) => direct.await,
         },
     };
-    if inner.peers.pierce.remove(&token).is_some() && indirect_requested {
-        inner
-            .peers
-            .settled
-            .retain(|_, v| v.2.elapsed() < INDIRECT_TIMEOUT * 2);
-        inner
-            .peers
-            .settled
-            .insert(token, (username.to_string(), kind, Instant::now()));
-    }
     result.map_err(|e| match e {
         Error::TimedOut | Error::Io(_) => Error::Unreachable(username.to_string()),
         e => e,
@@ -187,15 +239,17 @@ pub(crate) async fn link(inner: &Arc<Inner>, username: &str) -> Result<mpsc::Sen
         .entry(username.to_string())
         .or_default()
         .clone();
+    let _forget = Defer::new(|| {
+        inner.peers.connecting.remove(username);
+    });
     let _guard = lock.lock().await;
     if let Some(l) = inner.peers.links.get(username)
         && !l.tx.is_closed()
     {
         return Ok(l.tx.clone());
     }
-    let conn = connect(inner, username, ConnKind::Peer).await;
-    inner.peers.connecting.remove(username);
-    Ok(spawn_peer(inner.clone(), username.to_string(), conn?))
+    let conn = connect(inner, username, ConnKind::Peer).await?;
+    Ok(spawn_peer(inner.clone(), username.to_string(), conn, None))
 }
 
 pub(crate) async fn send(inner: &Arc<Inner>, username: &str, frame: Bytes) -> Result<()> {
@@ -206,44 +260,92 @@ pub(crate) async fn send(inner: &Arc<Inner>, username: &str, frame: Bytes) -> Re
         .map_err(|_| Error::Unreachable(username.to_string()))
 }
 
-fn spawn_peer(inner: Arc<Inner>, username: String, conn: Conn) -> mpsc::Sender<Bytes> {
+/// `inbound` is set for a connection a stranger opened and named themselves
+/// on, which is trusted less than one we opened.
+fn spawn_peer(
+    inner: Arc<Inner>,
+    username: String,
+    conn: Conn,
+    inbound: Option<Inbound>,
+) -> mpsc::Sender<Bytes> {
+    let ip = conn.stream.peer_addr().ok().map(|a| a.ip().to_canonical());
     let (mut reader, writer) = conn.split();
     let (tx, rx) = mpsc::channel(256);
     net::spawn_writer(writer, rx);
     let id = inner.peers.next_id.fetch_add(1, Ordering::Relaxed);
-    inner
-        .peers
-        .links
-        .insert(username.clone(), Link { id, tx: tx.clone() });
+    let link = Link {
+        id,
+        ip,
+        tx: tx.clone(),
+    };
+    match inner.peers.links.entry(username.clone()) {
+        // Anyone can connect claiming any name. Taking over a live link from
+        // another address would let them answer, and be answered, in that
+        // peer's place.
+        Entry::Occupied(e) if inbound.is_some() && !e.get().tx.is_closed() && e.get().ip != ip => {
+            tracing::debug!(%username, ?ip, "inbound connection beside a live link kept apart");
+        }
+        Entry::Occupied(mut e) => {
+            e.insert(link);
+        }
+        Entry::Vacant(e) => {
+            e.insert(link);
+        }
+    }
     inner
         .metrics
         .peer_connections
         .store(inner.peers.links.len() as u64, Ordering::Relaxed);
     let reply = tx.clone();
     tokio::spawn(async move {
+        let _inbound = inbound;
         loop {
-            let frame = match tokio::time::timeout(
-                IDLE,
-                reader.frame(CodeWidth::U32, MAX_PEER_FRAME),
-            )
-            .await
-            {
-                Ok(Ok(Some(f))) => f,
-                Ok(Ok(None)) | Err(_) => break,
+            match tokio::time::timeout(IDLE, reader.ready()).await {
+                Ok(Ok(true)) => {}
+                Ok(Ok(false)) | Err(_) => break,
                 Ok(Err(e)) => {
                     tracing::debug!(%username, error = %e, "peer connection failed");
                     break;
                 }
+            }
+            let max = |code| {
+                if code == 5 && browsing(&inner, &username) {
+                    MAX_SHARE_LIST
+                } else {
+                    MAX_PEER_MESSAGE
+                }
             };
+            let frame =
+                match tokio::time::timeout(FRAME_DEADLINE, reader.frame_by(CodeWidth::U32, max))
+                    .await
+                {
+                    Ok(Ok(Some(f))) => f,
+                    Ok(Ok(None)) | Err(_) => break,
+                    Ok(Err(e)) => {
+                        tracing::debug!(%username, error = %e, "peer connection failed");
+                        break;
+                    }
+                };
             // A share list is inflated only when we asked for it: unasked
             // for, it is up to 256 MiB of work for nothing.
-            if frame.code == 5 && !inner.browse_waiters.contains_key(&username) {
+            if frame.code == 5 && !browsing(&inner, &username) {
                 continue;
             }
-            match PeerMessage::decode(frame.code, frame.body) {
-                Ok(msg) => on_message(&inner, &username, msg, &reply).await,
+            let code = frame.code;
+            let decoded = if frame.body.len() > INLINE_DECODE {
+                match tokio::task::spawn_blocking(move || PeerMessage::decode(code, frame.body))
+                    .await
+                {
+                    Ok(d) => d,
+                    Err(_) => break,
+                }
+            } else {
+                PeerMessage::decode(code, frame.body)
+            };
+            match decoded {
+                Ok(msg) => on_message(&inner, &username, msg, &reply),
                 Err(e) => {
-                    tracing::debug!(%username, code = frame.code, error = %e, "undecodable peer message")
+                    tracing::debug!(%username, code, error = %e, "undecodable peer message")
                 }
             }
         }
@@ -256,12 +358,15 @@ fn spawn_peer(inner: Arc<Inner>, username: String, conn: Conn) -> mpsc::Sender<B
     tx
 }
 
-async fn on_message(
-    inner: &Arc<Inner>,
-    username: &str,
-    msg: PeerMessage,
-    reply: &mpsc::Sender<Bytes>,
-) {
+/// Whether a browse of `username` is waiting for its share list.
+fn browsing(inner: &Inner, username: &str) -> bool {
+    inner
+        .browse_waiters
+        .get(username)
+        .is_some_and(|w| w.iter().any(|tx| !tx.is_closed()))
+}
+
+fn on_message(inner: &Arc<Inner>, username: &str, msg: PeerMessage, reply: &mpsc::Sender<Bytes>) {
     let respond = |frame: Bytes| {
         let _ = reply.try_send(frame);
     };
@@ -413,8 +518,12 @@ pub(crate) async fn listen(inner: Arc<Inner>, listener: TcpListener) {
     loop {
         match listener.accept().await {
             Ok((stream, addr)) => {
+                let Some(inbound) = Inbound::admit(&inner, addr.ip().to_canonical()) else {
+                    tracing::trace!(%addr, "inbound connection refused: too many open");
+                    continue;
+                };
                 net::keepalive(&stream);
-                tokio::spawn(accept(inner.clone(), stream, addr));
+                tokio::spawn(accept(inner.clone(), stream, addr, inbound));
             }
             Err(e) => {
                 // Out of file descriptors, usually. Back off rather than spin.
@@ -425,7 +534,7 @@ pub(crate) async fn listen(inner: Arc<Inner>, listener: TcpListener) {
     }
 }
 
-async fn accept(inner: Arc<Inner>, stream: TcpStream, addr: SocketAddr) {
+async fn accept(inner: Arc<Inner>, stream: TcpStream, addr: SocketAddr, inbound: Inbound) {
     let mut conn = Conn::new(stream);
     let init = match tokio::time::timeout(Duration::from_secs(30), conn.frame(CodeWidth::U8, 4096))
         .await
@@ -434,14 +543,29 @@ async fn accept(inner: Arc<Inner>, stream: TcpStream, addr: SocketAddr) {
         _ => return,
     };
     match init {
-        Ok(PeerInit::PeerInit { username, kind, .. }) => route(inner, username, kind, conn),
+        Ok(PeerInit::PeerInit { username, kind, .. }) => {
+            // The server's word on where a user is outranks a stranger's
+            // claim to be them.
+            let known = inner
+                .peers
+                .addresses
+                .get(&username)
+                .filter(|a| a.1.elapsed() < ADDRESS_TTL)
+                .map(|a| IpAddr::V4(*a.0.ip()));
+            if known.is_some_and(|ip| ip != addr.ip().to_canonical()) {
+                tracing::debug!(%addr, %username, ?known, "peer init from the wrong address");
+                return;
+            }
+            route(inner, username, kind, conn, Some(inbound))
+        }
+        // A pierce answers a request of ours, so it is no stranger's.
         Ok(PeerInit::PierceFirewall { token }) => match inner.peers.pierce.remove(&token) {
             Some((_, tx)) => {
                 let _ = tx.send(Some(conn));
             }
             None => match inner.peers.settled.remove(&token) {
                 Some((_, (username, ConnKind::Peer, _))) => {
-                    spawn_peer(inner, username, conn);
+                    spawn_peer(inner, username, conn, None);
                 }
                 _ => tracing::trace!(%addr, token, "pierce for an unknown token"),
             },
@@ -450,13 +574,22 @@ async fn accept(inner: Arc<Inner>, stream: TcpStream, addr: SocketAddr) {
     }
 }
 
-fn route(inner: Arc<Inner>, username: String, kind: ConnKind, conn: Conn) {
+fn route(
+    inner: Arc<Inner>,
+    username: String,
+    kind: ConnKind,
+    conn: Conn,
+    inbound: Option<Inbound>,
+) {
     match kind {
         ConnKind::Peer => {
-            spawn_peer(inner, username, conn);
+            spawn_peer(inner, username, conn, inbound);
         }
         ConnKind::File => {
-            tokio::spawn(downloads::on_file_connection(inner, username, conn));
+            tokio::spawn(async move {
+                downloads::on_file_connection(inner, username, conn).await;
+                drop(inbound);
+            });
         }
         ConnKind::Distributed => distributed::on_child(inner, username, conn),
     }
@@ -485,15 +618,7 @@ pub(crate) async fn answer_indirect(
         Ok::<_, std::io::Error>(conn)
     };
     match attempt.await {
-        Ok(conn) => {
-            if kind == ConnKind::Distributed {
-                // They connected to us as a child would; we initiated only
-                // because they could not.
-                distributed::on_child(inner, username, conn);
-            } else {
-                route(inner, username, kind, conn);
-            }
-        }
+        Ok(conn) => route(inner, username, kind, conn, None),
         Err(_) => {
             let _ = inner.send_server(ToServer::CantConnectToPeer { token, username });
         }

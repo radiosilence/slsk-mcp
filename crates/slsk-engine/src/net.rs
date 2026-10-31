@@ -29,7 +29,7 @@ impl Conn {
     }
 
     pub async fn frame(&mut self, width: CodeWidth, max: usize) -> io::Result<Option<Frame>> {
-        read_frame(&mut self.stream, &mut self.buf, width, max).await
+        read_frame(&mut self.stream, &mut self.buf, width, |_| max).await
     }
 
     pub async fn read_exact_buffered(&mut self, n: usize) -> io::Result<BytesMut> {
@@ -70,7 +70,27 @@ pub struct Reader {
 
 impl Reader {
     pub async fn frame(&mut self, width: CodeWidth, max: usize) -> io::Result<Option<Frame>> {
+        read_frame(&mut self.half, &mut self.buf, width, |_| max).await
+    }
+
+    /// As [`Reader::frame`], with the bound chosen by the frame's code, which
+    /// is known from its header before any of the body is buffered.
+    pub async fn frame_by(
+        &mut self,
+        width: CodeWidth,
+        max: impl Fn(u32) -> usize,
+    ) -> io::Result<Option<Frame>> {
         read_frame(&mut self.half, &mut self.buf, width, max).await
+    }
+
+    /// Wait until some of the next frame has arrived. False at a clean end of
+    /// stream.
+    pub async fn ready(&mut self) -> io::Result<bool> {
+        if !self.buf.is_empty() {
+            return Ok(true);
+        }
+        self.buf.reserve(8 * 1024);
+        Ok(self.half.read_buf(&mut self.buf).await? > 0)
     }
 }
 
@@ -78,16 +98,26 @@ async fn read_frame<R: AsyncReadExt + Unpin>(
     r: &mut R,
     buf: &mut BytesMut,
     width: CodeWidth,
-    max: usize,
+    max: impl Fn(u32) -> usize,
 ) -> io::Result<Option<Frame>> {
+    let header = 4 + match width {
+        CodeWidth::U8 => 1,
+        CodeWidth::U32 => 4,
+    };
     loop {
-        match slsk_proto::frame::decode(buf, width, max) {
+        let limit = match buf.get(4..header) {
+            Some([c]) => max(u32::from(*c)),
+            Some(c) => max(u32::from_le_bytes(c.try_into().unwrap())),
+            None => usize::MAX,
+        };
+        match slsk_proto::frame::decode(buf, width, limit) {
             Ok(Some(f)) => return Ok(Some(f)),
             Ok(None) => {}
             Err(e) => return Err(io::Error::new(io::ErrorKind::InvalidData, e)),
         }
+        // A length is only a claim: grow as bytes arrive, not to it at once.
         if buf.capacity() - buf.len() < 4096 {
-            buf.reserve(16 * 1024);
+            buf.reserve(64 * 1024);
         }
         if r.read_buf(buf).await? == 0 {
             if buf.is_empty() {
