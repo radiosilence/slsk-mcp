@@ -676,7 +676,7 @@ struct Advice {
 struct JobsView {
     /// Waiting on a decision: review, suspect, failed.
     attention: Vec<Job>,
-    /// Downloading or importing.
+    /// Downloading, importing, or waiting on a metadata service.
     underway: Vec<Job>,
     /// Imported, or cancelled by someone: the newest few hundred.
     settled: Vec<Settled>,

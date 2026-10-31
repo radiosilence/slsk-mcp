@@ -634,12 +634,23 @@ impl Jobs {
         });
     }
 
-    async fn tick(self: &Arc<Self>) -> Result<()> {
+    /// Import again the jobs that have waited long enough on a metadata
+    /// service.
+    async fn import_due(self: &Arc<Self>) -> Result<()> {
         for job in db::due_waiting(&self.db, DEFER.as_secs()).await? {
             let how = job.import_how.unwrap_or(How::Match(None));
             if db::claim_import(&self.db, job.id, &["waiting"], &how).await? {
                 self.import_in_background(job.id, how);
             }
+        }
+        Ok(())
+    }
+
+    async fn tick(self: &Arc<Self>) -> Result<()> {
+        // Its own failure is logged rather than returned, so the downloads
+        // below are still followed this tick.
+        if let Err(e) = self.import_due().await {
+            tracing::warn!(error = %e, "could not pick up waiting imports");
         }
         let Some(engine) = self.session.engine().cloned() else {
             return Ok(());
@@ -1433,9 +1444,10 @@ impl Jobs {
             .join(format!("{n:02}.png"))
     }
 
-    /// Stop a download. Only while downloading: a job further on is filed,
-    /// or waiting on a decision, and `remove` is the way to drop it. What
-    /// arrived stays, so a retry resumes rather than starts again.
+    /// Stop a download, or an import waiting on a metadata service. A job
+    /// being filed, or waiting on a decision, is not stopped: `remove` is
+    /// the way to drop it. What arrived stays, so a retry resumes the
+    /// download, or imports again what had already arrived.
     pub async fn cancel(&self, id: Uuid) -> Result<()> {
         if !db::move_status(&self.db, id, &["downloading", "waiting"], "cancelled", None).await? {
             let job = db::job(&self.db, id).await?.context("no such job")?;
@@ -1559,7 +1571,9 @@ impl Jobs {
             .unwrap_or(false);
         match job.status.as_str() {
             "review" | "suspect" => {}
-            "failed" if downloaded => {}
+            // A job cancelled while it waited on a metadata service has its
+            // files in complete/ already.
+            "failed" | "cancelled" if downloaded => {}
             "failed" | "cancelled" => {
                 let engine = match job.source.0 {
                     Source::Url { .. } => None,

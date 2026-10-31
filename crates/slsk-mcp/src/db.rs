@@ -963,16 +963,16 @@ pub async fn defer_import(db: &Db, id: Uuid, error: &str, limit: u32) -> Result<
     .await
 }
 
+const DUE_WAITING: &str = "SELECT * FROM jobs WHERE status = 'waiting' \
+     AND updated_at <= strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now', ?1)";
+
 /// Jobs `waiting` for at least `secs`, due another try.
 pub async fn due_waiting(db: &Db, secs: u64) -> Result<Vec<Job>> {
     let since = format!("-{secs} seconds");
     db.run(move |c| {
-        c.prepare_cached(
-            "SELECT * FROM jobs WHERE status = 'waiting' \
-             AND updated_at <= strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now', ?1)",
-        )?
-        .query_map([since], Job::from_row)?
-        .collect::<Result<_>>()
+        c.prepare_cached(DUE_WAITING)?
+            .query_map([since], Job::from_row)?
+            .collect::<Result<_>>()
     })
     .await
 }
@@ -1181,6 +1181,7 @@ mod tests {
             JOBS_OF_STATUS,
             ACTIVE_JOBS,
             SETTLED_JOBS,
+            DUE_WAITING,
             LIVE_GRAB,
             JOB_FILES,
             FILES_OF_JOBS,
