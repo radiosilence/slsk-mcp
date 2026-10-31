@@ -332,7 +332,7 @@ async fn stranger(engine: &Engine) -> tokio::net::TcpStream {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_peer_announcing_an_oversized_message_is_dropped() {
     use tokio::io::AsyncWriteExt;
-    let server = server().await.unwrap();
+    let server = TestServer::start().await;
     let tmp = tempfile::tempdir().unwrap();
     let engine = engine(&server, "guarded", Vec::new(), tmp.path()).await;
     // A search response, and a share list nobody asked for, each claiming
@@ -351,7 +351,7 @@ async fn a_peer_announcing_an_oversized_message_is_dropped() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn inbound_connections_are_capped_per_address() {
-    let server = server().await.unwrap();
+    let server = TestServer::start().await;
     let state = tempfile::tempdir().unwrap();
     let mut cfg = EngineConfig::new("crowded", "hunter2");
     cfg.server = server.address();
@@ -372,7 +372,7 @@ async fn inbound_connections_are_capped_per_address() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_stranger_claiming_a_name_is_not_taken_for_that_user() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let server = server().await.unwrap();
+    let server = TestServer::start().await;
     let tmp = tempfile::tempdir().unwrap();
     let engine = engine(&server, "asker", Vec::new(), tmp.path()).await;
     // "ghost" is not logged in, so the server places them nowhere and this
