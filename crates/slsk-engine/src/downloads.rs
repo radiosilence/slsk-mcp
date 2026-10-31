@@ -303,7 +303,7 @@ async fn drive_to_end(inner: &Arc<Inner>, d: &Arc<Download>) {
                     filename: d.filename.clone(),
                 }
                 .encode();
-                match peers::send(&inner, &d.username, frame).await {
+                match peers::send(inner, &d.username, frame).await {
                     Ok(()) => {
                         d.transition(DownloadState::Queued, DownloadState::Remote);
                     }
@@ -337,7 +337,7 @@ async fn drive_to_end(inner: &Arc<Inner>, d: &Arc<Download>) {
                         let frame = PeerMessage::PlaceInQueueRequest { filename: d.filename.clone() }.encode();
                         // Gone, or restarted and holding nothing for us: ask
                         // again from the top.
-                        if peers::send(&inner, &d.username, frame).await.is_err() {
+                        if peers::send(inner, &d.username, frame).await.is_err() {
                             d.transition(DownloadState::Remote, DownloadState::Queued);
                         }
                     }
@@ -368,7 +368,7 @@ async fn drive_to_end(inner: &Arc<Inner>, d: &Arc<Download>) {
                     inner
                         .downloads
                         .by_token
-                        .remove_if(&token, |_, t| Arc::ptr_eq(t, &d));
+                        .remove_if(&token, |_, t| Arc::ptr_eq(t, d));
                 }
             }
             DownloadState::Transferring => d.wake.notified().await,
