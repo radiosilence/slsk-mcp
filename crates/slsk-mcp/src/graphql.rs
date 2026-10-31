@@ -105,7 +105,7 @@ pub(crate) struct JobFile {
 pub(crate) struct TriageCause {
     /// peer_failed, url_failed, stalled_peer, corrupt_copy, no_audio, requested, untagged, no_candidates,
     /// incomplete, extra_files, weak_match, lossy_source, upsampled,
-    /// mb_unavailable or import_error.
+    /// mb_unavailable, discogs_unavailable or import_error.
     pub cause: String,
     pub count: usize,
     pub examples: Vec<TriageEvent>,
@@ -127,9 +127,11 @@ pub(crate) struct TriageEvent {
 pub(crate) struct Job {
     pub id: ID,
     pub title: String,
-    /// downloading, importing, imported, review (the tagger could not choose a
-    /// release), suspect (the audio looks transcoded), failed, cancelled, or
-    /// removing (on its way out after `removeJob`).
+    /// downloading, importing, waiting (the import is put off until MusicBrainz
+    /// or Discogs answers again; `error` says which), imported, review (the
+    /// tagger could not choose a release), suspect (the audio looks
+    /// transcoded), failed, cancelled, or removing (on its way out after
+    /// `removeJob`).
     pub status: String,
     pub error: Option<String>,
     pub username: Option<String>,
@@ -1899,6 +1901,7 @@ impl Mutation {
         Ok(true)
     }
 
+    /// Stop a downloading job, or one waiting for MusicBrainz or Discogs.
     async fn cancel_job(&self, ctx: &Context<'_>, id: ID) -> Result<bool> {
         app(ctx).jobs.cancel(parse_id(&id)?).await?;
         Ok(true)

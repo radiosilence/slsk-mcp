@@ -307,6 +307,7 @@ fn status_label(status: &str) -> &'static str {
         "review" => "needs a choice",
         "suspect" => "check quality",
         "importing" => "filing",
+        "waiting" => "waiting",
         "downloading" => "downloading",
         "imported" => "in library",
         "failed" => "failed",
@@ -899,7 +900,7 @@ impl JobsView {
             "as-is" => j.status == "review" && self.as_is_blocked(j).is_none(),
             "retry" => j.status == "failed",
             "match" => j.status == "review",
-            "cancel" => j.status == "downloading",
+            "cancel" => matches!(j.status.as_str(), "downloading" | "waiting"),
             _ => false,
         };
         applies && self.advice(j).is_none_or(|a| a.action != action)

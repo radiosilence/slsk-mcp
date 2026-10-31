@@ -163,7 +163,7 @@
   }
 
   .pill:is(.warn, .spare, .away),
-  :is(.review, .downloading, .importing, .left) .pill {
+  :is(.review, .downloading, .importing, .waiting, .left) .pill {
     @apply bg-warn/20 text-warn;
   }
 
