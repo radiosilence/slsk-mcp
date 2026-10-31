@@ -150,12 +150,12 @@ jobs:
             touches '^deploy/pulumi/|^\.github/' || package=false
             # The static binaries and the image that copies them in. The Rust
             # jobs already check the code, so a pull request builds these
-            # only when the recipe changed or the lockfile did, since the
-            # musl build compiles C dependencies (aws-lc-sys) the tests'
-            # glibc build does not; main whenever the binary changed, since
-            # CD ships it.
+            # only when the recipe, the lockfile or the link flags changed,
+            # since the release builds compile C dependencies (aws-lc-sys)
+            # the tests' builds do not; main whenever the binary changed,
+            # since CD ships it.
             if [ "$EVENT" = "pull_request" ] || [ "$rust" = false ]; then
-              touches '^Dockerfile$|^Cargo\.lock$|^\.github/' || docker=false
+              touches '^Dockerfile$|^Cargo\.lock$|^\.cargo/|^\.github/' || docker=false
             fi
             if [ "$EVENT" = "pull_request" ]; then
               # A new advisory can land on any day; main audits every push.
@@ -260,7 +260,8 @@ jobs:
           cache-on-failure: true
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
-  # Windows is built by the community, not deployed: this keeps it compiling.
+  # Windows is supported on a best-effort basis and nothing deploys it: this
+  # keeps it compiling and its tests passing on every change to the code.
   # Clippy there sees the code behind `cfg(windows)` and misses the code behind
   # `cfg(unix)`, which the Linux lint covers.
   windows:
