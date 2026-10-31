@@ -1,0 +1,11 @@
+<div id="job-page" class="grid min-w-0 gap-4">
+  <p class="m-0 text-meta"><a href="/">← Albums</a></p>
+  {% match card %}{% when Some with (c) %}{{ c|safe }}{% when None %}<p class="m-0 text-meta text-muted">This job has been removed. What happened to it is kept below.</p>{% endmatch %}
+  {{ sources|safe }}
+  {% if let Some(log) = import_log %}
+  <section class="min-w-0">
+    <h2>Import log</h2>
+    <p class="text-fine text-muted whitespace-pre-wrap wrap-anywhere">{{ log }}</p>
+  </section>
+  {% endif %}
+</div>

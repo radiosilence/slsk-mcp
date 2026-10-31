@@ -1,0 +1,25 @@
+{% macro line(s) %}<li><span class="min-w-0 flex-[1_1_60%] wrap-anywhere">{% if let Some(p) = s.profile %}<a href="{{ p }}">{{ s.from }}</a>{% else %}{{ s.from }}{% endif %}{% if let Some((folder, href)) = s.folder %} · <a class="wrap-anywhere" href="{{ href }}">{{ folder }}</a>{% endif %}</span>{% if let Some((files, bytes)) = s.found %}<span class="text-meta text-muted">{{ files }} file{% if *files != 1 %}s{% endif %} · {{ self.size(bytes) }}</span>{% endif %}</li>{% endmacro -%}
+<div id="{{ target }}" class="mt-1.5 grid min-w-0 gap-3">
+  {% if let Some(c) = current %}
+  <section class="min-w-0">
+    <h3 class="m-0 text-meta text-muted">Fetching from</h3>
+    <ul class="rows tight">{% call line(c) %}{% endcall %}</ul>
+  </section>
+  {% endif %}
+  {% if !others.is_empty() %}
+  <section class="min-w-0">
+    <h3 class="m-0 text-meta text-muted">Other copies found</h3>
+    <ul class="rows tight">{% for o in others %}{% call line(o) %}{% endcall %}{% endfor %}</ul>
+  </section>
+  {% endif %}
+  <section class="min-w-0">
+    <h3 class="m-0 text-meta text-muted">History</h3>
+    {% if events.is_empty() %}<p class="my-0.5 text-meta text-muted">Nothing has happened to it yet.</p>{% else %}
+    <ul class="rows tight">
+    {% for e in events %}
+      <li><span class="min-w-0 flex-[1_1_40%] wrap-anywhere">{{ self.outcome(e.outcome) }}{% if let Some(c) = e.cause %} · {{ self.cause(c) }}{% endif %}</span><span class="text-meta text-muted wrap-anywhere"><time datetime="{{ e.at.to_rfc3339() }}" title="{{ e.at.to_rfc3339() }}">{{ self.ago(e.at) }}</time>{% if let Some(p) = e.peer %} · {{ p }}{% endif %} · {{ e.version }}{% if let Some(d) = e.detail %} · {{ d }}{% endif %}</span></li>
+    {% endfor %}
+    </ul>
+    {% endif %}
+  </section>
+</div>

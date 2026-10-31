@@ -8,7 +8,6 @@
 //! session layer, which wraps the router whole so a route added later is
 //! protected by construction.
 
-use std::collections::HashMap;
 use std::convert::Infallible;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
@@ -75,6 +74,7 @@ pub fn router(app: Arc<App>) -> Router {
         // Drawn whole by `pages`; nothing fetches a fragment of them.
         .route("/", get(StatusCode::NOT_FOUND))
         .route("/uploads", get(StatusCode::NOT_FOUND))
+        .route("/jobs/{id}", get(StatusCode::NOT_FOUND))
         .route("/stream", get(stream))
         .route("/search", get(search))
         .route("/grab", post(grab))
@@ -85,6 +85,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/jobs/{id}/release", post(resolve_pasted))
         .route("/jobs/{id}/spectrogram/{n}", get(spectrogram))
         .route("/jobs/{id}/files", get(job_files))
+        .route("/jobs/{id}/sources", get(job_sources))
         .route("/jobs/{id}/compare/{release}", get(job_compare))
         .route("/uploads/cancel", post(cancel_upload))
         .route("/ban", post(ban))
@@ -359,8 +360,10 @@ struct Page {
     up_count: String,
     chat_count: String,
     version: &'static str,
-    /// Which page this is, as `PAGES` names it.
+    /// Which page this is, as `PAGES` names it, or `job` for a job's own.
     tab: &'static str,
+    /// What the page is called when the tab's name does not say: a job's.
+    heading: Option<String>,
     /// The page's starting signals, from the address.
     signals: String,
     body: String,
@@ -381,7 +384,7 @@ impl Page {
                 name,
                 href,
                 label,
-                active: name == self.tab,
+                active: name == self.tab || (name == "albums" && self.tab == "job"),
             })
             .collect()
     }
@@ -391,11 +394,13 @@ impl Page {
     fn datastar(&self) -> &str {
         &DATASTAR_URL
     }
-    fn title(&self) -> &'static str {
-        PAGES
-            .iter()
-            .find(|p| p.0 == self.tab)
-            .map_or("slsk", |p| p.2)
+    fn title(&self) -> &str {
+        self.heading.as_deref().unwrap_or_else(|| {
+            PAGES
+                .iter()
+                .find(|p| p.0 == self.tab)
+                .map_or("slsk", |p| p.2)
+        })
     }
 }
 
@@ -432,7 +437,22 @@ async fn pages(State(s): State<UiState>, request: Request, next: Next) -> Respon
             Err(e) => e.into_response(),
         };
     }
+    if request.method() == http::Method::GET
+        && !request.headers().contains_key("datastar-request")
+        && job_of_path(request.uri().path()).is_some()
+    {
+        return match render_page(&s, "job", request.uri()).await {
+            Ok(html) => html.into_response(),
+            Err(e) => e.into_response(),
+        };
+    }
     next.run(request).await
+}
+
+/// The job a job page's address names.
+fn job_of_path(path: &str) -> Option<Uuid> {
+    path.strip_prefix("/jobs/")
+        .and_then(|id| Uuid::parse_str(id).ok())
 }
 
 /// A user's shares at a folder (the top when `key` is empty).
@@ -494,7 +514,7 @@ async fn render_page(
     s: &UiState,
     tab: &'static str,
     uri: &http::Uri,
-) -> Result<Html<String>, crate::error::AppError> {
+) -> Result<(StatusCode, Html<String>), crate::error::AppError> {
     let url = uri.path_and_query().map_or("/", |p| p.as_str()).to_string();
     let search: SearchQuery = match tab {
         "search" => query(uri),
@@ -505,7 +525,12 @@ async fn render_page(
         "library" => query(uri),
         _ => library::Filter::default(),
     };
+    let job = match tab {
+        "job" => job_of_path(uri.path()),
+        _ => None,
+    };
     let signals = serde_json::json!({
+        "job": job.map(|id| id.to_string()).unwrap_or_default(),
         "q": search.q,
         "lossless": lossless,
         "busy": false,
@@ -519,7 +544,24 @@ async fn render_page(
         "_libalbum": filter.album,
     })
     .to_string();
+    let (mut status, mut heading) = (StatusCode::OK, None);
     let body = match tab {
+        "job" => match job {
+            Some(id) => match job_page(&s.app, id).await? {
+                Some((title, html)) => {
+                    heading = Some(title);
+                    html
+                }
+                None => {
+                    status = StatusCode::NOT_FOUND;
+                    JobPageView::gone()
+                }
+            },
+            None => {
+                status = StatusCode::NOT_FOUND;
+                JobPageView::gone()
+            }
+        },
         "albums" => AlbumsPage {
             jobs: jobs_html(&s.app, PAGE).await,
         }
@@ -547,10 +589,11 @@ async fn render_page(
         chat_count: chat::count_html(&s.app).await,
         version: env!("CARGO_PKG_VERSION"),
         tab,
+        heading,
         signals,
         body,
     };
-    Ok(Html(page.render().map_err(anyhow::Error::from)?))
+    Ok((status, Html(page.render().map_err(anyhow::Error::from)?)))
 }
 
 #[derive(Template)]
@@ -675,20 +718,44 @@ struct Advice {
 #[template(path = "jobs.html")]
 struct JobsView {
     /// Waiting on a decision: review, suspect, failed.
-    attention: Vec<Job>,
+    attention: Vec<CardView>,
     /// Downloading, importing, or waiting on a metadata service.
-    underway: Vec<Job>,
+    underway: Vec<CardView>,
     /// Imported, or cancelled by someone: the newest few hundred.
     settled: Vec<Settled>,
     /// Older jobs exist beyond those shown.
     more: bool,
-    /// Queue places by job id, for those waiting in a peer's queue.
-    places: HashMap<String, u32>,
+}
+
+impl JobsView {
+    fn sig_of(&self, id: &str) -> String {
+        busy_sig(id)
+    }
+}
+
+/// The signal that is true while a request from a job's card is in flight.
+/// Local (leading underscore), so it is never sent back.
+fn busy_sig(id: &str) -> String {
+    format!("_busy_{}", id.replace('-', ""))
+}
+
+/// One job's card, on the list or heading its own page.
+#[derive(Template)]
+#[template(path = "job_card.html")]
+struct CardView {
+    j: Job,
+    /// Drawn among those that need a decision.
+    warn: bool,
+    /// On the job's own page, which shows everything known about it rather
+    /// than linking to it.
+    full: bool,
+    /// The job's place in its peer's queue, while it waits there.
+    place: Option<u32>,
     /// Whether a Discogs release can be applied as well as a MusicBrainz one.
     discogs: bool,
 }
 
-impl JobsView {
+impl CardView {
     fn verdict(&self, t: &crate::analysis::TrackAnalysis) -> &'static str {
         use crate::analysis::Verdict as V;
         match t.verdict {
@@ -718,7 +785,7 @@ impl JobsView {
             };
         }
         let peer = j.username.as_deref().unwrap_or("the peer");
-        match self.places.get(j.id.as_str()) {
+        match self.place {
             Some(p) if j.downloaded_bytes == 0 => format!("place {p} in {peer}'s queue"),
             Some(p) => format!(
                 "{} of {}, rest at place {p} in {peer}'s queue",
@@ -734,13 +801,8 @@ impl JobsView {
             ),
         }
     }
-    /// The signal that is true while a request from this job's card is in
-    /// flight. Local (leading underscore), so it is never sent back.
     fn sig(&self, j: &Job) -> String {
-        self.sig_of(j.id.as_str())
-    }
-    fn sig_of(&self, id: &str) -> String {
-        format!("_busy_{}", id.replace('-', ""))
+        busy_sig(j.id.as_str())
     }
     fn label(&self, status: &str) -> &'static str {
         status_label(status)
@@ -925,6 +987,19 @@ impl JobsView {
     }
 }
 
+fn card(app: &App, j: Job, warn: bool, full: bool) -> CardView {
+    let place = Uuid::parse_str(j.id.as_str())
+        .ok()
+        .and_then(|id| app.jobs.place(id));
+    CardView {
+        j,
+        warn,
+        full,
+        place,
+        discogs: app.jobs.discogs(),
+    }
+}
+
 /// The newest `shown` jobs in hand, and the newest `shown` of those done
 /// with.
 async fn jobs_html(app: &App, shown: i64) -> String {
@@ -942,28 +1017,204 @@ async fn jobs_html(app: &App, shown: i64) -> String {
             tracing::warn!(error = ?e, "could not show jobs");
             Vec::new()
         });
-    let places = jobs
-        .iter()
-        .filter_map(|j| {
-            let id = uuid::Uuid::parse_str(j.id.as_str()).ok()?;
-            Some((j.id.to_string(), app.jobs.place(id)?))
-        })
-        .collect();
     let mut view = JobsView {
         attention: Vec::new(),
         underway: Vec::new(),
         settled: done.into_iter().map(Settled::from).collect(),
         more,
-        places,
-        discogs: app.jobs.discogs(),
     };
     for j in jobs {
-        match j.status.as_str() {
-            "review" | "suspect" | "failed" => view.attention.push(j),
-            _ => view.underway.push(j),
+        let warn = matches!(j.status.as_str(), "review" | "suspect" | "failed");
+        let card = card(app, j, warn, false);
+        if warn {
+            view.attention.push(card);
+        } else {
+            view.underway.push(card);
         }
     }
     view.render().unwrap_or_default()
+}
+
+/// Everything known of one job, for its own page: its card while it exists,
+/// then where its files come from and what has happened to it.
+#[derive(Template)]
+#[template(path = "job.html")]
+struct JobPageView {
+    card: Option<CardView>,
+    sources: SourcesView,
+    import_log: Option<String>,
+}
+
+/// A job's current source, the other copies it can move to, and its history.
+#[derive(Template)]
+#[template(path = "job_sources.html")]
+struct SourcesView {
+    /// The id of the element this fills.
+    target: String,
+    current: Option<SourceLine>,
+    others: Vec<SourceLine>,
+    events: Vec<crate::db::JobEvent>,
+}
+
+/// Where a job's files come from, or could.
+struct SourceLine {
+    /// The peer, or the host of a download link.
+    from: String,
+    /// The peer's profile; none for a link.
+    profile: Option<String>,
+    /// The folder, and where it is in the peer's shares.
+    folder: Option<(String, String)>,
+    /// Files and bytes the search found there; none when not recorded.
+    found: Option<(usize, u64)>,
+}
+
+impl SourceLine {
+    fn peer(username: &str, folder: Option<(&str, &[u8])>, found: Option<(usize, u64)>) -> Self {
+        Self {
+            from: username.to_string(),
+            profile: Some(profile_href(username)),
+            folder: folder
+                .map(|(f, raw)| (f.to_string(), browse_href(username, &browse::key(raw)))),
+            found,
+        }
+    }
+}
+
+impl SourcesView {
+    fn new(target: String, job: Option<&crate::db::Job>, events: Vec<crate::db::JobEvent>) -> Self {
+        use crate::db::Source;
+        let current = job.map(|j| match &j.source.0 {
+            Source::Soulseek {
+                username,
+                folder,
+                folder_raw,
+            } => SourceLine::peer(username, Some((folder, folder_raw)), None),
+            Source::Files { username } => SourceLine::peer(username, None, None),
+            Source::Url { url } => SourceLine {
+                from: crate::jobs::host(url),
+                profile: None,
+                folder: None,
+                found: None,
+            },
+        });
+        let others = job
+            .map(|j| {
+                j.alternates
+                    .0
+                    .iter()
+                    .map(|a| {
+                        let found = (!a.files.is_empty())
+                            .then(|| (a.files.len(), a.files.iter().map(|f| f.1).sum()));
+                        SourceLine::peer(&a.username, Some((&a.folder, &a.folder_raw)), found)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Self {
+            target,
+            current,
+            others,
+            events,
+        }
+    }
+    fn outcome(&self, outcome: &str) -> &'static str {
+        match outcome {
+            "imported" => "imported",
+            "review" => "held for a choice of release",
+            "suspect" => "held to check quality",
+            "failed" => "failed",
+            "fallback" => "moved to another copy",
+            "deferred" => "put off",
+            _ => "other",
+        }
+    }
+    fn cause(&self, cause: &str) -> &'static str {
+        admin::cause_label(cause)
+    }
+    fn ago(&self, at: &chrono::DateTime<chrono::Utc>) -> String {
+        ago(*at)
+    }
+    fn size(&self, bytes: &u64) -> String {
+        human(*bytes)
+    }
+}
+
+/// A job's page, with what to call it; none when there is neither a job nor
+/// any history under that id.
+async fn job_page(app: &App, id: Uuid) -> anyhow::Result<Option<(String, String)>> {
+    let (job, events) = tokio::join!(
+        crate::db::job(&app.db, id),
+        crate::db::job_events(&app.db, id)
+    );
+    let (job, events) = (job?, events?);
+    if job.is_none() && events.is_empty() {
+        return Ok(None);
+    }
+    let sources = SourcesView::new("job-sources".into(), job.as_ref(), events);
+    let (title, card, import_log) = match job {
+        Some(job) => {
+            let view = graphql::job_view(app, job, true)
+                .await
+                .map_err(|e| anyhow::anyhow!("{}", e.message))?;
+            let warn = matches!(view.status.as_str(), "review" | "suspect" | "failed");
+            let import_log = view.import_log.clone().filter(|l| !l.trim().is_empty());
+            let card = card(app, view, warn, true);
+            (card.heading(&card.j), Some(card), import_log)
+        }
+        None => (
+            sources
+                .events
+                .last()
+                .map_or_else(String::new, |e| e.title.clone()),
+            None,
+            None,
+        ),
+    };
+    let html = JobPageView {
+        card,
+        sources,
+        import_log,
+    }
+    .render()?;
+    Ok(Some((title, html)))
+}
+
+/// A job's page as the stream and its actions redraw it; empty, so nothing
+/// is sent, when it could not be read.
+async fn job_page_html(app: &App, id: Uuid) -> String {
+    match job_page(app, id).await {
+        Ok(Some((_, html))) => html,
+        Ok(None) => JobPageView::gone(),
+        Err(e) => {
+            tracing::warn!(%id, error = %e, "could not show job");
+            String::new()
+        }
+    }
+}
+
+impl JobPageView {
+    /// What replaces the page once the job and its history are both gone.
+    fn gone() -> String {
+        r#"<div id="job-page"><p class="text-meta text-muted">Nothing is known of this job. <a href="/">Back to albums</a></p></div>"#.into()
+    }
+}
+
+/// A card's sources and history, fetched when it is opened.
+async fn job_sources(State(s): State<UiState>, Path(id): Path<Uuid>) -> Response {
+    let (job, events) = tokio::join!(
+        crate::db::job(&s.app.db, id),
+        crate::db::job_events(&s.app.db, id)
+    );
+    let target = format!("sources-{id}");
+    match (job, events) {
+        (Ok(job), Ok(events)) => one(SourcesView::new(target, job.as_ref(), events)
+            .render()
+            .unwrap_or_default()),
+        (Err(e), _) | (_, Err(e)) => one(format!(
+            r#"<div id="{target}" class="mt-1.5 text-meta text-bad">Couldn't read the history: {}</div>"#,
+            escape(&format!("{e:#}"))
+        )),
+    }
 }
 
 #[derive(Template)]
@@ -1126,6 +1377,8 @@ struct StreamQuery {
 struct Shown {
     jobs: i64,
     history: i64,
+    /// The job a job's page shows; empty on every other page.
+    job: String,
 }
 
 impl Default for Shown {
@@ -1133,6 +1386,7 @@ impl Default for Shown {
         Self {
             jobs: PAGE,
             history: PAGE,
+            job: String::new(),
         }
     }
 }
@@ -1163,6 +1417,10 @@ async fn stream(
                 status_html(&app).await,
                 match page.as_str() {
                     "albums" => jobs_html(&app, shown.jobs).await,
+                    "job" => match Uuid::parse_str(&shown.job) {
+                        Ok(id) => job_page_html(&app, id).await,
+                        Err(_) => String::new(),
+                    },
                     "uploads" => uploads_html(&app, shown.history).await,
                     _ => String::new(),
                 },
@@ -1345,7 +1603,7 @@ async fn grab(
     match graphql::grab(&s.app, form.q.trim(), LISTEN, filter, false).await {
         // Albums shows the new card; Search has no job list, so it says so.
         Ok(_) => match shown.jobs {
-            Some(shown) => done(&s.app, shown).await,
+            Some(shown) => done(&s.app, shown, "").await,
             None => one(flash_ok(&format!("Grabbing {}", form.q.trim()))),
         },
         Err(e) => one(flash_err(&e.message)),
@@ -1361,7 +1619,7 @@ struct UrlForm {
 
 async fn import_url(State(s): State<UiState>, axum::Form(form): axum::Form<UrlForm>) -> Response {
     match s.app.jobs.from_url(&form.url).await {
-        Ok(_) => done(&s.app, form.jobs).await,
+        Ok(_) => done(&s.app, form.jobs, "").await,
         Err(e) => failed(&e),
     }
 }
@@ -1446,26 +1704,29 @@ async fn job_action(
         _ => return StatusCode::NOT_FOUND.into_response(),
     };
     match result {
-        Ok(()) => done(&s.app, jobs_shown(&body)).await,
+        Ok(()) => {
+            let shown = shown_of(&body);
+            done(&s.app, shown.jobs, &shown.job).await
+        }
         Err(e) => failed(&e),
     }
 }
 
-/// The job list as it now stands, as many rows as the page shows, and any
-/// earlier error cleared: the change on the card is the confirmation, and
-/// the button stays busy until it is drawn.
-async fn done(app: &App, shown: i64) -> Response {
-    one(format!(
-        "{}\n<div id=\"flash\"></div>",
-        jobs_html(app, shown).await
-    ))
+/// The jobs as they now stand, and any earlier error cleared: the change on
+/// the card is the confirmation, and the button stays busy until it is
+/// drawn. On a job's page (`job` names it) that is the page; elsewhere the
+/// list, as many rows as the page shows.
+async fn done(app: &App, shown: i64, job: &str) -> Response {
+    let html = match Uuid::parse_str(job) {
+        Ok(id) => job_page_html(app, id).await,
+        Err(_) => jobs_html(app, shown).await,
+    };
+    one(format!("{html}\n<div id=\"flash\"></div>"))
 }
 
-/// How many jobs the page shows, from the signals a JSON request carries.
-fn jobs_shown(body: &[u8]) -> i64 {
-    serde_json::from_slice::<Shown>(body)
-        .unwrap_or_default()
-        .jobs
+/// What the page shows, from the signals a JSON request carries.
+fn shown_of(body: &[u8]) -> Shown {
+    serde_json::from_slice(body).unwrap_or_default()
 }
 
 fn failed(e: &anyhow::Error) -> Response {
@@ -1481,7 +1742,10 @@ async fn resolve(
         return StatusCode::BAD_REQUEST.into_response();
     };
     match s.app.jobs.import_soon(id, false, Some(release)).await {
-        Ok(()) => done(&s.app, jobs_shown(&body)).await,
+        Ok(()) => {
+            let shown = shown_of(&body);
+            done(&s.app, shown.jobs, &shown.job).await
+        }
         Err(e) => failed(&e),
     }
 }
@@ -1491,6 +1755,9 @@ struct ReleaseForm {
     release: String,
     #[serde(default = "page", deserialize_with = "shown_field")]
     jobs: i64,
+    /// The job a job's page shows, when it is posted from there.
+    #[serde(default)]
+    job: String,
 }
 
 /// A release named by hand, for when MusicBrainz or Discogs has it but the
@@ -1506,7 +1773,7 @@ async fn resolve_pasted(
         ));
     };
     match s.app.jobs.import_soon(id, false, Some(release)).await {
-        Ok(()) => done(&s.app, form.jobs).await,
+        Ok(()) => done(&s.app, form.jobs, &form.job).await,
         Err(e) => failed(&e),
     }
 }

@@ -44,8 +44,14 @@ pub(crate) const STALLED_PEERS: &str = "SELECT DISTINCT coalesce(e.peer, j.sourc
          AND coalesce(e.peer, j.source->>'username') IS NOT NULL";
 
 /// Events with a cause, newest first.
-pub(crate) const EVENTS_SINCE: &str = "SELECT job_id, title, at, version, outcome, cause, detail FROM job_events \
+pub(crate) const EVENTS_SINCE: &str = "SELECT job_id, title, at, version, outcome, cause, detail, peer FROM job_events \
          WHERE cause IS NOT NULL AND at >= ?1 ORDER BY at DESC";
+
+/// One job's events, oldest first. `at` has millisecond resolution, so two
+/// outcomes recorded together (a fallback and the failure after it) are
+/// kept in the order they were written.
+pub(crate) const JOB_EVENTS: &str = "SELECT job_id, title, at, version, outcome, cause, detail, peer FROM job_events \
+         WHERE job_id = ?1 ORDER BY at, id";
 
 /// One file's state, before it changes.
 pub(crate) const FILE_STATE: &str =
@@ -807,6 +813,9 @@ pub struct JobEvent {
     pub outcome: String,
     pub cause: Option<String>,
     pub detail: Option<String>,
+    /// The peer, or for a fetch from a URL its host, the job was using when
+    /// the outcome happened: for a fallback, the source it left.
+    pub peer: Option<String>,
 }
 
 impl JobEvent {
@@ -819,8 +828,20 @@ impl JobEvent {
             outcome: r.get("outcome")?,
             cause: r.get("cause")?,
             detail: r.get("detail")?,
+            peer: r.get("peer")?,
         })
     }
+}
+
+/// Everything recorded about one job. It outlives the job, so a removed
+/// job's history can still be read.
+pub async fn job_events(db: &Db, job_id: Uuid) -> Result<Vec<JobEvent>> {
+    db.run(move |c| {
+        c.prepare_cached(JOB_EVENTS)?
+            .query_map(params![job_id], JobEvent::from_row)?
+            .collect()
+    })
+    .await
 }
 
 /// Events with a cause since `since`, newest first.
@@ -1187,6 +1208,7 @@ mod tests {
             FILES_OF_JOBS,
             FILE_STATE,
             EVENTS_SINCE,
+            JOB_EVENTS,
             STALLED_PEERS,
             RECENT_UPLOADS,
             UPLOAD_TOTALS,
