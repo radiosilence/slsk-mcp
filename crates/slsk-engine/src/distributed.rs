@@ -120,7 +120,7 @@ pub(crate) fn on_possible_parents(inner: &Arc<Inner>, parents: &[PossibleParent]
         }
         let id = inner.dist.next_id.fetch_add(1, Ordering::Relaxed);
         inner.dist.candidates.insert(p.username.clone(), id);
-        let reset = inner.dist.generation.subscribe();
+        let stop = inner.dist.generation.subscribe();
         let inner = inner.clone();
         let p = p.clone();
         tokio::spawn(async move {
@@ -149,8 +149,8 @@ pub(crate) fn on_possible_parents(inner: &Arc<Inner>, parents: &[PossibleParent]
                     .ok(),
             };
             match conn {
-                Some(conn) if !reset.has_changed().unwrap_or(true) => {
-                    run_parent(inner, p.username, id, conn, reset).await
+                Some(conn) if !stop.has_changed().unwrap_or(true) => {
+                    run_parent(inner, p.username, id, conn, stop).await
                 }
                 _ => {
                     inner
@@ -170,7 +170,7 @@ async fn run_parent(
     username: String,
     id: u64,
     conn: Conn,
-    mut reset: watch::Receiver<u64>,
+    mut stop: watch::Receiver<u64>,
 ) {
     let (mut reader, _writer) = conn.split();
     let mut position: (Option<i32>, Option<String>) = (None, None);
@@ -181,7 +181,7 @@ async fn run_parent(
                 Duration::from_secs(600),
                 reader.frame(CodeWidth::U8, MAX_DIST_FRAME),
             ) => f,
-            _ = reset.changed() => break,
+            _ = stop.changed() => break,
         };
         let frame = match frame {
             Ok(Ok(Some(f))) => f,
@@ -325,7 +325,7 @@ pub(crate) fn on_child(inner: Arc<Inner>, username: String, conn: Conn) {
     }
     net::spawn_writer(writer, rx);
     let id = inner.dist.next_id.fetch_add(1, Ordering::Relaxed);
-    let mut reset = inner.dist.generation.subscribe();
+    let mut stop = inner.dist.generation.subscribe();
     inner
         .dist
         .children
@@ -344,7 +344,7 @@ pub(crate) fn on_child(inner: Arc<Inner>, username: String, conn: Conn) {
                         break;
                     }
                 }
-                _ = reset.changed() => break,
+                _ = stop.changed() => break,
             }
         }
         inner.dist.children.remove_if(&username, |_, c| c.id == id);
