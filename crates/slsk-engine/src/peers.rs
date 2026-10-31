@@ -399,6 +399,16 @@ fn spawn_peer(
             {
                 continue;
             }
+            // A share list inflates to as much as 256 MiB from a megabyte, so
+            // the sender is checked first, not after: anyone can open a
+            // connection naming the user being browsed.
+            if frame.code == 5 && !trusted.load(Ordering::Relaxed) {
+                if refused || !verify(&inner, &username, ip).await {
+                    refused = true;
+                    continue;
+                }
+                trusted.store(true, Ordering::Relaxed);
+            }
             let code = frame.code;
             let decoded = if frame.body.len() > INLINE_DECODE {
                 // Each can inflate to 16 MiB or more, and any connection can
@@ -580,7 +590,25 @@ fn on_message(inner: &Arc<Inner>, username: &str, msg: PeerMessage, reply: &mpsc
             }
         }
         PeerMessage::PlaceInQueueRequest { filename } => {
-            if let Some(place) = inner.uploads.place(username, &filename) {
+            // A file asked after that we hold nothing for was dropped while
+            // the peer was offline, or queued before a restart of ours. The
+            // peer still has it queued and would wait for it for good, so it
+            // is queued again, with the same checks as a fresh request.
+            let mut place = inner.uploads.place(username, &filename);
+            if place.is_none() {
+                if let Err(r) = uploads::enqueue(inner, username, filename.clone()) {
+                    respond(
+                        PeerMessage::UploadDenied {
+                            filename,
+                            reason: r.to_string(),
+                        }
+                        .encode(),
+                    );
+                    return;
+                }
+                place = inner.uploads.place(username, &filename);
+            }
+            if let Some(place) = place {
                 respond(PeerMessage::PlaceInQueueResponse { filename, place }.encode());
             }
         }

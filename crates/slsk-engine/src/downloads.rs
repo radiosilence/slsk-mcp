@@ -7,7 +7,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
@@ -83,6 +83,9 @@ pub(crate) struct Download {
     place: AtomicU32,
     /// The token of the peer's latest offer, under which `by_token` holds it.
     token: AtomicU32,
+    /// Set while a task drives it, so a retry landing as a cancelled one
+    /// winds down does not start a second.
+    driving: AtomicBool,
     state: AtomicU8,
     attempts: AtomicU32,
     error: Mutex<Option<String>>,
@@ -234,6 +237,7 @@ pub(crate) fn add(
         speed: AtomicU64::new(0),
         place: AtomicU32::new(0),
         token: AtomicU32::new(0),
+        driving: AtomicBool::new(false),
         state: AtomicU8::new(DownloadState::Queued as u8),
         attempts: AtomicU32::new(0),
         error: Mutex::new(None),
@@ -261,7 +265,13 @@ pub(crate) fn retry(inner: &Arc<Inner>, username: &str, filename: &RawStr) -> bo
     true
 }
 
+/// Drive `d` until it ends, unless another task already is. A retry can
+/// revive it while the last driver is finishing, so that driver looks again
+/// after letting go, and keeps going if nobody else took it.
 async fn drive(inner: Arc<Inner>, d: Arc<Download>) {
+    if d.driving.swap(true, Ordering::AcqRel) {
+        return;
+    }
     // What a `.part` already holds, to show before the transfer resumes it.
     // Read here rather than when queued: that runs on the caller's thread.
     if d.bytes.load(Ordering::Relaxed) == 0
@@ -269,6 +279,16 @@ async fn drive(inner: Arc<Inner>, d: Arc<Download>) {
     {
         d.bytes.store(meta.len(), Ordering::Relaxed);
     }
+    loop {
+        drive_to_end(&inner, &d).await;
+        d.driving.store(false, Ordering::Release);
+        if d.state().is_terminal() || d.driving.swap(true, Ordering::AcqRel) {
+            return;
+        }
+    }
+}
+
+async fn drive_to_end(inner: &Arc<Inner>, d: &Arc<Download>) {
     loop {
         match d.state() {
             DownloadState::Queued => {
