@@ -221,7 +221,9 @@ internal port trusts credential headers. For use on one machine,
 `UI_INSECURE_NO_AUTH=1` with a loopback `UI_ADDR` stands in for OIDC. The
 executable is unsigned, so SmartScreen asks before the first run.
 
-Ctrl-C or closing the console window stops it cleanly. Running it as a
+Ctrl-C stops it cleanly. Closing the console window starts the same shutdown,
+but Windows ends the process after about five seconds, which can cut an
+import short. Running it as a
 Windows service, and antivirus holding newly downloaded files open (which
 delays tidying the download directory, not the import), are outside what is
 tested.

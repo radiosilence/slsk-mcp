@@ -1796,10 +1796,8 @@ fn file_name(disposition: Option<&str>, url: &url::Url) -> Option<String> {
         .map(|(_, v)| decode(v))
         .or_else(|| param("filename").map(|v| v.trim_matches('"').to_string()))
         .or_else(|| url.path_segments()?.next_back().map(decode))?;
-    let name = named.rsplit(['/', '\\']).next().unwrap_or_default();
-    let name = name.replace('\0', "");
-    let name = name.trim().trim_start_matches('.');
-    (!name.is_empty()).then(|| name.to_string())
+    let name = path_part(named.rsplit(['/', '\\']).next().unwrap_or_default());
+    (!name.is_empty()).then_some(name)
 }
 
 /// Unpack the zip at `archive` into `dir`. An entry that would land outside
@@ -1836,7 +1834,14 @@ pub(crate) fn unzip(archive: &std::path::Path, dir: &std::path::Path, limit: u64
             .all(|(_, p)| p.components().count() > 1 && p.components().next() == top);
     let mut left = limit;
     for (i, path) in &entries {
-        let rel: std::path::PathBuf = path.components().skip(usize::from(wrapped)).collect();
+        let mut rel = std::path::PathBuf::new();
+        for part in path.components().skip(usize::from(wrapped)) {
+            let part = path_part(&part.as_os_str().to_string_lossy());
+            if part.is_empty() {
+                bail!("the zip holds a path outside itself: {}", path.display());
+            }
+            rel.push(part);
+        }
         let out = dir.join(&rel);
         if let Some(parent) = out.parent() {
             std::fs::create_dir_all(parent)?;
@@ -1879,9 +1884,12 @@ fn path_part(s: &str) -> String {
     let reserved = matches!(
         stem.as_str(),
         "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
-    ) || ((stem.starts_with("COM") || stem.starts_with("LPT"))
-        && stem.len() == 4
-        && stem.as_bytes()[3].is_ascii_digit());
+    ) || stem
+        .strip_prefix("COM")
+        .or_else(|| stem.strip_prefix("LPT"))
+        .is_some_and(|n| {
+            n.len() == 1 && n.as_bytes()[0].is_ascii_digit() || matches!(n, "¹" | "²" | "³")
+        });
     if reserved {
         format!("_{s}")
     } else {
@@ -1918,6 +1926,7 @@ mod tests {
             ("CONSOLE.flac", "CONSOLE.flac"),
             ("COM10", "COM10"),
             ("conout$.txt", "_conout$.txt"),
+            ("COM¹.flac", "_COM¹.flac"),
         ] {
             assert_eq!(path_part(name), part, "{name:?}");
         }
@@ -2004,7 +2013,12 @@ mod tests {
 
     #[test]
     fn a_path_out_of_the_zip_refuses_it() {
-        for name in ["../escape.flac", "/etc/escape.flac", "a/../../escape.flac"] {
+        for name in [
+            "../escape.flac",
+            "/etc/escape.flac",
+            "a/../../escape.flac",
+            ".. /.. /escape.flac",
+        ] {
             let (r, dir) = unpacked(&[("01.flac", b"a"), (name, b"x")], 1 << 20);
             assert!(r.is_err(), "{name} was unpacked");
             assert!(!dir.parent().unwrap().join("escape.flac").exists());
@@ -2113,6 +2127,10 @@ mod tests {
         assert_eq!(
             file_name(Some("attachment; filename=\"../../.ssh/keys\""), &url).as_deref(),
             Some("keys")
+        );
+        assert_eq!(
+            file_name(Some("attachment; filename=\"C:escape.flac\""), &url).as_deref(),
+            Some("C_escape.flac")
         );
         let bare = url::Url::parse("https://example.com/").unwrap();
         assert_eq!(file_name(None, &bare), None);
