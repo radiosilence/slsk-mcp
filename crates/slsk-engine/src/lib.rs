@@ -300,8 +300,9 @@ impl Inner {
 pub struct Engine(Arc<Inner>);
 
 impl Engine {
-    /// Bind the listener, start scanning shares, and start logging in. Returns
-    /// once the listener is bound; login progress is on [`Engine::status`].
+    /// Bind the listener, then scan shares and log in once they are indexed.
+    /// Returns once the listener is bound; login progress is on
+    /// [`Engine::status`].
     pub async fn start(cfg: EngineConfig) -> std::io::Result<Self> {
         let listener = tokio::net::TcpListener::bind(("0.0.0.0", cfg.listen_port)).await?;
         let mut cfg = cfg;
@@ -346,12 +347,24 @@ impl Engine {
             }),
             cfg,
         });
-        tokio::spawn(peers::listen(inner.clone(), listener));
-        tokio::spawn(server::run(inner.clone()));
         tokio::spawn(uploads::schedule(inner.clone()));
         let engine = Self(inner);
-        let scanner = engine.clone();
-        tokio::spawn(async move { scanner.rescan().await });
+        let starting = engine.clone();
+        tokio::spawn(async move {
+            // Peers are served only once the shares are indexed: a peer that
+            // reconnects the moment we log in re-requests its queued files,
+            // and each one looked up in an empty index is refused as not
+            // shared, for good.
+            let scanning = starting.0.scanning.lock().await;
+            starting.0.rescan_wanted.store(false, Ordering::SeqCst);
+            let unprobed = starting.scan_and_publish(false).await;
+            tokio::spawn(peers::listen(starting.0.clone(), listener));
+            tokio::spawn(server::run(starting.0.clone()));
+            if unprobed {
+                starting.scan_and_publish(true).await;
+            }
+            drop(scanning);
+        });
         Ok(engine)
     }
 

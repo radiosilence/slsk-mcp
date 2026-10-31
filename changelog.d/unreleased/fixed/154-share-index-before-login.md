@@ -1,0 +1,1 @@
+- **Uploads are no longer refused right after a restart.** The service logs in only once its shares are indexed, so a peer that re-requests its queued files the moment it comes back online is no longer told they are not shared.
