@@ -57,8 +57,7 @@ async fn dev_login(State(state): State<AppState>) -> AppResult<Response> {
 }
 
 /// Build a redirect response, appending each cookie as its own `Set-Cookie`
-/// header. Needed three times across this file, which is exactly when a
-/// helper earns its place.
+/// header.
 fn redirect(location: &str, cookies: &[String]) -> Response {
     let mut response = (StatusCode::FOUND, [(header::LOCATION, location)]).into_response();
     let headers = response.headers_mut();
@@ -73,14 +72,11 @@ fn redirect(location: &str, cookies: &[String]) -> Response {
 pub async fn login(State(state): State<AppState>) -> AppResult<Response> {
     let (verifier, challenge) = pkce();
     let csrf = Sessions::token();
-    let flow_id = state
-        .sessions
-        .begin_flow(
-            &verifier,
-            &csrf,
-            std::time::Duration::from_secs(FLOW_TTL_SECS as u64),
-        )
-        .await;
+    let flow_id = state.sessions.begin_flow(
+        &verifier,
+        &csrf,
+        std::time::Duration::from_secs(FLOW_TTL_SECS as u64),
+    );
     let url = authorize_url(
         state.config.oidc.as_ref().ok_or(AppError::Unauthorized)?,
         &state.config.redirect_uri(),
@@ -112,7 +108,6 @@ pub async fn callback(
     let flow = state
         .sessions
         .take_flow(flow_id)
-        .await
         .ok_or(AppError::Unauthorized)?;
     if flow.csrf != q.state {
         return Err(AppError::BadRequest("state mismatch".to_string()));
@@ -154,7 +149,3 @@ pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Respon
     }
     redirect("/", &[clear_cookie(SESSION_COOKIE)])
 }
-
-// `dev_login` only exists in a debug build, so its tests can't exist in a
-// release one either — `cargo test --release` would otherwise fail to find
-// the function these call.

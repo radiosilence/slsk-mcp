@@ -1,15 +1,10 @@
-//! The gate, and the accessor behind it.
+//! The gate in front of the UI.
 //!
 //! [`require_session`] is a layer over the whole protected router rather than a
-//! decorator on each route. aria2's RPC is unauthenticated on the pod's
-//! loopback by design, so any path reaching it without passing through here is
-//! full control of the queue and write access to the media tree — which makes
-//! "somebody adds a route and forgets" the failure worth designing out. Wrapped
-//! at the router, a new route is protected by default and an unprotected one
-//! has to be mounted somewhere else on purpose.
-//!
-//! [`CurrentSession`] then only reads what the layer already put in the request,
-//! so it cannot disagree with the check.
+//! decorator on each route. Any UI route that skips it can start downloads and
+//! change what is shared, so a new route is protected by default and an
+//! unprotected one has to be mounted somewhere else on purpose. The layer puts
+//! the [`Session`] in the request's extensions for handlers to read.
 
 use axum::extract::{Request, State};
 use axum::http::StatusCode;
@@ -65,7 +60,6 @@ pub async fn require_session(
     }
 }
 
-/// The signed-in session, put here by [`require_session`].
 #[cfg(test)]
 mod tests {
     use axum::http::HeaderMap;

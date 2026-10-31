@@ -89,7 +89,8 @@ pub(crate) use now;
 const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0001_init.sql"),
     include_str!("../migrations/0002_active_jobs.sql"),
-    include_str!("../migrations/0003_profiles.sql"),
+    include_str!("../migrations/0003_import_how.sql"),
+    include_str!("../migrations/0004_profiles.sql"),
 ];
 
 /// How many idle connections to keep. More than the concurrency the service
@@ -372,11 +373,38 @@ pub struct Job {
     pub as_is_blocker: Option<String>,
     /// Fetched to replace a copy already filed; see `grab(refetch)`.
     pub replaces: bool,
+    /// How its latest import was asked to decide the album.
+    /// `None` for one written by a build whose `How` no longer reads.
+    pub import_how: Option<crate::jobs::How>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
 impl Job {
+    /// A new job, downloading from `source`.
+    pub fn new(account: String, title: String, source: Source, alternates: Vec<Alternate>) -> Self {
+        let now = chrono::Utc::now();
+        Self {
+            id: Uuid::new_v4(),
+            account,
+            title,
+            source: Json(source),
+            alternates: Json(alternates),
+            status: "downloading".into(),
+            error: None,
+            import_log: None,
+            candidates: None,
+            library_path: None,
+            analysis: None,
+            approved: false,
+            as_is_blocker: None,
+            replaces: false,
+            import_how: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
     pub fn from_row(r: &rusqlite::Row<'_>) -> Result<Self> {
         Ok(Self {
             id: r.get("id")?,
@@ -393,6 +421,15 @@ impl Job {
             approved: r.get("approved")?,
             as_is_blocker: r.get("as_is_blocker")?,
             replaces: r.get("replaces")?,
+            import_how: r
+                .get::<_, Option<String>>("import_how")?
+                .and_then(|s| match serde_json::from_str(&s) {
+                    Ok(how) => Some(how),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "a job's import decision no longer reads; matching afresh");
+                        None
+                    }
+                }),
             created_at: ts_from(&r.get::<_, String>("created_at")?)?,
             updated_at: ts_from(&r.get::<_, String>("updated_at")?)?,
         })
@@ -456,23 +493,30 @@ pub async fn set_replaces(db: &Db, id: Uuid) -> Result<()> {
     .await
 }
 
+/// Move the job onto another source and download it, unless it was
+/// cancelled, removed or imported meanwhile. Whether it moved.
 pub async fn replace_files(
     db: &Db,
     job: Uuid,
     source: &Source,
     alternates: &[Alternate],
     files: &[JobFile],
-) -> Result<()> {
+) -> Result<bool> {
     let (source, alternates, files) = (source.clone(), alternates.to_vec(), files.to_vec());
     db.run(move |c| {
         let tx = c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        tx.execute("DELETE FROM job_files WHERE job_id = ?1", params![job])?;
-        tx.execute(
-            concat!("UPDATE jobs SET source = ?2, alternates = ?3, status = 'downloading', error = NULL, updated_at = ", now!(), " WHERE id = ?1"),
+        let moved = tx.execute(
+            concat!("UPDATE jobs SET source = ?2, alternates = ?3, status = 'downloading', error = NULL, updated_at = ", now!(),
+                " WHERE id = ?1 AND status IN ('downloading', 'review', 'suspect', 'failed')"),
             params![job, Json(&source), Json(&alternates)],
-        )?;
+        )? > 0;
+        if !moved {
+            return Ok(false);
+        }
+        tx.execute("DELETE FROM job_files WHERE job_id = ?1", params![job])?;
         insert_files(&tx, &files)?;
-        tx.commit()
+        tx.commit()?;
+        Ok(true)
     })
     .await
 }
@@ -716,7 +760,7 @@ pub async fn set_ban(db: &Db, account: &str, username: &str, banned: bool) -> Re
     .await
 }
 
-/// Append an outcome to the job's history. See `0004_events.sql`.
+/// Append an outcome to the job's history, in `job_events`.
 pub async fn record_event(
     db: &Db,
     job_id: Uuid,
@@ -864,18 +908,27 @@ pub async fn set_analysis(
     .await
 }
 
-/// Move a job to `importing` if it is waiting on a decision. One statement,
-/// so two requests for the same job cannot both succeed.
-pub async fn claim_import(db: &Db, id: Uuid) -> Result<bool> {
+/// The states a job waiting on a person's decision is in.
+pub const DECIDED: &[&str] = &["review", "suspect", "failed"];
+
+/// Move a job from one of `from` to `importing`, recording how the import
+/// is to decide the album. One statement, so two requests for the same job
+/// cannot both succeed, and a restart finds the decision with the status.
+pub async fn claim_import(
+    db: &Db,
+    id: Uuid,
+    from: &[&str],
+    how: &crate::jobs::How,
+) -> Result<bool> {
+    let (from, how) = (serde_json::to_string(from).unwrap_or_default(), how.clone());
     db.run(move |c| {
         Ok(c.query_row(
             concat!(
-                "UPDATE jobs SET status = 'importing', error = NULL, updated_at = ",
+                "UPDATE jobs SET status = 'importing', error = NULL, import_how = ?3, updated_at = ",
                 now!(),
-                " \
-                 WHERE id = ?1 AND status IN ('review', 'suspect', 'failed') RETURNING id"
+                " WHERE id = ?1 AND status IN (SELECT value FROM json_each(?2)) RETURNING id"
             ),
-            params![id],
+            params![id, from, Json(&how)],
             |_| Ok(()),
         )
         .optional()?
@@ -884,21 +937,29 @@ pub async fn claim_import(db: &Db, id: Uuid) -> Result<bool> {
     .await
 }
 
-/// Move a job from one of `from` to `to`, in one statement, so a job that
-/// has moved on meanwhile is left alone. Whether it moved.
-pub async fn move_status(db: &Db, id: Uuid, from: &[&str], to: &str) -> Result<bool> {
-    let (from, to) = (
+/// Move a job from one of `from` to `to` with `error`, in one statement, so
+/// a job that has moved on meanwhile (cancelled, removed) is left alone.
+/// Whether it moved.
+pub async fn move_status(
+    db: &Db,
+    id: Uuid,
+    from: &[&str],
+    to: &str,
+    error: Option<&str>,
+) -> Result<bool> {
+    let (from, to, error) = (
         serde_json::to_string(from).unwrap_or_default(),
         to.to_string(),
+        error.map(str::to_string),
     );
     db.run(move |c| {
         Ok(c.query_row(
             concat!(
-                "UPDATE jobs SET status = ?2, updated_at = ",
+                "UPDATE jobs SET status = ?2, error = ?4, updated_at = ",
                 now!(),
                 " WHERE id = ?1 AND status IN (SELECT value FROM json_each(?3)) RETURNING id"
             ),
-            params![id, to, from],
+            params![id, to, from, error],
             |_| Ok(()),
         )
         .optional()?
@@ -1118,26 +1179,16 @@ mod tests {
     }
 
     fn job(title: &str, status: &str) -> Job {
-        Job {
-            id: Uuid::new_v4(),
-            account: "me".into(),
-            title: title.into(),
-            source: Json(Source::Files {
+        let mut job = Job::new(
+            "me".into(),
+            title.into(),
+            Source::Files {
                 username: "peer".into(),
-            }),
-            alternates: Json(Vec::new()),
-            status: status.into(),
-            error: None,
-            import_log: None,
-            candidates: None,
-            library_path: None,
-            analysis: None,
-            approved: false,
-            as_is_blocker: None,
-            replaces: false,
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
-        }
+            },
+            Vec::new(),
+        );
+        job.status = status.into();
+        job
     }
 
     fn file(job: &Job, name: &str, size: i64) -> JobFile {
@@ -1217,10 +1268,11 @@ mod tests {
         let importing = jobs(&db, Some("importing"), 10).await.unwrap();
         assert_eq!(importing.len(), 1);
         assert_eq!(importing[0].id, a.id);
-        assert!(!claim_import(&db, a.id).await.unwrap());
+        let (from, how) = (DECIDED, &crate::jobs::How::Match(None));
+        assert!(!claim_import(&db, a.id, from, how).await.unwrap());
         set_status(&db, a.id, "review", None).await.unwrap();
-        assert!(claim_import(&db, a.id).await.unwrap());
-        assert!(!claim_import(&db, a.id).await.unwrap());
+        assert!(claim_import(&db, a.id, from, how).await.unwrap());
+        assert!(!claim_import(&db, a.id, from, how).await.unwrap());
     }
 
     #[tokio::test]
@@ -1308,7 +1360,7 @@ mod tests {
         let j = job("a", "imported");
         insert_job(&db, &j, &[]).await.unwrap();
         assert!(
-            !move_status(&db, j.id, &["downloading"], "cancelled")
+            !move_status(&db, j.id, &["downloading"], "cancelled", None)
                 .await
                 .unwrap()
         );
@@ -1317,13 +1369,75 @@ mod tests {
             "imported"
         );
         assert!(
-            move_status(&db, j.id, &["downloading", "imported"], "removing")
+            move_status(&db, j.id, &["downloading", "imported"], "removing", None)
                 .await
                 .unwrap()
         );
         assert_eq!(
             super::job(&db, j.id).await.unwrap().unwrap().status,
             "removing"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_new_source_does_not_revive_a_cancelled_job() {
+        let db = Db::memory().await;
+        let j = job("a", "cancelled");
+        insert_job(&db, &j, &[file(&j, "01.flac", 10)])
+            .await
+            .unwrap();
+        let source = Source::Files {
+            username: "other".into(),
+        };
+        let moved = replace_files(&db, j.id, &source, &[], &[file(&j, "02.flac", 10)])
+            .await
+            .unwrap();
+        assert!(!moved);
+        assert_eq!(
+            super::job(&db, j.id).await.unwrap().unwrap().status,
+            "cancelled"
+        );
+        assert_eq!(job_files(&db, j.id).await.unwrap().len(), 1);
+
+        let k = job("b", "review");
+        insert_job(&db, &k, &[]).await.unwrap();
+        assert!(
+            replace_files(&db, k.id, &source, &[], &[file(&k, "01.flac", 10)])
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            super::job(&db, k.id).await.unwrap().unwrap().status,
+            "downloading"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_import_keeps_how_it_was_asked() {
+        let db = Db::memory().await;
+        let j = job("a", "review");
+        insert_job(&db, &j, &[]).await.unwrap();
+        let how = crate::jobs::How::Match(Some("release".into()));
+        assert!(claim_import(&db, j.id, DECIDED, &how).await.unwrap());
+        let read = super::job(&db, j.id).await.unwrap().unwrap().import_how;
+        assert!(matches!(read, Some(crate::jobs::How::Match(Some(r))) if r == "release"));
+        // A decision written by a build whose `How` differed reads as none,
+        // rather than failing every query that lists the job.
+        db.run(move |c| {
+            c.execute(
+                "UPDATE jobs SET import_how = '{\"Gone\":1}' WHERE id = ?1",
+                params![j.id],
+            )
+        })
+        .await
+        .unwrap();
+        assert!(
+            super::job(&db, j.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .import_how
+                .is_none()
         );
     }
 }

@@ -160,9 +160,7 @@ async fn main() -> anyhow::Result<()> {
     jobs.spawn();
     social.spawn();
     uploads_log::spawn(app.clone());
-    if app.session.engine().is_some()
-        && let Err(e) = jobs.resume().await
-    {
+    if let Err(e) = jobs.resume().await {
         tracing::warn!(error = %e, "could not resume jobs");
     }
 
@@ -219,7 +217,8 @@ fn internal_router(app: Arc<App>) -> Router {
     use rmcp::transport::streamable_http_server::{
         StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
     };
-    let template = mcp::SlskMcp::new(app.clone());
+    let schema = graphql::schema(app.clone());
+    let template = mcp::SlskMcp::new(app.clone(), schema.clone());
     let service = StreamableHttpService::new(
         move || Ok(template.clone()),
         Arc::new(LocalSessionManager::default()),
@@ -227,7 +226,6 @@ fn internal_router(app: Arc<App>) -> Router {
         // rmcp's DNS-rebinding allowlist would reject.
         StreamableHttpServerConfig::default().disable_allowed_hosts(),
     );
-    let schema = graphql::schema(app.clone());
     Router::new()
         .nest_service("/mcp", service)
         .route(

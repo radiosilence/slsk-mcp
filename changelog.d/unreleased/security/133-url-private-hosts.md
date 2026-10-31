@@ -1,0 +1,1 @@
+- **Fetches refuse private addresses.** `importUrl` and `setAlbumArt` no longer reach loopback, private, link-local or other reserved addresses, whether named directly, through DNS or on a redirect; the internal listener trusts whoever reaches it.

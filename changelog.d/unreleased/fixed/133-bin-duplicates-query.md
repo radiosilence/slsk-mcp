@@ -1,0 +1,1 @@
+- **`binDuplicates` needs a query.** Without one and without `preview`, it is refused instead of binning every spare in the library.

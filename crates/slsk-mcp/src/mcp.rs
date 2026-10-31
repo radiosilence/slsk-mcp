@@ -52,18 +52,23 @@ pub async fn apply_credentials(app: &Arc<App>, headers: &http::HeaderMap) -> Res
             .filter(|v| !v.is_empty())
     };
     if let (Some(u), Some(p)) = (get(USERNAME_HEADER), get(PASSWORD_HEADER)) {
+        let first = app.session.engine().is_none();
         app.session
             .use_account(u, p)
             .await
             .map_err(|e| format!("{e:#}"))?;
+        // The first sign-in queues the downloads left waiting for an engine.
+        if first && let Err(e) = app.jobs.resume().await {
+            tracing::warn!(error = %e, "could not resume jobs");
+        }
     }
     Ok(())
 }
 
 impl SlskMcp {
-    pub fn new(app: Arc<App>) -> Self {
+    pub fn new(app: Arc<App>, schema: SlskSchema) -> Self {
         Self {
-            schema: graphql::schema(app.clone()),
+            schema,
             app,
             tool_router: Self::tool_router(),
         }
