@@ -1262,6 +1262,16 @@ mod tests {
         record_event(&db, Uuid::new_v4(), "b", None, "imported", None, None)
             .await
             .unwrap();
+        // The same instant for all, so only insertion order can sort them.
+        db.run(|c| {
+            c.execute(
+                "UPDATE job_events SET at = '2026-01-01T00:00:00.000+00:00'",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
         delete_job(&db, j.id).await.unwrap();
         let events = job_events(&db, j.id).await.unwrap();
         let seen: Vec<_> = events
