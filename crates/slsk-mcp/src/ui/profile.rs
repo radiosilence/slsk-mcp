@@ -41,7 +41,9 @@ const FRESH: Duration = Duration::from_secs(600);
 
 /// Peers' answers, newest last.
 #[derive(Clone, Default)]
-pub(super) struct Cache(Arc<parking_lot::Mutex<Vec<(String, Instant, Arc<UserInfo>)>>>);
+pub(super) struct Cache(Arc<parking_lot::Mutex<Vec<Answer>>>);
+
+type Answer = (String, Instant, Arc<UserInfo>);
 
 impl Cache {
     pub(super) fn get(&self, username: &str) -> Option<Arc<UserInfo>> {

@@ -703,7 +703,7 @@ mod profile {
         );
         assert!(html.contains("&lt;b&gt;dub&lt;/b&gt; techno"), "{html}");
         assert!(
-            html.contains("/profile/picture?username=ann&amp;v="),
+            html.contains("/profile/picture?username=ann&#38;v="),
             "{html}"
         );
         assert!(html.contains("1000 files in 90 folders"));
