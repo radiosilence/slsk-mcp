@@ -137,10 +137,15 @@ const DATASTAR_JS: &str = include_str!("../assets/datastar.js");
 /// new build fetches its own stylesheet and script rather than a cached copy
 /// of the previous build's.
 fn versioned(path: &str, body: &str) -> String {
-    let hash = body.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
-        (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+    format!("{path}?v={}", fingerprint(body.as_bytes()))
+}
+
+/// A short hash of `bytes` (FNV-1a) for an address that changes with them.
+fn fingerprint(bytes: &[u8]) -> String {
+    let hash = bytes.iter().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
+        (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3)
     });
-    format!("{path}?v={hash:016x}")
+    format!("{hash:016x}")
 }
 
 static CSS_URL: LazyLock<String> = LazyLock::new(|| versioned("/assets/app.css", APP_CSS));

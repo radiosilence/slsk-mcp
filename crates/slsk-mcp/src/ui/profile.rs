@@ -37,6 +37,9 @@ pub(super) fn routes() -> Router<UiState> {
 /// The largest picture accepted for upload, before it is scaled down.
 const MAX_UPLOAD: usize = 16 << 20;
 pub(super) const KEEP: usize = 16;
+/// The largest peer picture kept and shown. Ordinary avatars are far
+/// smaller; this bounds what the cache of answers holds.
+const MAX_PEER_PICTURE: usize = 1 << 20;
 const FRESH: Duration = Duration::from_secs(600);
 
 /// Peers' answers, newest last.
@@ -173,12 +176,9 @@ fn status_word(s: UserStatus) -> &'static str {
 /// A picture's address, changing with the picture so a cached copy of an
 /// old one is never shown.
 fn picture_href(username: &str, bytes: &[u8]) -> String {
-    let hash = bytes.iter().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
-        (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3)
-    });
     super::place_url(
         "/profile/picture",
-        &[("username", username), ("v", &format!("{hash:016x}"))],
+        &[("username", username), ("v", &super::fingerprint(bytes))],
     )
 }
 
@@ -206,6 +206,8 @@ async fn profile(State(s): State<UiState>, Query(q): Query<ProfileQuery>) -> Res
             }
             match tokio::time::timeout(Duration::from_secs(20), engine.user_info(&username)).await {
                 Ok(Ok(info)) => {
+                    let mut info = info;
+                    info.picture = info.picture.filter(|p| p.len() <= MAX_PEER_PICTURE);
                     let info = Arc::new(info);
                     cache.put(&username, info.clone());
                     Ok(info)

@@ -253,11 +253,19 @@ pub fn avatar(bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
     } else {
         img
     };
+    // JPEG has no transparency, so transparent parts become white rather
+    // than the black dropping the alpha channel would leave.
+    let rgba = img.to_rgba8();
+    let flat = image::RgbImage::from_fn(rgba.width(), rgba.height(), |x, y| {
+        let [r, g, b, a] = rgba.get_pixel(x, y).0;
+        let over_white =
+            |c: u8| ((u16::from(c) * u16::from(a) + 255 * (255 - u16::from(a))) / 255) as u8;
+        image::Rgb([over_white(r), over_white(g), over_white(b)])
+    });
     let mut out = Vec::new();
-    img.to_rgb8()
-        .write_with_encoder(image::codecs::jpeg::JpegEncoder::new_with_quality(
-            &mut out, 85,
-        ))?;
+    flat.write_with_encoder(image::codecs::jpeg::JpegEncoder::new_with_quality(
+        &mut out, 85,
+    ))?;
     Ok(out)
 }
 
@@ -407,6 +415,20 @@ mod tests {
         assert_eq!(dimensions(&out), Some((512, 256)));
         assert_eq!(dimensions(&avatar(&png(64, 64)).unwrap()), Some((64, 64)));
         assert!(avatar(b"not an image").is_err());
+        let mut clear = Vec::new();
+        image::DynamicImage::new_rgba8(8, 8)
+            .write_to(
+                &mut std::io::Cursor::new(&mut clear),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        let flat = image::load_from_memory(&avatar(&clear).unwrap())
+            .unwrap()
+            .to_rgb8();
+        assert!(
+            flat.get_pixel(4, 4).0.iter().all(|&c| c > 240),
+            "transparent should be white"
+        );
     }
 
     #[test]
