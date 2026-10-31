@@ -369,13 +369,10 @@ impl Jobs {
             jobs.fetches.lock().expect("fetches").remove(&id);
             let _ = tokio::fs::remove_file(jobs.fetch_file(id)).await;
             let reason = outcome.as_ref().err().map(|e| format!("{e:#}"));
-            let to = if reason.is_none() {
-                "importing"
-            } else {
-                "failed"
+            let moved = match &reason {
+                None => db::claim_import(&jobs.db, id, &["downloading"], &How::Match(None)).await,
+                Some(r) => db::move_status(&jobs.db, id, &["downloading"], "failed", Some(r)).await,
             };
-            let moved =
-                db::move_status(&jobs.db, id, &["downloading"], to, reason.as_deref()).await;
             match (reason, moved) {
                 (None, Ok(true)) => {
                     if let Err(e) = jobs.import(id, None).await {
@@ -578,7 +575,7 @@ impl Jobs {
                 .await?
                 .into_iter()
                 .partition(|j| matches!(j.source.0, Source::Url { .. }));
-        if !self.resumed.swap(true, SeqCst) {
+        if !self.resumed.load(SeqCst) {
             // Remembered across restarts: a peer that stalled us yesterday
             // is no more likely to send today because this process is new.
             let now = tokio::time::Instant::now();
@@ -594,9 +591,11 @@ impl Jobs {
                 }
             }
             for job in db::jobs(&self.db, Some("importing"), 10_000).await? {
-                let how = job.import_how.map_or(How::Match(None), |h| h.0);
-                self.import_in_background(job.id, how);
+                self.import_in_background(job.id, job.import_how.unwrap_or(How::Match(None)));
             }
+            // Only once all of it has gone: a pass that failed part way is
+            // run again by the next call.
+            self.resumed.store(true, SeqCst);
         }
         if let Some(engine) = self.session.engine().cloned() {
             for job in downloads {
@@ -815,8 +814,9 @@ impl Jobs {
         if failed.is_none() && done.is_some() {
             self.retried.lock().expect("retried").remove(&job.id);
             // Cancelled or removed since this tick read it: left so.
-            if db::move_status(&self.db, job.id, &["downloading"], "importing", None).await? {
-                self.import_in_background(job.id, How::Match(None));
+            let how = How::Match(None);
+            if db::claim_import(&self.db, job.id, &["downloading"], &how).await? {
+                self.import_in_background(job.id, how);
             }
         } else if failed.is_some() {
             // Most failures are a peer dropping off for a moment. Asking
@@ -969,14 +969,10 @@ impl Jobs {
     async fn run_import(self: &Arc<Self>, id: Uuid, how: How) -> Result<()> {
         let jobs = self.clone();
         tokio::spawn(async move {
-            let outcome = async {
-                db::set_import_how(&jobs.db, id, &how).await?;
-                let filing = jobs.clone();
-                tokio::spawn(async move { filing.file(id, how).await })
-                    .await
-                    .unwrap_or_else(|e| Err(anyhow::anyhow!("the import stopped: {e}")))
-            }
-            .await;
+            let filing = jobs.clone();
+            let outcome = tokio::spawn(async move { filing.file(id, how).await })
+                .await
+                .unwrap_or_else(|e| Err(anyhow::anyhow!("the import stopped: {e}")));
             if let Err(e) = &outcome {
                 jobs.deferrals.lock().expect("deferrals").remove(&id);
                 let reason = format!("{e:#}");
@@ -1364,8 +1360,8 @@ impl Jobs {
     /// Take a job waiting on a decision into `importing`, or say why not. A
     /// second request for the same job (a double tap, an assistant beside a
     /// person) is refused here rather than queued behind the first.
-    async fn claim(&self, id: Uuid) -> Result<()> {
-        if db::claim_import(&self.db, id).await? {
+    async fn claim(&self, id: Uuid, how: &How) -> Result<()> {
+        if db::claim_import(&self.db, id, db::DECIDED, how).await? {
             return Ok(());
         }
         let job = db::job(&self.db, id).await?.context("no such job")?;
@@ -1377,7 +1373,7 @@ impl Jobs {
 
     /// Import a suspect job despite its analysis, waiting for the outcome.
     pub async fn approve(self: &Arc<Self>, id: Uuid) -> Result<()> {
-        self.claim(id).await?;
+        self.claim(id, &How::Match(None)).await?;
         db::set_approved(&self.db, id).await?;
         self.import(id, None).await
     }
@@ -1385,8 +1381,9 @@ impl Jobs {
     /// File a job by its own tags, for a release MusicBrainz does not have,
     /// waiting for the outcome.
     pub async fn import_as_is(self: &Arc<Self>, id: Uuid, edits: sift::Edits) -> Result<()> {
-        self.claim(id).await?;
-        self.run_import(id, How::AsIs(edits)).await
+        let how = How::AsIs(edits);
+        self.claim(id, &how).await?;
+        self.run_import(id, how).await
     }
 
     /// Where a job's files are now: filed for a decision once they have
@@ -1416,8 +1413,9 @@ impl Jobs {
 
     /// Import a job as the given MusicBrainz release, waiting for the outcome.
     pub async fn resolve(self: &Arc<Self>, id: Uuid, release: String) -> Result<()> {
-        self.claim(id).await?;
-        self.import(id, Some(release)).await
+        let how = How::Match(Some(release));
+        self.claim(id, &how).await?;
+        self.run_import(id, how).await
     }
 
     /// `approve` or `resolve` without waiting: the job reads `importing` as
@@ -1428,11 +1426,12 @@ impl Jobs {
         approve: bool,
         release: Option<String>,
     ) -> Result<()> {
-        self.claim(id).await?;
+        let how = How::Match(release);
+        self.claim(id, &how).await?;
         if approve {
             db::set_approved(&self.db, id).await?;
         }
-        self.import_in_background(id, How::Match(release));
+        self.import_in_background(id, how);
         Ok(())
     }
 
@@ -1579,10 +1578,13 @@ impl Jobs {
                 {
                     bail!("job is already being retried");
                 }
-                match (job.source.0, engine) {
-                    (Source::Url { url }, _) => self.fetch(id, url),
-                    (_, Some(engine)) => self.redownload(&engine, id).await?,
-                    (_, None) => {}
+                match engine {
+                    Some(engine) => self.redownload(&engine, id).await?,
+                    None => {
+                        if let Source::Url { url } = job.source.0 {
+                            self.fetch(id, url);
+                        }
+                    }
                 }
                 return Ok(());
             }
@@ -1717,9 +1719,13 @@ fn public(ip: std::net::IpAddr) -> bool {
                 || (a & 0xfe00) == 0xfc00
                 || (a & 0xffc0) == 0xfe80
                 || (a == 0x2001 && b == 0x0db8)
-                // NAT64 and the deprecated IPv4-compatible form reach
-                // IPv4 addresses, which are judged as such.
+                // Forms that reach an IPv4 address, private or not, through
+                // a relay: NAT64 (well-known and local-use), 6to4, Teredo
+                // and the deprecated IPv4-compatible form.
                 || (a == 0x0064 && b == 0xff9b)
+                || (a == 0x0064 && b == 0xff9b + 1)
+                || a == 0x2002
+                || (a == 0x2001 && b == 0)
                 || ip.segments()[..6] == [0; 6])
         }
     }
@@ -1748,8 +1754,10 @@ impl reqwest::dns::Resolve for PublicResolver {
 
 /// An HTTP client for URLs a caller names: only public hosts, at every
 /// redirect too.
+/// No proxy: through one, the target is resolved where this cannot check it.
 pub(crate) fn web_client() -> reqwest::ClientBuilder {
     reqwest::Client::builder()
+        .no_proxy()
         .user_agent(concat!("slsk-mcp/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(Duration::from_secs(30))
         .dns_resolver(Arc::new(PublicResolver))
@@ -2001,6 +2009,10 @@ mod tests {
             "fc00::1",
             "::ffff:127.0.0.1",
             "64:ff9b::7f00:1",
+            "64:ff9b:1::a00:1",
+            "2002:7f00:1::",
+            "2001:0:4136:e378::1",
+            "::7f00:1",
         ] {
             assert!(!public(ip.parse().unwrap()), "{ip}");
         }

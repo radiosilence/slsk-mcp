@@ -373,7 +373,8 @@ pub struct Job {
     /// Fetched to replace a copy already filed; see `grab(refetch)`.
     pub replaces: bool,
     /// How its latest import was asked to decide the album.
-    pub import_how: Option<Json<crate::jobs::How>>,
+    /// `None` for one written by a build whose `How` no longer reads.
+    pub import_how: Option<crate::jobs::How>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -419,7 +420,15 @@ impl Job {
             approved: r.get("approved")?,
             as_is_blocker: r.get("as_is_blocker")?,
             replaces: r.get("replaces")?,
-            import_how: r.get("import_how")?,
+            import_how: r
+                .get::<_, Option<String>>("import_how")?
+                .and_then(|s| match serde_json::from_str(&s) {
+                    Ok(how) => Some(how),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "a job's import decision no longer reads; matching afresh");
+                        None
+                    }
+                }),
             created_at: ts_from(&r.get::<_, String>("created_at")?)?,
             updated_at: ts_from(&r.get::<_, String>("updated_at")?)?,
         })
@@ -865,18 +874,27 @@ pub async fn set_analysis(
     .await
 }
 
-/// Move a job to `importing` if it is waiting on a decision. One statement,
-/// so two requests for the same job cannot both succeed.
-pub async fn claim_import(db: &Db, id: Uuid) -> Result<bool> {
+/// The states a job waiting on a person's decision is in.
+pub const DECIDED: &[&str] = &["review", "suspect", "failed"];
+
+/// Move a job from one of `from` to `importing`, recording how the import
+/// is to decide the album. One statement, so two requests for the same job
+/// cannot both succeed, and a restart finds the decision with the status.
+pub async fn claim_import(
+    db: &Db,
+    id: Uuid,
+    from: &[&str],
+    how: &crate::jobs::How,
+) -> Result<bool> {
+    let (from, how) = (serde_json::to_string(from).unwrap_or_default(), how.clone());
     db.run(move |c| {
         Ok(c.query_row(
             concat!(
-                "UPDATE jobs SET status = 'importing', error = NULL, updated_at = ",
+                "UPDATE jobs SET status = 'importing', error = NULL, import_how = ?3, updated_at = ",
                 now!(),
-                " \
-                 WHERE id = ?1 AND status IN ('review', 'suspect', 'failed') RETURNING id"
+                " WHERE id = ?1 AND status IN (SELECT value FROM json_each(?2)) RETURNING id"
             ),
-            params![id],
+            params![id, from, Json(&how)],
             |_| Ok(()),
         )
         .optional()?
@@ -912,18 +930,6 @@ pub async fn move_status(
         )
         .optional()?
         .is_some())
-    })
-    .await
-}
-
-pub async fn set_import_how(db: &Db, id: Uuid, how: &crate::jobs::How) -> Result<()> {
-    let how = how.clone();
-    db.run(move |c| {
-        c.execute(
-            "UPDATE jobs SET import_how = ?2 WHERE id = ?1",
-            params![id, Json(&how)],
-        )?;
-        Ok(())
     })
     .await
 }
@@ -1228,10 +1234,11 @@ mod tests {
         let importing = jobs(&db, Some("importing"), 10).await.unwrap();
         assert_eq!(importing.len(), 1);
         assert_eq!(importing[0].id, a.id);
-        assert!(!claim_import(&db, a.id).await.unwrap());
+        let (from, how) = (DECIDED, &crate::jobs::How::Match(None));
+        assert!(!claim_import(&db, a.id, from, how).await.unwrap());
         set_status(&db, a.id, "review", None).await.unwrap();
-        assert!(claim_import(&db, a.id).await.unwrap());
-        assert!(!claim_import(&db, a.id).await.unwrap());
+        assert!(claim_import(&db, a.id, from, how).await.unwrap());
+        assert!(!claim_import(&db, a.id, from, how).await.unwrap());
     }
 
     #[tokio::test]
@@ -1374,11 +1381,29 @@ mod tests {
     #[tokio::test]
     async fn an_import_keeps_how_it_was_asked() {
         let db = Db::memory().await;
-        let j = job("a", "importing");
+        let j = job("a", "review");
         insert_job(&db, &j, &[]).await.unwrap();
         let how = crate::jobs::How::Match(Some("release".into()));
-        set_import_how(&db, j.id, &how).await.unwrap();
+        assert!(claim_import(&db, j.id, DECIDED, &how).await.unwrap());
         let read = super::job(&db, j.id).await.unwrap().unwrap().import_how;
-        assert!(matches!(read, Some(Json(crate::jobs::How::Match(Some(r)))) if r == "release"));
+        assert!(matches!(read, Some(crate::jobs::How::Match(Some(r))) if r == "release"));
+        // A decision written by a build whose `How` differed reads as none,
+        // rather than failing every query that lists the job.
+        db.run(move |c| {
+            c.execute(
+                "UPDATE jobs SET import_how = '{\"Gone\":1}' WHERE id = ?1",
+                params![j.id],
+            )
+        })
+        .await
+        .unwrap();
+        assert!(
+            super::job(&db, j.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .import_how
+                .is_none()
+        );
     }
 }
