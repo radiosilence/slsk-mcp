@@ -1,1 +1,1 @@
-- **Dependencies refreshed.** Every crate moved to its latest compatible release; rusqlite stays on 0.40 because sift-music links the same libsqlite3.
+- **Dependencies refreshed.** Every crate is on its latest release, which brings semver-incompatible transitive bumps (typed-path 0.13 through zip, ogg_pager 0.8 through lofty, aws-lc-sys 0.47); rusqlite stays on 0.40 because sift-music links the same libsqlite3. The stale unsafe-libyaml audit exception is removed, since nothing in the lockfile depends on it.
