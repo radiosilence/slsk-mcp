@@ -1,0 +1,1 @@
+- **Peers cannot drive large allocations.** Unsolicited search results and folder contents are dropped before inflating, share lists over the usual limit are taken only from verified links, decoded lists no longer reserve from a forged count, and bans are applied from the login status so a lagging subscriber cannot skip them.
