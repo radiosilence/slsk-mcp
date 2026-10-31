@@ -1,8 +1,8 @@
 <section class="min-w-0">
+  {% let q = "" %}{% let lossless = true %}{% let grab = "'/grab?jobs=' + $jobs" %}
   {% include "finder.html" %}
-  <input type="hidden" name="jobs" form="finder" data-attr:value="$jobs">
   <form id="import-url" class="mt-2 flex flex-wrap gap-2" data-on:submit__prevent="@post('/import-url', {contentType: 'form', selector: '#import-url'})">
-    <input type="hidden" name="jobs" data-attr:value="$jobs">
+    <input type="hidden" name="jobs" value="{{ crate::ui::PAGE }}" data-attr:value="$jobs">
     <input class="flex-[1_1_12em]" name="url" type="url" placeholder="Download link, such as a Bandcamp purchase" aria-label="Download link" autocomplete="off" required>
     <button data-indicator="_importing" data-attr:disabled="$_importing" data-class:busy="$_importing">Import</button>
   </form>

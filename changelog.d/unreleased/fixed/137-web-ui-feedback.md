@@ -1,0 +1,1 @@
+- **Web UI actions answer where they are asked.** Grab on Search confirms with a toast instead of patching a job list the page lacks; leaving a chat room clears it from the address; grabbing, importing a link, pasting a release and cancelling an upload keep the rows shown after "Show more"; and Browse's Download buttons show their own progress and cannot be sent twice.

@@ -391,8 +391,6 @@ impl Page {
 #[derive(Template)]
 #[template(path = "pages/albums.html")]
 struct AlbumsPage {
-    q: String,
-    lossless: bool,
     jobs: String,
 }
 
@@ -437,11 +435,17 @@ fn chat_href(kind: &str, name: &str) -> String {
 }
 
 /// A link's click handler: a modified click (a new tab, a download) is left
-/// to the browser; a plain one runs `then` in place, unless `busy` (a signal)
-/// says the last is still loading.
-fn follow(busy: impl std::fmt::Display, then: &str) -> String {
+/// to the browser; a plain one runs `then` in place, unless `busy` (a signal,
+/// or empty for none) says the last is still loading.
+fn follow(busy: impl std::fmt::Display, then: impl std::fmt::Display) -> String {
+    let busy = busy.to_string();
+    let then = if busy.is_empty() {
+        then.to_string()
+    } else {
+        format!("{busy} || ({then})")
+    };
     format!(
-        "evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || (evt.preventDefault(), {busy} || ({then}))"
+        "evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || (evt.preventDefault(), {then})"
     )
 }
 
@@ -501,8 +505,6 @@ async fn render_page(
     .to_string();
     let body = match tab {
         "albums" => AlbumsPage {
-            q: search.q,
-            lossless,
             jobs: jobs_html(&s.app, PAGE).await,
         }
         .render()
@@ -594,6 +596,14 @@ const PAGE: i64 = 500;
 /// `PAGE`, for a form that does not say how many rows its page shows.
 fn page() -> i64 {
     PAGE
+}
+
+/// A shown count from a form, where an empty or unreadable value (a hidden
+/// input whose signal has not been applied) is `PAGE`.
+fn shown_field<'de, D: serde::Deserializer<'de>>(d: D) -> Result<i64, D::Error> {
+    Ok(<String as serde::Deserialize>::deserialize(d)?
+        .parse()
+        .unwrap_or(PAGE))
 }
 
 /// The most rows a page may ask for, whatever its signals say: ten pages.
@@ -906,7 +916,7 @@ async fn jobs_html(app: &App, shown: i64) -> String {
         .await
         .inspect_err(|e| tracing::warn!(error = %e, "could not list jobs"))
         .unwrap_or_default();
-    let more = active.len() as i64 > shown || done.len() as i64 > shown;
+    let more = shown < MOST && (active.len() as i64 > shown || done.len() as i64 > shown);
     active.truncate(shown as usize);
     done.truncate(shown as usize);
     let jobs = graphql::job_views(app, active, true)
@@ -1064,7 +1074,7 @@ async fn uploads_html(app: &App, shown: i64) -> String {
         .await
         .inspect_err(|e| tracing::warn!(error = %e, "could not read upload history"))
         .unwrap_or_default();
-    let more = history.len() as i64 > shown;
+    let more = shown < MOST && history.len() as i64 > shown;
     history.truncate(shown as usize);
     let today = crate::db::upload_totals(&app.db, midnight)
         .await
@@ -1168,7 +1178,11 @@ struct SearchForm {
     q: String,
     #[serde(default)]
     lossless: bool,
-    /// How many jobs the page shows, sent only from the page that lists them.
+}
+
+/// How many jobs the page shows, sent only by the page that lists them.
+#[derive(serde::Deserialize)]
+struct GrabQuery {
     jobs: Option<i64>,
 }
 
@@ -1306,14 +1320,18 @@ async fn search(State(s): State<UiState>, Query(view): Query<SearchQuery>) -> Re
     sse(events).into_response()
 }
 
-async fn grab(State(s): State<UiState>, axum::Form(form): axum::Form<SearchForm>) -> Response {
+async fn grab(
+    State(s): State<UiState>,
+    Query(shown): Query<GrabQuery>,
+    axum::Form(form): axum::Form<SearchForm>,
+) -> Response {
     let filter = form.lossless.then(|| Filter {
         lossless: true,
         ..Default::default()
     });
     match graphql::grab(&s.app, form.q.trim(), LISTEN, filter, false).await {
         // Albums shows the new card; Search has no job list, so it says so.
-        Ok(_) => match form.jobs {
+        Ok(_) => match shown.jobs {
             Some(shown) => done(&s.app, shown).await,
             None => one(flash_ok(&format!("Grabbing {}", form.q.trim()))),
         },
@@ -1324,7 +1342,7 @@ async fn grab(State(s): State<UiState>, axum::Form(form): axum::Form<SearchForm>
 #[derive(serde::Deserialize)]
 struct UrlForm {
     url: String,
-    #[serde(default = "page")]
+    #[serde(default = "page", deserialize_with = "shown_field")]
     jobs: i64,
 }
 
@@ -1458,7 +1476,7 @@ async fn resolve(
 #[derive(serde::Deserialize)]
 struct ReleaseForm {
     release: String,
-    #[serde(default = "page")]
+    #[serde(default = "page", deserialize_with = "shown_field")]
     jobs: i64,
 }
 
@@ -1633,7 +1651,7 @@ async fn job_compare(
 struct UserFileForm {
     username: String,
     filename: Option<String>,
-    #[serde(default = "page")]
+    #[serde(default = "page", deserialize_with = "shown_field")]
     history: i64,
 }
 

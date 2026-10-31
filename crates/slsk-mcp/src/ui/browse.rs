@@ -192,6 +192,11 @@ fn under(path: &[u8], dir: &[u8]) -> bool {
     path.len() > dir.len() && path.starts_with(dir) && path[dir.len()] == b'\\'
 }
 
+/// `path` is `dir` or lies below it.
+fn within(path: &[u8], dir: &[u8]) -> bool {
+    path == dir || under(path, dir)
+}
+
 impl Place {
     pub(super) fn from_query(q: &BrowseQuery) -> anyhow::Result<Self> {
         let username = q.username.trim().to_string();
@@ -343,6 +348,13 @@ struct Nodes {
 }
 
 impl Nodes {
+    /// A Download button's own busy signal, from the key it sends.
+    fn sig(&self, key: &str) -> String {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::hash::DefaultHasher::new();
+        key.hash(&mut h);
+        format!("_dl_{:x}", h.finish())
+    }
     fn size(&self, b: &u64) -> String {
         human(*b)
     }
@@ -468,7 +480,7 @@ fn render(p: &Place, dirs: &[Directory], info: Option<Info>, mine: bool) -> Stri
         here_key: key(&p.at),
         tree_files: dirs
             .iter()
-            .filter(|d| d.name.as_bytes() == p.at.as_slice() || under(d.name.as_bytes(), &p.at))
+            .filter(|d| within(d.name.as_bytes(), &p.at))
             .map(|d| d.files.len())
             .sum(),
         has_files: dirs
@@ -672,7 +684,7 @@ pub(super) fn albums(
     let mut out: BTreeMap<Vec<u8>, Vec<(RawStr, u64, String)>> = BTreeMap::new();
     for d in dirs {
         let name = d.name.as_bytes();
-        if d.files.is_empty() || !(name == at || under(name, at)) {
+        if d.files.is_empty() || !within(name, at) {
             continue;
         }
         let (root, sub) = match name.iter().rposition(|b| *b == b'\\') {

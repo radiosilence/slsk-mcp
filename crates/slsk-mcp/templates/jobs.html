@@ -59,7 +59,7 @@
       {% endfor %}
     </ul>
     <form id="release-{{ j.id.as_str() }}" class="my-1.5 flex flex-wrap items-center gap-2" data-on:submit__prevent="@post('/jobs/{{ j.id.as_str() }}/release', {contentType: 'form', selector: '#release-{{ j.id.as_str() }}'})">
-      <input type="hidden" name="jobs" data-attr:value="$jobs">
+      <input type="hidden" name="jobs" value="{{ crate::ui::PAGE }}" data-attr:value="$jobs">
       <input class="flex-[1_1_12em]" name="release" aria-label="MusicBrainz release ID or URL" placeholder="MusicBrainz release ID or URL" autocomplete="off" required>
       <button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}">Use release</button>
     </form>
