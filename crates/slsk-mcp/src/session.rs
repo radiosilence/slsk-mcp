@@ -9,7 +9,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use slsk_engine::{Engine, EngineConfig, Event, Status};
+use slsk_engine::{Engine, EngineConfig, Event, Profile, Status};
 use tokio::sync::{Mutex, OnceCell};
 
 use crate::config::Config;
@@ -89,21 +89,35 @@ impl Session {
             .context("could not start the Soulseek engine")?;
         db::save_account(&self.db, username, &self.sealer.seal(password)).await?;
         self.engine.set(engine.clone()).ok();
-        tokio::spawn(apply_bans_on_login(self.clone(), engine.clone()));
+        tokio::spawn(apply_account_on_login(self.clone(), engine.clone()));
         Ok(engine)
     }
 }
 
-/// Bans live in the database per account; push them into the engine every
-/// time a login lands, since the account may have changed.
-async fn apply_bans_on_login(session: Arc<Session>, engine: Engine) {
+/// Bans and the profile live in the database per account; push them into
+/// the engine every time a login lands, since the account may have changed.
+async fn apply_account_on_login(session: Arc<Session>, engine: Engine) {
     let mut events = engine.events();
     loop {
         match events.recv().await {
             Ok(Event::Status(Status::LoggedIn { .. })) => {
-                match db::bans(&session.db, &engine.username()).await {
+                let account = engine.username();
+                match db::bans(&session.db, &account).await {
                     Ok(bans) => engine.set_banned(bans),
                     Err(e) => tracing::warn!(error = %e, "could not load bans"),
+                }
+                match db::profile(&session.db, &account).await {
+                    Ok(saved) => engine.set_profile(match saved {
+                        Some((description, picture)) => Profile {
+                            description,
+                            picture: picture.map(Into::into),
+                        },
+                        None => Profile {
+                            description: session.cfg.description.clone(),
+                            picture: None,
+                        },
+                    }),
+                    Err(e) => tracing::warn!(error = %e, "could not load the profile"),
                 }
             }
             Ok(_) => {}

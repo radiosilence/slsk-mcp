@@ -2,11 +2,11 @@
   <form id="browse-user"><input type="hidden" name="username" value="{{ username }}"></form>
 {% match error %}{% when Some with (e) %}<p class="text-meta text-muted">{{ e }}</p>{% when None %}
   <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
-    <strong class="min-w-0 flex-auto wrap-anywhere">{% if mine %}Your shares{% else %}{{ username }}{% endif %}</strong>
+    <strong class="min-w-0 flex-auto wrap-anywhere">{% if mine %}Your shares{% else %}<a href="{{ crate::ui::profile_href(username) }}">{{ username }}</a>{% endif %}</strong>
   </div>
   <div class="mt-2.5 flex flex-wrap items-center gap-2">
     <button type="button" class="quiet" data-indicator="_browsing" data-attr:disabled="$_browsing" data-class:busy="$_browsing" data-on:click="@get('{{ refresh }}')">Refresh</button>
-    {% if !mine %}<a class="button quiet" href="{{ crate::ui::chat_href("pm", username) }}">Message</a>{% endif %}
+    {% if !mine %}<a class="button quiet" href="{{ crate::ui::profile_href(username) }}">Profile</a><a class="button quiet" href="{{ crate::ui::chat_href("pm", username) }}">Message</a>{% endif %}
   </div>
   <div class="text-meta text-muted wrap-anywhere">{{ folders }} folders{% match info %}{% when Some with (i) %} · {{ i.uploads }} uploads · queue {{ i.queue }} · {% if i.free %}<span class="text-brand">free slot</span>{% else %}no free slot{% endif %}{% when None %}{% endmatch %}</div>
   {% match info %}{% when Some with (i) %}{% if !i.description.is_empty() %}<details><summary class="text-muted">About</summary><p class="whitespace-pre-wrap text-muted wrap-anywhere">{{ i.description }}</p></details>{% endif %}{% when None %}{% endmatch %}

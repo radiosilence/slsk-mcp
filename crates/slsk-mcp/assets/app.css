@@ -822,6 +822,10 @@
     list-style-type: none;
   }
 
+  .grid-cols-\[auto_minmax\(0\,1fr\)\] {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
   .grid-cols-\[minmax\(0\,1fr\)\] {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -900,6 +904,10 @@
 
   .gap-x-2\.5 {
     column-gap: calc(var(--spacing) * 2.5);
+  }
+
+  .gap-x-3 {
+    column-gap: calc(var(--spacing) * 3);
   }
 
   .gap-x-4 {
