@@ -92,13 +92,15 @@ impl Dist {
 /// `announce` is false when the server connection is already gone.
 pub(crate) fn reset(inner: &Inner, announce: bool) {
     let own = inner.username();
-    inner.dist.generation.send_modify(|g| *g += 1);
     inner.dist.parent.lock().take();
     inner.dist.candidates.clear();
     inner.dist.children.clear();
     inner.metrics.children.store(0, Ordering::Relaxed);
     inner.dist.level.store(0, Ordering::Relaxed);
     *inner.dist.root.lock() = own.clone();
+    // After the parent is taken: its task, woken by this, must not find
+    // itself still adopted and reset a second time.
+    inner.dist.generation.send_modify(|g| *g += 1);
     if announce {
         for msg in [
             ToServer::HaveNoParent { no_parent: true },

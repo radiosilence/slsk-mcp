@@ -87,6 +87,8 @@ pub(crate) struct Download {
     attempts: AtomicU32,
     error: Mutex<Option<String>>,
     wake: Notify,
+    /// Wakes a receive blocked in a read whenever the state changes.
+    stop: Notify,
     /// The token of the peer's current offer, held while `Starting`.
     token: Mutex<Option<u32>>,
     /// Whether a `drive` task owns this download.
@@ -100,11 +102,6 @@ impl Download {
         DownloadState::from_u8(self.state.load(Ordering::Acquire))
     }
 
-    fn set(&self, s: DownloadState) {
-        self.state.store(s as u8, Ordering::Release);
-        self.wake.notify_one();
-    }
-
     /// Move `from` → `to` only if nothing else moved it first.
     fn transition(&self, from: DownloadState, to: DownloadState) -> bool {
         let ok = self
@@ -113,19 +110,9 @@ impl Download {
             .is_ok();
         if ok {
             self.wake.notify_one();
+            self.stop.notify_waiters();
         }
         ok
-    }
-
-    fn cancel(&self) -> bool {
-        let mut from = self.state();
-        while !from.is_terminal() {
-            if self.transition(from, DownloadState::Cancelled) {
-                return true;
-            }
-            from = self.state();
-        }
-        false
     }
 
     fn view(&self) -> TransferView {
@@ -186,31 +173,45 @@ impl Downloads {
     }
 
     pub fn cancel(&self, username: &str, filename: &RawStr) -> bool {
-        let Some(d) = self.get(username, filename) else {
-            return false;
-        };
-        let cancelled = d.cancel();
-        self.forget_token(&d);
-        cancelled
+        self.get(username, filename)
+            .is_some_and(|d| self.cancel_download(&d))
     }
 
     pub fn remove(&self, username: &str, filename: &RawStr) -> bool {
         match self.map.remove(&key(username, filename)) {
             Some((_, d)) => {
-                d.cancel();
-                self.forget_token(&d);
+                self.cancel_download(&d);
                 true
             }
             None => false,
         }
     }
 
-    /// Drop the route from an offer's token to this download.
-    fn forget_token(&self, d: &Download) {
-        if let Some(token) = d.token.lock().take() {
-            self.by_token
-                .remove_if(&token, |_, t| std::ptr::eq(Arc::as_ptr(t), d));
+    fn cancel_download(&self, d: &Download) -> bool {
+        let mut from = d.state();
+        while !from.is_terminal() {
+            if self.leave(d, from, DownloadState::Cancelled) {
+                return true;
+            }
+            from = d.state();
         }
+        false
+    }
+
+    /// Move `from` → `to`, and drop the route from the current offer's
+    /// token to this download. The token lock is held across both, as in
+    /// [`on_transfer_request`], so an offer landing meanwhile either fails
+    /// its own transition or keeps its token.
+    fn leave(&self, d: &Download, from: DownloadState, to: DownloadState) -> bool {
+        let mut token = d.token.lock();
+        if !d.transition(from, to) {
+            return false;
+        }
+        if let Some(t) = token.take() {
+            self.by_token
+                .remove_if(&t, |_, x| std::ptr::eq(Arc::as_ptr(x), d));
+        }
+        true
     }
 
     pub fn set_place(&self, username: &str, filename: &RawStr, place: u32) {
@@ -246,6 +247,7 @@ pub(crate) fn add(
         attempts: AtomicU32::new(0),
         error: Mutex::new(None),
         wake: Notify::new(),
+        stop: Notify::new(),
         token: Mutex::new(None),
         driving: Mutex::new(false),
         receiving: tokio::sync::Mutex::new(()),
@@ -285,18 +287,16 @@ fn attempt_failed(inner: &Inner, d: &Download, from: DownloadState, error: Strin
     if attempts >= MAX_ATTEMPTS {
         fail(inner, d, from, error);
     } else {
-        inner.downloads.forget_token(d);
         *d.error.lock() = Some(error);
         if from != DownloadState::Queued {
-            d.transition(from, DownloadState::Queued);
+            inner.downloads.leave(d, from, DownloadState::Queued);
         }
     }
     attempts
 }
 
 fn fail(inner: &Inner, d: &Download, from: DownloadState, error: String) {
-    inner.downloads.forget_token(d);
-    if d.transition(from, DownloadState::Failed) {
+    if inner.downloads.leave(d, from, DownloadState::Failed) {
         *d.error.lock() = Some(error);
         inner
             .metrics
@@ -435,7 +435,10 @@ pub(crate) fn on_transfer_request(
     d.size.store(size, Ordering::Relaxed);
     d.place.store(0, Ordering::Relaxed);
     if let Some(old) = current.replace(token) {
-        inner.downloads.by_token.remove(&old);
+        inner
+            .downloads
+            .by_token
+            .remove_if(&old, |_, t| Arc::ptr_eq(t, &d));
     }
     inner.downloads.by_token.insert(token, d.clone());
     true
@@ -481,10 +484,31 @@ pub(crate) async fn on_file_connection(inner: Arc<Inner>, username: String, mut 
         return;
     };
     d.token.lock().take_if(|t| *t == token);
-    // A receive from before a cancel and retry may still be winding down;
-    // it stops at its next read, and two writers to one `.part` would
-    // interleave.
-    let _receiving = d.receiving.lock().await;
+    // A receive from before a cancel and retry may still be winding down.
+    // A state change wakes it out of its read, so this is a short wait;
+    // bounded anyway, well inside START_TIMEOUT, and two writers to one
+    // `.part` would interleave.
+    let Ok(_receiving) = tokio::time::timeout(Duration::from_secs(10), d.receiving.lock()).await
+    else {
+        tracing::debug!(%username, file = %d.filename, "the previous receive is still running");
+        return;
+    };
+    // A partial file larger than the offer is not from this file, and no
+    // attempt can succeed while it is there.
+    let part = tokio::fs::metadata(d.part()).await.map_or(0, |m| m.len());
+    let size = d.size.load(Ordering::Relaxed);
+    if part > size {
+        fail(
+            &inner,
+            &d,
+            DownloadState::Starting,
+            format!(
+                "the partial file {} holds {part} bytes, more than the {size} offered",
+                d.part().display()
+            ),
+        );
+        return;
+    }
     if !d.transition(DownloadState::Starting, DownloadState::Transferring) {
         return;
     }
@@ -499,12 +523,13 @@ pub(crate) async fn on_file_connection(inner: Arc<Inner>, username: String, mut 
         .fetch_sub(1, Ordering::Relaxed);
     match result {
         Ok(()) => {
-            *d.error.lock() = None;
-            inner
-                .metrics
-                .downloads_completed
-                .fetch_add(1, Ordering::Relaxed);
-            d.set(DownloadState::Completed);
+            if d.transition(DownloadState::Transferring, DownloadState::Completed) {
+                *d.error.lock() = None;
+                inner
+                    .metrics
+                    .downloads_completed
+                    .fetch_add(1, Ordering::Relaxed);
+            }
         }
         Err(e) if d.state() != DownloadState::Transferring => {
             tracing::debug!(error = %e, state = d.state().as_str(), "download stopped")
@@ -610,14 +635,20 @@ async fn receive(inner: &Inner, d: &Download, mut conn: Conn) -> Result<(), Erro
     }
     let mut buf = vec![0u8; READ_CHUNK];
     while offset < size {
+        let stopped = d.stop.notified();
+        tokio::pin!(stopped);
+        stopped.as_mut().enable();
         if d.state() != DownloadState::Transferring {
             file.flush().await?;
             return Err(std::io::Error::other("cancelled").into());
         }
         let want = buf.len().min((size - offset) as usize);
-        let n = tokio::time::timeout(Duration::from_secs(120), conn.stream.read(&mut buf[..want]))
-            .await
-            .map_err(|_| Error::TimedOut)??;
+        let read =
+            tokio::time::timeout(Duration::from_secs(120), conn.stream.read(&mut buf[..want]));
+        let n = tokio::select! {
+            n = read => n.map_err(|_| Error::TimedOut)??,
+            _ = stopped => continue,
+        };
         if n == 0 {
             file.flush().await?;
             return Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof).into());
@@ -629,6 +660,10 @@ async fn receive(inner: &Inner, d: &Download, mut conn: Conn) -> Result<(), Erro
     file.flush().await?;
     file.get_ref().sync_all().await?;
     drop(file);
+    // Cancelled or retried while the last bytes arrived: the `.part` stays.
+    if d.state() != DownloadState::Transferring {
+        return Err(std::io::Error::other("cancelled").into());
+    }
     tokio::fs::rename(&part, &d.dest).await?;
     // The downloader closes a finished transfer; the uploader must not.
     let _ = conn.stream.shutdown().await;
@@ -710,5 +745,39 @@ mod offer_tests {
         assert!(on_transfer_request(inner, "peer", 4, &name, 1000));
         assert!(inner.downloads.remove("peer", &name));
         assert!(tokens().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_re_offer_leaves_another_peers_token_alone() {
+        let (e, tmp) = crate::offline_engine().await;
+        let inner = &e.0;
+        let (a, b): (RawStr, RawStr) = ("m\\a.flac".into(), "m\\b.flac".into());
+        add(inner, "one", a.clone(), 10, tmp.path().join("a.flac"));
+        add(inner, "two", b.clone(), 10, tmp.path().join("b.flac"));
+        assert!(on_transfer_request(inner, "one", 5, &a, 10));
+        // Peers choose their own tokens, so two can collide.
+        assert!(on_transfer_request(inner, "two", 5, &b, 10));
+        assert!(on_transfer_request(inner, "one", 6, &a, 10));
+        assert_eq!(inner.downloads.by_token.get(&5).unwrap().username, "two");
+    }
+
+    #[tokio::test]
+    async fn a_receive_cancelled_at_the_end_keeps_the_part() {
+        let (e, tmp) = crate::offline_engine().await;
+        let inner = &e.0;
+        let name: RawStr = "m\\a.flac".into();
+        let dest = tmp.path().join("a.flac");
+        add(inner, "peer", name.clone(), 0, dest.clone());
+        let d = inner.downloads.get("peer", &name).unwrap();
+        d.state
+            .store(DownloadState::Cancelled as u8, Ordering::Release);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let _peer = tokio::net::TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (ours, _) = listener.accept().await.unwrap();
+        assert!(receive(inner, &d, Conn::new(ours)).await.is_err());
+        assert!(!dest.exists());
+        assert!(d.part().exists());
     }
 }

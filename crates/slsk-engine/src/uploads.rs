@@ -75,6 +75,7 @@ impl Upload {
         UploadState::from_u8(self.state.load(Ordering::Acquire))
     }
 
+    #[cfg(test)]
     fn set(&self, s: UploadState) {
         self.state.store(s as u8, Ordering::Release);
     }
@@ -85,6 +86,21 @@ impl Upload {
         self.state
             .compare_exchange(from as u8, to as u8, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
+    }
+
+    /// Cancel unless it already finished.
+    fn cancel(&self) -> bool {
+        let mut from = self.state();
+        while matches!(
+            from,
+            UploadState::Queued | UploadState::Starting | UploadState::Transferring
+        ) {
+            if self.transition(from, UploadState::Cancelled) {
+                return true;
+            }
+            from = self.state();
+        }
+        false
     }
 
     fn view(&self, place: Option<u32>) -> TransferView {
@@ -205,8 +221,7 @@ impl Uploads {
     pub fn cancel(&self, username: &str, filename: &RawStr) -> bool {
         let mut q = self.queue.lock();
         if let Some(u) = q.active.get(&(username.to_string(), filename.0.clone())) {
-            u.set(UploadState::Cancelled);
-            return true;
+            return u.cancel();
         }
         if let Some(list) = q.by_user.get_mut(username)
             && let Some(i) = list.iter().position(|u| &u.filename == filename)
@@ -216,7 +231,7 @@ impl Uploads {
                 q.by_user.remove(username);
                 q.order.retain(|o| o != username);
             }
-            u.set(UploadState::Cancelled);
+            u.cancel();
             push_history(&mut q.history, u);
             self.publish_waiting(&q);
             return true;
@@ -230,7 +245,7 @@ impl Uploads {
         q.order.retain(|u| !users.contains(&u.to_lowercase()));
         for u in q.active.values() {
             if users.contains(&u.username.to_lowercase()) {
-                u.set(UploadState::Cancelled);
+                u.cancel();
             }
         }
         self.publish_waiting(&q);
@@ -378,8 +393,10 @@ async fn serve(inner: &Arc<Inner>, u: &Arc<Upload>) {
     let result = send(inner, u).await;
     inner.metrics.uploads_active.fetch_sub(1, Ordering::Relaxed);
     match result {
+        // Cancelled after the last write: the file went, but the upload is
+        // not counted or reported as served.
+        Ok(_) if !u.transition(UploadState::Transferring, UploadState::Completed) => {}
         Ok(speed) => {
-            u.transition(UploadState::Transferring, UploadState::Completed);
             inner
                 .metrics
                 .uploads_completed
@@ -402,13 +419,15 @@ async fn serve(inner: &Arc<Inner>, u: &Arc<Upload>) {
             });
         }
         Err(e) => {
+            // A cancel or a ban is not a failure, and the downloader is not
+            // told about one.
             let failed = u.transition(UploadState::Starting, UploadState::Failed)
                 || u.transition(UploadState::Transferring, UploadState::Failed);
-            *u.error.lock() = Some(e.to_string());
-            inner.metrics.uploads_failed.fetch_add(1, Ordering::Relaxed);
             // Told whether or not a byte went: a downloader not told waits
             // in a queue we have already left, and never asks again.
             if failed {
+                *u.error.lock() = Some(e.to_string());
+                inner.metrics.uploads_failed.fetch_add(1, Ordering::Relaxed);
                 let frame = PeerMessage::UploadFailed {
                     filename: u.filename.clone(),
                 }
@@ -581,6 +600,21 @@ mod tests {
         let q = inner.uploads.queue.lock();
         assert!(q.active.is_empty());
         assert_eq!(q.history.len(), 1);
+    }
+
+    #[test]
+    fn a_finished_upload_is_not_relabelled_cancelled() {
+        let uploads = Uploads::new(1, Arc::default());
+        let u = upload("a", "1", 0);
+        u.set(UploadState::Completed);
+        uploads
+            .queue
+            .lock()
+            .active
+            .insert(("a".into(), u.filename.0.clone()), u.clone());
+        assert!(!uploads.cancel("a", &"1".into()));
+        uploads.drop_users(&HashSet::from(["a".to_string()]));
+        assert_eq!(u.state(), UploadState::Completed);
     }
 
     #[test]
