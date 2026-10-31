@@ -109,6 +109,9 @@ pub enum ToServer {
     UnwatchUser {
         username: String,
     },
+    GetUserStatus {
+        username: String,
+    },
     SayChatroom {
         room: String,
         message: String,
@@ -144,6 +147,9 @@ pub enum ToServer {
         dirs: u32,
         files: u32,
     },
+    GetUserStats {
+        username: String,
+    },
     UserSearch {
         username: String,
         token: u32,
@@ -160,6 +166,9 @@ pub enum ToServer {
     },
     RemoveThingIHate {
         item: String,
+    },
+    UserInterests {
+        username: String,
     },
     RoomList,
     HaveNoParent {
@@ -201,6 +210,7 @@ impl ToServer {
             GetPeerAddress { .. } => 3,
             WatchUser { .. } => 5,
             UnwatchUser { .. } => 6,
+            GetUserStatus { .. } => 7,
             SayChatroom { .. } => 13,
             JoinRoom { .. } => 14,
             LeaveRoom { .. } => 15,
@@ -211,9 +221,11 @@ impl ToServer {
             SetStatus { .. } => 28,
             ServerPing => 32,
             SharedFoldersFiles { .. } => 35,
+            GetUserStats { .. } => 36,
             UserSearch { .. } => 42,
             AddThingILike { .. } => 51,
             RemoveThingILike { .. } => 52,
+            UserInterests { .. } => 57,
             RoomList => 64,
             HaveNoParent { .. } => 71,
             AcceptChildren { .. } => 100,
@@ -245,7 +257,12 @@ impl ToServer {
             SetWaitPort { port } => {
                 w.u32(*port);
             }
-            GetPeerAddress { username } | WatchUser { username } | UnwatchUser { username } => {
+            GetPeerAddress { username }
+            | WatchUser { username }
+            | UnwatchUser { username }
+            | GetUserStatus { username }
+            | GetUserStats { username }
+            | UserInterests { username } => {
                 w.str(username);
             }
             SayChatroom { room, message } => {
@@ -391,7 +408,16 @@ pub enum FromServer {
         token: u32,
         query: String,
     },
+    UserStats {
+        username: String,
+        stats: UserStats,
+    },
     Relogged,
+    UserInterests {
+        username: String,
+        likes: Vec<String>,
+        hates: Vec<String>,
+    },
     RoomList(RoomList),
     PrivilegedUsers {
         usernames: Vec<String>,
@@ -581,7 +607,16 @@ impl FromServer {
                 token: r.u32()?,
                 query: r.string()?,
             },
+            36 => F::UserStats {
+                username: r.string()?,
+                stats: UserStats::read(r)?,
+            },
             41 => F::Relogged,
+            57 => F::UserInterests {
+                username: r.string()?,
+                likes: r.strings()?,
+                hates: r.strings()?,
+            },
             64 => {
                 let names = r.strings()?;
                 let counts = r.list(4, Reader::u32)?;
@@ -747,6 +782,34 @@ mod tests {
                 ip,
                 port: 2234,
                 obfuscated_port: None
+            }
+        );
+    }
+
+    #[test]
+    fn decodes_user_stats_and_interests() {
+        let mut w = Writer::new();
+        w.str("ann").u32(2048).u32(7).u32(0).u32(1000).u32(90);
+        assert_eq!(
+            roundtrip(encode(CodeWidth::U32, 36, &w.finish())),
+            FromServer::UserStats {
+                username: "ann".into(),
+                stats: UserStats {
+                    avg_speed: 2048,
+                    upload_num: 7,
+                    files: 1000,
+                    dirs: 90
+                }
+            }
+        );
+        let mut w = Writer::new();
+        w.str("ann").strings(&["dub"]).strings(&["noise", "jazz"]);
+        assert_eq!(
+            roundtrip(encode(CodeWidth::U32, 57, &w.finish())),
+            FromServer::UserInterests {
+                username: "ann".into(),
+                likes: vec!["dub".into()],
+                hates: vec!["noise".into(), "jazz".into()]
             }
         );
     }

@@ -31,7 +31,6 @@ use slsk_proto::RawStr;
 use slsk_proto::peer::{Directory, PeerMessage, SearchResponse, UserInfo};
 use slsk_proto::server::{FromServer, ToServer};
 use tokio::sync::{Notify, Semaphore, broadcast, mpsc, oneshot, watch};
-use zeroize::Zeroizing;
 
 pub use downloads::DownloadState;
 pub use metrics::Metrics;
@@ -99,6 +98,13 @@ impl EngineConfig {
             description: String::new(),
         }
     }
+}
+
+/// What a peer asking about this user is shown.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Profile {
+    pub description: String,
+    pub picture: Option<Bytes>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -176,7 +182,7 @@ type Key = (String, Bytes);
 
 pub(crate) struct Inner {
     cfg: EngineConfig,
-    credentials: RwLock<(String, Zeroizing<String>)>,
+    credentials: RwLock<(String, String)>,
     server_tx: RwLock<Option<mpsc::Sender<Bytes>>>,
     status: watch::Sender<Status>,
     events: broadcast::Sender<Event>,
@@ -191,6 +197,7 @@ pub(crate) struct Inner {
     browse_waiters: DashMap<String, Vec<oneshot::Sender<Vec<Directory>>>>,
     folder_waiters: DashMap<u32, oneshot::Sender<Vec<Directory>>>,
     info_waiters: DashMap<String, Vec<oneshot::Sender<UserInfo>>>,
+    profile: RwLock<Profile>,
     downloads: downloads::Downloads,
     uploads: uploads::Uploads,
     dist: distributed::Dist,
@@ -206,11 +213,10 @@ pub(crate) struct Inner {
     /// Set when the server says it has banned us: logging in again before
     /// then is refused, and may lengthen the ban.
     ban_until: Mutex<Option<tokio::time::Instant>>,
-    /// Held by the one rescan running; `rescan_wanted` asks it for another.
+    /// One rescan at a time, and a rescan asked for while one waits is
+    /// served by that one.
     scanning: tokio::sync::Mutex<()>,
     rescan_wanted: AtomicBool,
-    /// Set once the first rescan has shared what the cache already knew.
-    shared_unprobed: AtomicBool,
 }
 
 /// Spacing for searches: a short burst goes out quickly, then one every
@@ -304,7 +310,7 @@ impl Engine {
         let (events, _) = broadcast::channel(4096);
         let metrics = Arc::new(Metrics::default());
         let inner = Arc::new(Inner {
-            credentials: RwLock::new((cfg.username.clone(), Zeroizing::new(cfg.password.clone()))),
+            credentials: RwLock::new((cfg.username.clone(), cfg.password.clone())),
             server_tx: RwLock::new(None),
             status,
             events,
@@ -320,8 +326,8 @@ impl Engine {
             folder_waiters: DashMap::new(),
             info_waiters: DashMap::new(),
             downloads: downloads::Downloads::default(),
-            uploads: uploads::Uploads::new(cfg.upload_slots),
-            dist: distributed::Dist::new(cfg.max_children),
+            uploads: uploads::Uploads::new(cfg.upload_slots, metrics.clone()),
+            dist: distributed::Dist::default(),
             responders: Arc::new(Semaphore::new(cfg.max_search_responders)),
             decoders: Arc::new(Semaphore::new(4)),
             up_limit: limit::Bucket::new(cfg.upload_limit),
@@ -334,7 +340,10 @@ impl Engine {
             ban_until: Mutex::new(None),
             scanning: tokio::sync::Mutex::new(()),
             rescan_wanted: AtomicBool::new(false),
-            shared_unprobed: AtomicBool::new(false),
+            profile: RwLock::new(Profile {
+                description: cfg.description.clone(),
+                picture: None,
+            }),
             cfg,
         });
         tokio::spawn(peers::listen(inner.clone(), listener));
@@ -370,7 +379,7 @@ impl Engine {
     /// Log in as someone else, or with a new password. Also the way out of
     /// [`Status::Rejected`] and [`Status::Displaced`].
     pub fn set_credentials(&self, username: &str, password: &str) {
-        *self.0.credentials.write() = (username.to_string(), Zeroizing::new(password.to_string()));
+        *self.0.credentials.write() = (username.to_string(), password.to_string());
         self.reconnect();
     }
 
@@ -406,6 +415,14 @@ impl Engine {
         self.0.down_limit.set_rate(download);
     }
 
+    pub fn set_profile(&self, profile: Profile) {
+        *self.0.profile.write() = profile;
+    }
+
+    pub fn profile(&self) -> Profile {
+        self.0.profile.read().clone()
+    }
+
     pub fn upload_slots(&self) -> usize {
         self.0.uploads.slots()
     }
@@ -418,34 +435,26 @@ impl Engine {
     /// Rescan shared directories and announce the new counts. Only changed
     /// files are probed, so this is cheap to call after every import.
     ///
-    /// Calls during a scan coalesce into one more after it, which the
-    /// running call does: each scan walks the whole tree and holds a whole
-    /// index, and a burst of imports would otherwise run that many at once.
-    /// So this can return before the changes it was called for are shared.
+    /// Scans run one at a time: two at once would each save the probe cache
+    /// over the other's, and whichever finished last would publish its index
+    /// even if it walked the tree before the other saw a new album. Calls
+    /// that arrive while one runs share a single scan after it.
     pub async fn rescan(&self) {
-        let inner = &self.0;
-        inner.rescan_wanted.store(true, Ordering::SeqCst);
-        // Checked again after letting go: a call that found the lock held
-        // just as the last pass ended would otherwise go unanswered.
-        while inner.rescan_wanted.load(Ordering::SeqCst) {
-            let Ok(_scanning) = inner.scanning.try_lock() else {
-                return;
-            };
-            while inner.rescan_wanted.swap(false, Ordering::SeqCst) {
-                // The first time twice: once from what the cache already
-                // knows, so a cold start shares everything within seconds,
-                // then again once every new file's audio headers have been
-                // read. After that the new files are an import's worth, and
-                // probing them first costs less than a second walk.
-                if !inner.shared_unprobed.swap(true, Ordering::SeqCst) {
-                    self.scan_and_publish(false).await;
-                }
-                self.scan_and_publish(true).await;
-            }
+        self.0.rescan_wanted.store(true, Ordering::SeqCst);
+        let _scanning = self.0.scanning.lock().await;
+        if !self.0.rescan_wanted.swap(false, Ordering::SeqCst) {
+            return;
+        }
+        // Twice when files are new: once from what is already known, so
+        // everything is shared within seconds, then again once every new
+        // file's audio headers have been read.
+        if self.scan_and_publish(false).await {
+            self.scan_and_publish(true).await;
         }
     }
 
-    async fn scan_and_publish(&self, probe: bool) {
+    /// Whether audio files were found that the probe cache does not know.
+    async fn scan_and_publish(&self, probe: bool) -> bool {
         let inner = self.0.clone();
         let dirs = inner.cfg.share_dirs.clone();
         let cache_path = inner.cfg.state_dir.join("probe-cache.bin");
@@ -457,14 +466,14 @@ impl Engine {
                     tracing::warn!(error = %e, "could not save the probe cache");
                 }
             };
-            let index = shares::scan(&dirs, &mut cache, probe, save);
+            let scanned = shares::scan(&dirs, &mut cache, probe, save);
             save(&cache);
-            index
+            scanned
         })
         .await;
-        let Ok(index) = index else {
+        let Ok((index, unprobed)) = index else {
             tracing::error!("share scan panicked; keeping the previous index");
-            return;
+            return false;
         };
         tracing::info!(files = index.file_count(), dirs = index.dir_count(), probed = probe, took = ?started.elapsed(), "shares scanned");
         let m = &self.0.metrics;
@@ -478,6 +487,7 @@ impl Engine {
         let _ = self
             .0
             .send_server(ToServer::SharedFoldersFiles { dirs, files });
+        unprobed > 0
     }
 
     /// This client's own shares, as a peer browsing them would see them.
@@ -490,11 +500,15 @@ impl Engine {
         (index.dir_count(), index.file_count())
     }
 
-    /// Wait for this caller's turn to search: each call reserves the next
-    /// slot [`SearchPace`] allows. Call before any search a
-    /// person or a job starts, so a burst of them reaches the server spaced
-    /// out rather than at once. Refused, without waiting, once the hour's
-    /// budget is spent.
+    /// Wait for this caller's turn to search. [`Engine::search`] does not
+    /// pace itself, so call this before any search a person or a job starts,
+    /// and a burst of them reaches the server spaced out rather than at once.
+    ///
+    /// Each call reserves the next slot [`SearchPace`] allows and counts it
+    /// against the hour's budget straight away, so a caller that gives up
+    /// while waiting, or whose search then fails, has still spent it.
+    /// Refused, without waiting, once the budget is spent, and while logged
+    /// out.
     pub async fn pace(&self) -> Result<()> {
         // A search that cannot be sent must not spend the budget, or a
         // dropped connection would use up the hour.
@@ -532,26 +546,6 @@ impl Engine {
     /// decides how long to listen.
     pub fn search(&self, query: &str) -> Result<mpsc::Receiver<SearchResponse>> {
         self.search_with(|token| ToServer::FileSearch {
-            token,
-            query: query.to_string(),
-        })
-    }
-
-    pub fn search_user(
-        &self,
-        username: &str,
-        query: &str,
-    ) -> Result<mpsc::Receiver<SearchResponse>> {
-        self.search_with(|token| ToServer::UserSearch {
-            username: username.to_string(),
-            token,
-            query: query.to_string(),
-        })
-    }
-
-    pub fn search_room(&self, room: &str, query: &str) -> Result<mpsc::Receiver<SearchResponse>> {
-        self.search_with(|token| ToServer::RoomSearch {
-            room: room.to_string(),
             token,
             query: query.to_string(),
         })
@@ -697,6 +691,17 @@ pub(crate) fn forget_closed<T>(waiters: &DashMap<String, Vec<oneshot::Sender<T>>
         w.retain(|tx| !tx.is_closed());
     }
     waiters.remove_if(username, |_, w| w.is_empty());
+}
+
+/// An engine that never logs in: its server address refuses connections.
+#[cfg(test)]
+pub(crate) async fn offline_engine() -> (Engine, tempfile::TempDir) {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut cfg = EngineConfig::new("me", "hunter2");
+    cfg.server = "127.0.0.1:1".into();
+    cfg.listen_port = 0;
+    cfg.state_dir = tmp.path().to_path_buf();
+    (Engine::start(cfg).await.unwrap(), tmp)
 }
 
 /// Runs its closure when dropped, so cleanup after an await also happens

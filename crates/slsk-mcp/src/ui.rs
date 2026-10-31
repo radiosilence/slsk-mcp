@@ -38,6 +38,7 @@ mod admin;
 mod browse;
 mod chat;
 mod library;
+mod profile;
 #[cfg(test)]
 mod tests;
 mod wishlist;
@@ -53,6 +54,7 @@ pub struct UiState {
     /// Album art previewed and not yet applied.
     art: library::ArtStash,
     browsed: browse::Cache,
+    profiles: profile::Cache,
 }
 
 const CSP: &str = "default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self'; img-src 'self' data:; \
@@ -67,6 +69,7 @@ pub fn router(app: Arc<App>) -> Router {
         run: Default::default(),
         art: Default::default(),
         browsed: Default::default(),
+        profiles: Default::default(),
     };
     let protected = Router::new()
         // Drawn whole by `pages`; nothing fetches a fragment of them.
@@ -90,6 +93,7 @@ pub fn router(app: Arc<App>) -> Router {
         .merge(wishlist::routes())
         .merge(library::routes())
         .merge(browse::routes())
+        .merge(profile::routes())
         .merge(chat::routes())
         .merge(admin::routes())
         .layer(axum::middleware::from_fn(require_datastar_on_post))
@@ -133,10 +137,15 @@ const DATASTAR_JS: &str = include_str!("../assets/datastar.js");
 /// new build fetches its own stylesheet and script rather than a cached copy
 /// of the previous build's.
 fn versioned(path: &str, body: &str) -> String {
-    let hash = body.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
-        (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+    format!("{path}?v={}", fingerprint(body.as_bytes()))
+}
+
+/// A short hash of `bytes` (FNV-1a) for an address that changes with them.
+fn fingerprint(bytes: &[u8]) -> String {
+    let hash = bytes.iter().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
+        (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3)
     });
-    format!("{path}?v={hash:016x}")
+    format!("{hash:016x}")
 }
 
 static CSS_URL: LazyLock<String> = LazyLock::new(|| versioned("/assets/app.css", APP_CSS));
@@ -257,14 +266,14 @@ fn signals(json: &str) -> Event {
 fn flash_ok(msg: &str) -> String {
     format!(
         r#"<div id="flash" class="toast border-brand text-brand animate-fade motion-reduce:[animation-timing-function:steps(1,end)]" role="status" data-on:click="el.className = ''">{}</div>"#,
-        askama_escape(msg)
+        escape(msg)
     )
 }
 
 fn flash_err(msg: &str) -> String {
     format!(
         r#"<div id="flash" class="toast border-bad text-meta text-bad" role="alert" data-on:click="el.className = ''">{}</div>"#,
-        askama_escape(msg)
+        escape(msg)
     )
 }
 
@@ -334,6 +343,7 @@ const PAGES: &[(&str, &str, &str)] = &[
     ("library", "/library", "Library"),
     ("browse", "/browse", "Browse"),
     ("chat", "/chat", "Chat"),
+    ("profile", "/profile", "Profile"),
     ("bans", "/bans", "Bans"),
     ("settings", "/settings", "Settings"),
     ("triage", "/triage", "Triage"),
@@ -391,8 +401,6 @@ impl Page {
 #[derive(Template)]
 #[template(path = "pages/albums.html")]
 struct AlbumsPage {
-    q: String,
-    lossless: bool,
     jobs: String,
 }
 
@@ -431,9 +439,29 @@ fn browse_href(username: &str, key: &str) -> String {
     place_url("/browse", &[("username", username), ("key", key)])
 }
 
+/// A user's profile; this account's own when `username` is empty.
+fn profile_href(username: &str) -> String {
+    place_url("/profile", &[("username", username)])
+}
+
 /// A conversation: `kind` is `room` or `pm`.
 fn chat_href(kind: &str, name: &str) -> String {
     place_url("/chat", &[("kind", kind), ("name", name)])
+}
+
+/// A link's click handler: a modified click (a new tab, a download) is left
+/// to the browser; a plain one runs `then` in place, unless `busy` (a signal,
+/// or empty for none) says the last is still loading.
+fn follow(busy: impl std::fmt::Display, then: impl std::fmt::Display) -> String {
+    let busy = busy.to_string();
+    let then = if busy.is_empty() {
+        then.to_string()
+    } else {
+        format!("{busy} || ({then})")
+    };
+    format!(
+        "evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || (evt.preventDefault(), {then})"
+    )
 }
 
 /// An address with its query, as the page keeps it.
@@ -468,7 +496,7 @@ async fn render_page(
 ) -> Result<Html<String>, crate::error::AppError> {
     let url = uri.path_and_query().map_or("/", |p| p.as_str()).to_string();
     let search: SearchQuery = match tab {
-        "albums" | "search" => query(uri),
+        "search" => query(uri),
         _ => SearchQuery::default(),
     };
     let lossless = search.q.is_empty() || !search.lossless.is_empty();
@@ -492,8 +520,6 @@ async fn render_page(
     .to_string();
     let body = match tab {
         "albums" => AlbumsPage {
-            q: search.q,
-            lossless,
             jobs: jobs_html(&s.app, PAGE).await,
         }
         .render()
@@ -509,6 +535,7 @@ async fn render_page(
         "library" => library::page(s, &filter),
         "browse" => browse::page(s, &query::<browse::BrowseQuery>(uri).username),
         "chat" => chat::page(&s.app, &query(uri)).await,
+        "profile" => profile::page(s, &query::<profile::ProfileQuery>(uri).username),
         "bans" => admin::bans_page(&s.app).await,
         "settings" => admin::settings_page(&s.app).await,
         _ => admin::triage_page(&s.app, &query(uri)).await,
@@ -580,8 +607,21 @@ async fn status_html(app: &App) -> String {
 /// cannot hold many thousands of them.
 const PAGE: i64 = 500;
 
-/// The most rows a page may ask for, whatever its signals say.
-const MOST: i64 = 100_000;
+/// `PAGE`, for a form that does not say how many rows its page shows.
+fn page() -> i64 {
+    PAGE
+}
+
+/// A shown count from a form, where an empty or unreadable value (a hidden
+/// input whose signal has not been applied) is `PAGE`.
+fn shown_field<'de, D: serde::Deserializer<'de>>(d: D) -> Result<i64, D::Error> {
+    Ok(<String as serde::Deserialize>::deserialize(d)?
+        .parse()
+        .unwrap_or(PAGE))
+}
+
+/// The most rows a page may ask for, whatever its signals say: ten pages.
+const MOST: i64 = 5_000;
 
 /// A job that landed or was cancelled, as its one line.
 struct Settled {
@@ -892,7 +932,7 @@ async fn jobs_html(app: &App, shown: i64) -> String {
         .await
         .inspect_err(|e| tracing::warn!(error = %e, "could not list jobs"))
         .unwrap_or_default();
-    let more = active.len() as i64 > shown || done.len() as i64 > shown;
+    let more = shown < MOST && (active.len() as i64 > shown || done.len() as i64 > shown);
     active.truncate(shown as usize);
     done.truncate(shown as usize);
     let jobs = graphql::job_views(app, active, true)
@@ -987,9 +1027,6 @@ impl UploadsView {
             (s, _) => s.into(),
         }
     }
-    fn short<'a>(&self, name: &'a str) -> &'a str {
-        name.rsplit('\\').next().unwrap_or(name)
-    }
 }
 
 /// The Uploads tab's badge: files being sent or waiting to be.
@@ -1049,7 +1086,7 @@ async fn uploads_html(app: &App, shown: i64) -> String {
         .await
         .inspect_err(|e| tracing::warn!(error = %e, "could not read upload history"))
         .unwrap_or_default();
-    let more = history.len() as i64 > shown;
+    let more = shown < MOST && history.len() as i64 > shown;
     history.truncate(shown as usize);
     let today = crate::db::upload_totals(&app.db, midnight)
         .await
@@ -1153,6 +1190,12 @@ struct SearchForm {
     q: String,
     #[serde(default)]
     lossless: bool,
+}
+
+/// How many jobs the page shows, sent only by the page that lists them.
+#[derive(serde::Deserialize)]
+struct GrabQuery {
+    jobs: Option<i64>,
 }
 
 /// A search's view, all of it in the address.
@@ -1272,7 +1315,7 @@ async fn search(State(s): State<UiState>, Query(view): Query<SearchQuery>) -> Re
             if let Some(e) = error {
                 yield Ok(patch(&format!(
                     r#"<div id="results" class="text-meta text-muted">{}</div>"#,
-                    askama_escape(&e)
+                    escape(&e)
                 )));
                 break;
             }
@@ -1289,28 +1332,35 @@ async fn search(State(s): State<UiState>, Query(view): Query<SearchQuery>) -> Re
     sse(events).into_response()
 }
 
-async fn grab(State(s): State<UiState>, axum::Form(form): axum::Form<SearchForm>) -> Response {
+async fn grab(
+    State(s): State<UiState>,
+    Query(shown): Query<GrabQuery>,
+    axum::Form(form): axum::Form<SearchForm>,
+) -> Response {
     let filter = form.lossless.then(|| Filter {
         lossless: true,
         ..Default::default()
     });
     match graphql::grab(&s.app, form.q.trim(), LISTEN, filter, false).await {
-        Ok(_) => done(&s.app, PAGE).await,
-        Err(e) => one(format!(
-            r#"<div id="flash" class="toast border-bad text-meta text-bad">{}</div>"#,
-            askama_escape(&e.message)
-        )),
+        // Albums shows the new card; Search has no job list, so it says so.
+        Ok(_) => match shown.jobs {
+            Some(shown) => done(&s.app, shown).await,
+            None => one(flash_ok(&format!("Grabbing {}", form.q.trim()))),
+        },
+        Err(e) => one(flash_err(&e.message)),
     }
 }
 
 #[derive(serde::Deserialize)]
 struct UrlForm {
     url: String,
+    #[serde(default = "page", deserialize_with = "shown_field")]
+    jobs: i64,
 }
 
 async fn import_url(State(s): State<UiState>, axum::Form(form): axum::Form<UrlForm>) -> Response {
     match s.app.jobs.from_url(&form.url).await {
-        Ok(_) => done(&s.app, PAGE).await,
+        Ok(_) => done(&s.app, form.jobs).await,
         Err(e) => failed(&e),
     }
 }
@@ -1363,10 +1413,7 @@ async fn download(State(s): State<UiState>, body: Bytes) -> Response {
     let title = field(&fields, "title").map(str::to_string);
     match s.app.jobs.from_folder(&folder, title, Vec::new()).await {
         Ok(job) => one(flash_ok(&format!("Downloading {}", job.title))),
-        Err(e) => one(format!(
-            r#"<div id="flash" class="toast border-bad text-meta text-bad">{}</div>"#,
-            askama_escape(&format!("{e:#}"))
-        )),
+        Err(e) => failed(&e),
     }
 }
 
@@ -1441,6 +1488,8 @@ async fn resolve(
 #[derive(serde::Deserialize)]
 struct ReleaseForm {
     release: String,
+    #[serde(default = "page", deserialize_with = "shown_field")]
+    jobs: i64,
 }
 
 /// A release named by hand, for when MusicBrainz or Discogs has it but the
@@ -1456,7 +1505,7 @@ async fn resolve_pasted(
         ));
     };
     match s.app.jobs.import_soon(id, false, Some(release)).await {
-        Ok(()) => done(&s.app, PAGE).await,
+        Ok(()) => done(&s.app, form.jobs).await,
         Err(e) => failed(&e),
     }
 }
@@ -1613,6 +1662,8 @@ async fn job_compare(
 struct UserFileForm {
     username: String,
     filename: Option<String>,
+    #[serde(default = "page", deserialize_with = "shown_field")]
+    history: i64,
 }
 
 async fn cancel_upload(
@@ -1622,7 +1673,7 @@ async fn cancel_upload(
     if let (Some(e), Some(name)) = (s.app.session.engine(), f.filename) {
         e.cancel_upload(&f.username, &RawStr::from(name));
     }
-    one(uploads_html(&s.app, PAGE).await)
+    one(uploads_html(&s.app, f.history).await)
 }
 
 async fn ban(State(s): State<UiState>, axum::Form(f): axum::Form<UserFileForm>) -> Response {
@@ -1648,10 +1699,7 @@ async fn account(State(s): State<UiState>, axum::Form(f): axum::Form<AccountForm
             let _ = s.app.jobs.resume().await;
             one(status_html(&s.app).await)
         }
-        Err(e) => one(format!(
-            r#"<div id="flash" class="toast border-bad text-meta text-bad">{}</div>"#,
-            askama_escape(&format!("{e:#}"))
-        )),
+        Err(e) => failed(&e),
     }
 }
 
@@ -1662,10 +1710,6 @@ async fn reconnect(State(s): State<UiState>) -> Response {
     one(status_html(&s.app).await)
 }
 
-fn askama_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
+fn escape(s: &str) -> String {
+    askama::filters::escape(s, askama::filters::Html).map_or_else(|e| match e {}, |s| s.to_string())
 }

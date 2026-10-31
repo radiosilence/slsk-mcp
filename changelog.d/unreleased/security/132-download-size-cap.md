@@ -1,0 +1,1 @@
+- **Downloads cannot be made to fill the disk.** An offer whose size differs from the size queued, or exceeds 8 GiB, fails the download; the size a peer announces was previously trusted as the number of bytes to write.

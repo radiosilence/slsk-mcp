@@ -270,6 +270,8 @@ impl Social {
                 status,
                 privileged,
             } => {
+                // Only watched users are tracked; a one-off status request
+                // (a profile being viewed) answers here too.
                 if let Some(mut s) = self.statuses.get_mut(username) {
                     *s = (*status, *privileged);
                 }

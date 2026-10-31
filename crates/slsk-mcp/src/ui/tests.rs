@@ -663,3 +663,96 @@ mod browse {
         );
     }
 }
+
+mod profile {
+    use std::sync::Arc;
+
+    use slsk_engine::slsk_proto::peer::UserInfo;
+    use slsk_engine::slsk_proto::server::{UserStats, UserStatus};
+
+    use crate::ui::profile::*;
+
+    fn info(picture: Option<&'static [u8]>) -> UserInfo {
+        UserInfo {
+            description: "<b>dub</b> techno".into(),
+            picture: picture.map(bytes::Bytes::from_static),
+            total_uploads: 42,
+            queue_size: 3,
+            slots_free: true,
+            upload_permitted: None,
+        }
+    }
+
+    #[test]
+    fn a_peers_profile_shows_what_they_and_the_server_said() {
+        let server = Server {
+            status: Some(UserStatus::Away),
+            stats: Some(UserStats {
+                avg_speed: 2048,
+                upload_num: 7,
+                files: 1000,
+                dirs: 90,
+            }),
+            interests: Some((vec!["dub".into()], vec!["noise".into()])),
+        };
+        let html = peer(
+            "ann",
+            &server,
+            Some(&info(Some(b"\x89PNG\r\n\x1a\nxx"))),
+            None,
+        );
+        assert!(html.contains("&#60;b&#62;dub&#60;/b&#62; techno"), "{html}");
+        assert!(
+            html.contains("/profile/picture?username=ann&#38;v="),
+            "{html}"
+        );
+        assert!(html.contains("1000 files in 90 folders"));
+        assert!(html.contains("2.0 KB/s"));
+        assert!(html.contains(">42<"));
+        assert!(html.contains("pill away"));
+        assert!(html.contains("noise"));
+        assert!(html.contains("/browse?username=ann"));
+    }
+
+    #[test]
+    fn a_picture_that_is_not_an_image_is_not_shown() {
+        let html = peer(
+            "ann",
+            &Server::default(),
+            Some(&info(Some(b"<svg/>"))),
+            None,
+        );
+        assert!(!html.contains("/profile/picture"), "{html}");
+    }
+
+    #[test]
+    fn without_the_peer_the_servers_part_still_shows() {
+        let server = Server {
+            stats: Some(UserStats {
+                upload_num: 7,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let html = peer(
+            "ann",
+            &server,
+            None,
+            Some("ann did not send their profile".into()),
+        );
+        assert!(html.contains("did not send their profile"));
+        assert!(html.contains(">7<"));
+        assert!(!html.contains("No description."));
+    }
+
+    #[test]
+    fn only_the_latest_answers_are_kept() {
+        let cache = Cache::default();
+        cache.put("first", Arc::new(info(None)));
+        for n in 0..KEEP {
+            cache.put(&format!("u{n}"), Arc::new(info(None)));
+        }
+        assert!(cache.get("first").is_none());
+        assert!(cache.get(&format!("u{}", KEEP - 1)).is_some());
+    }
+}

@@ -1,0 +1,41 @@
+<div id="profile">
+  <article class="card">
+    <div class="flex min-w-0 flex-wrap items-start gap-3">
+      {% if let Some(src) = picture %}<img class="size-32 flex-none rounded object-cover" src="{{ src }}" alt="{{ username }}'s picture">{% endif %}
+      <div class="grid min-w-0 flex-auto gap-1.5">
+        <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
+          <strong class="min-w-0 flex-auto wrap-anywhere">{{ username }}{% if mine %} (you){% endif %}</strong>
+          {% if let Some(st) = status %}<span class="pill {{ st }}">{{ st }}</span>{% endif %}
+        </div>
+        {% if !description.is_empty() %}<p class="whitespace-pre-wrap wrap-anywhere">{{ description }}</p>{% else if !mine && note.is_none() %}<p class="text-meta text-muted">No description.</p>{% endif %}
+        {% if let Some(n) = note %}<p class="text-meta text-muted wrap-anywhere">{{ n }}</p>{% endif %}
+      </div>
+    </div>
+    <div class="mt-2.5 flex flex-wrap items-center gap-2">
+      <a class="button quiet" href="{{ crate::ui::browse_href(username, "") }}">{% if mine %}Browse your shares{% else %}Browse shares{% endif %}</a>
+      {% if !mine %}
+      <a class="button quiet" href="{{ crate::ui::chat_href("pm", username) }}">Message</a>
+      <form id="profile-peer" hidden><input type="hidden" name="username" value="{{ username }}"></form>
+      <button type="button" class="quiet" data-indicator="_prof_bud" data-attr:disabled="$_prof_bud" data-class:busy="$_prof_bud" data-on:click="@post('/chat/buddy/add', {contentType: 'form', selector: '#profile-peer'})">Add buddy</button>
+      <button type="button" class="quiet" data-indicator="_prof_refresh" data-attr:disabled="$_prof_refresh" data-class:busy="$_prof_refresh" data-on:click="@get('{{ self.refresh() }}')">Refresh</button>
+      {% endif %}
+    </div>
+    {% if !stats.is_empty() %}
+    <dl class="mt-2.5 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1">
+      {% for (label, value) in stats %}<dt class="text-muted">{{ label }}</dt><dd class="wrap-anywhere">{{ value }}</dd>{% endfor %}
+    </dl>
+    {% endif %}
+    {% if !likes.is_empty() %}<p class="mt-2.5 text-meta wrap-anywhere"><span class="text-muted">Likes</span> {{ likes.join(", ") }}</p>{% endif %}
+    {% if !hates.is_empty() %}<p class="text-meta wrap-anywhere"><span class="text-muted">Dislikes</span> {{ hates.join(", ") }}</p>{% endif %}
+  </article>
+  {% if mine %}
+  <h3>Edit</h3>
+  <p class="text-meta text-muted">Peers see this when they look you up.</p>
+  <form id="profile-edit" class="my-2.5 flex flex-col gap-2" enctype="multipart/form-data">
+    <textarea class="resize-y" name="description" rows="6" placeholder="About you and what you share">{{ description }}</textarea>
+    <label class="flex flex-col gap-1 text-meta text-muted">Picture, a JPEG or PNG<input type="file" name="picture" accept="image/jpeg,image/png"></label>
+    {% if picture.is_some() %}<label class="flex items-center gap-1.5 text-muted"><input type="checkbox" name="clear" value="1"> Remove the picture</label>{% endif %}
+    <div><button type="button" class="primary" data-indicator="_prof_save" data-attr:disabled="$_prof_save" data-class:busy="$_prof_save" data-on:click="@post('/profile', {contentType: 'form', selector: '#profile-edit'})">Save</button></div>
+  </form>
+  {% endif %}
+</div>

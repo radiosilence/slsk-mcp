@@ -25,6 +25,8 @@ pub struct Metrics {
     pub logged_in: AtomicU64,
     pub shared_folders: AtomicU64,
     pub shared_bytes: AtomicU64,
+    /// Distinct users an upload has completed to since start.
+    pub upload_users: AtomicU64,
 }
 
 impl Metrics {
@@ -138,6 +140,11 @@ impl Metrics {
                 "slsk_shared_bytes",
                 "Total size of shared files.",
                 &self.shared_bytes,
+            ),
+            (
+                "slsk_upload_users",
+                "Distinct users served an upload since start.",
+                &self.upload_users,
             ),
         ];
         for (name, help, v) in gauges {

@@ -1,1 +1,0 @@
-- **`slsk_upload_users`.** It counted only since process start; `slsk_served_users` gives the same from the database.

@@ -4,16 +4,16 @@
   {% for p in peers %}
   <article class="card">
     <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
-      <strong class="min-w-0 flex-auto wrap-anywhere"><a class="wrap-anywhere" href="{{ crate::ui::browse_href(p.username, "") }}">{{ p.username }}</a></strong>
+      <strong class="min-w-0 flex-auto wrap-anywhere"><a class="wrap-anywhere" href="{{ crate::ui::profile_href(p.username) }}">{{ p.username }}</a></strong>
       {% if p.speed > 0 %}<span class="text-meta text-muted wrap-anywhere">{{ self.size(p.speed) }}/s</span>{% endif %}
     </div>
     <div class="text-meta text-muted wrap-anywhere">{{ p.files.len() }} in progress or queued{% if p.done > 0 %} · {{ p.done }} sent{% endif %}</div>
     <ul class="mt-2">
     {% for t in p.files %}
       <li class="flex min-w-0 items-center gap-2 py-1">
-        <span class="min-w-0 flex-auto truncate" title="{{ t.filename }}">{{ self.short(t.filename) }}</span>
+        <span class="min-w-0 flex-auto truncate" title="{{ t.filename }}">{{ self.leaf(t.filename) }}</span>
         <span class="flex-none text-meta text-muted">{{ self.label(t) }}{% if t.state == "transferring" %} · {{ self.pct(t) }}%{% endif %}</span>
-        <form id="up-{{ t.id.as_str() }}"><input type="hidden" name="username" value="{{ t.username }}"><input type="hidden" name="filename" value="{{ t.filename }}"></form>
+        <form id="up-{{ t.id.as_str() }}"><input type="hidden" name="history" value="{{ crate::ui::PAGE }}" data-attr:value="$history"><input type="hidden" name="username" value="{{ t.username }}"><input type="hidden" name="filename" value="{{ t.filename }}"></form>
         <button class="quiet flex-none px-2 py-[3px] text-meta" data-indicator="_up_{{ t.id.as_str() }}" data-attr:disabled="$_up_{{ t.id.as_str() }}" data-on:click="@post('/uploads/cancel', {contentType: 'form', selector: '#up-{{ t.id.as_str() }}'})">Cancel</button>
       </li>
     {% endfor %}
@@ -32,7 +32,7 @@
   {% for h in history %}
     <li class="flex min-w-0 items-center gap-2 py-1">
       <span class="min-w-0 flex-auto truncate" title="{{ h.filename }}">{{ self.leaf(h.filename) }}</span>
-      <span class="flex-none text-meta text-muted">{{ h.username }} · {% if h.state == "completed" %}{{ self.bytes(h.size) }}{% else %}{{ self.bytes(h.bytes) }} of {{ self.bytes(h.size) }}{% endif %}{% if !self.rate(h).is_empty() %} · {{ self.rate(h) }}{% endif %} · {{ self.ago(h) }}{% if h.state != "completed" %} · {{ h.state }}{% endif %}</span>
+      <span class="flex-none text-meta text-muted"><a href="{{ crate::ui::profile_href(h.username) }}">{{ h.username }}</a> · {% if h.state == "completed" %}{{ self.bytes(h.size) }}{% else %}{{ self.bytes(h.bytes) }} of {{ self.bytes(h.size) }}{% endif %}{% if !self.rate(h).is_empty() %} · {{ self.rate(h) }}{% endif %} · {{ self.ago(h) }}{% if h.state != "completed" %} · {{ h.state }}{% endif %}</span>
     </li>
   {% endfor %}
   </ul>

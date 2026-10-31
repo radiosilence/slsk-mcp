@@ -1,7 +1,7 @@
 <div id="lib-run-head">
   <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5"><strong class="min-w-0 flex-auto wrap-anywhere">{{ run.verb() }} {{ run.total }} album{% if run.total != 1 %}s{% endif %}</strong>{% if !run.running %}<span class="pill{% if run.failed() > 0 %} warn{% else %} keep{% endif %}">{% if run.failed() > 0 %}{{ run.failed() }} failed{% else %}done{% endif %}</span>{% endif %}</div>
   {% if run.running %}
-  <p class="text-meta text-muted">{{ run.done }} of {{ run.total }}{% if let Some(c) = run.current %} · now {{ self.rel(c) }}{% endif %}</p>
+  <p class="text-meta text-muted">{{ run.done }} of {{ run.total }}{% if let Some(c) = run.current %} · now {{ self::rel(root, c) }}{% endif %}</p>
   <progress max="{{ run.total.max(1) }}" value="{{ run.done }}">{{ run.done }}</progress>
   {% endif %}
   {% if let Some(e) = run.error %}<p class="text-meta text-bad wrap-anywhere">{{ e }}</p>{% endif %}

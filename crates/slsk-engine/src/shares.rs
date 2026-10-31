@@ -124,9 +124,11 @@ impl ShareIndex {
     /// Files matching every term of `query`, at most `limit` of them.
     ///
     /// Terms are whole words, as other clients match them. `-word` excludes,
-    /// and `*tail` matches any word ending in `tail`. Paths containing any of
-    /// `excluded`, lower-cased — the phrases the server bans from search
-    /// results — are dropped.
+    /// and `*tail` narrows what the whole words found to paths with a word
+    /// ending in `tail`. A query of tails alone matches nothing: resolving
+    /// one means reading the whole vocabulary, on the task that reads every
+    /// search the network relays. Paths containing any of `excluded`, lower-cased — the
+    /// phrases the server bans from search results — are dropped.
     pub fn search(&self, query: &str, limit: usize, excluded: &[String]) -> Vec<&SharedFile> {
         let mut include: Vec<&[u32]> = Vec::new();
         let mut tails: Vec<String> = Vec::new();
@@ -153,31 +155,9 @@ impl ShareIndex {
                 }
             }
         }
-        // A `*tail` filters what whole words found. Alone, it is resolved
-        // through the vocabulary, the one time every word is looked at.
-        // Anyone on the network can send one, and a short tail alone
-        // matches most of the vocabulary: every file, collected and sorted.
-        let partial: Vec<u32> = match tails.first() {
-            Some(first) if include.is_empty() && first.chars().count() < MIN_TAIL => Vec::new(),
-            Some(first) if include.is_empty() => {
-                let mut ids: Vec<u32> = self
-                    .postings
-                    .iter()
-                    .filter(|(w, _)| w.ends_with(first.as_str()))
-                    .flat_map(|(_, ids)| ids.iter().copied())
-                    .collect();
-                ids.sort_unstable();
-                ids.dedup();
-                ids
-            }
-            _ => Vec::new(),
-        };
         let mut sets: Vec<&[u32]> = include;
         if sets.is_empty() {
-            if partial.is_empty() {
-                return Vec::new();
-            }
-            sets.push(&partial);
+            return Vec::new();
         }
         sets.sort_by_key(|s| s.len());
         sets[0]
@@ -245,9 +225,6 @@ fn words(s: &str) -> impl Iterator<Item = String> + '_ {
         .map(str::to_lowercase)
 }
 
-/// The shortest `*tail` searched for on its own.
-const MIN_TAIL: usize = 3;
-
 const AUDIO: &[&str] = &[
     "flac", "mp3", "m4a", "aac", "ogg", "opus", "wav", "aiff", "aif", "ape", "wv", "alac", "wma",
     "dsf",
@@ -272,7 +249,7 @@ impl ProbeCache {
         let mut r = Reader::new(Bytes::from(bytes));
         let mut map = HashMap::new();
         let parse = |r: &mut Reader| -> slsk_proto::wire::Result<(PathBuf, Probed)> {
-            let p = PathBuf::from(r.string()?);
+            let p = path_from_bytes(&r.bytes()?);
             let size = r.u64()?;
             let mtime = r.u64()?;
             let attrs = r.list(8, |r| Ok((r.u32()?, r.u32()?)))?;
@@ -292,7 +269,9 @@ impl ProbeCache {
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
         let mut w = Writer::new();
         for (p, v) in &self.0 {
-            w.str(&p.to_string_lossy())
+            // As bytes, so a path that is not UTF-8 reads back as itself and
+            // is not probed again on every scan.
+            w.bytes(p.as_os_str().as_encoded_bytes())
                 .u64(v.size)
                 .u64(v.mtime)
                 .u32(v.attrs.len() as u32);
@@ -306,7 +285,19 @@ impl ProbeCache {
     }
 }
 
-/// Walk `roots` and build an index. Blocking; run it on a blocking thread.
+#[cfg(unix)]
+fn path_from_bytes(bytes: &[u8]) -> PathBuf {
+    use std::os::unix::ffi::OsStrExt;
+    PathBuf::from(std::ffi::OsStr::from_bytes(bytes))
+}
+
+#[cfg(not(unix))]
+fn path_from_bytes(bytes: &[u8]) -> PathBuf {
+    PathBuf::from(String::from_utf8_lossy(bytes).into_owned())
+}
+
+/// Walk `roots` and build an index, with how many audio files the cache
+/// does not know. Blocking; run it on a blocking thread.
 ///
 /// With `probe` unset, files the cache does not know are shared without
 /// audio attributes — a walk of a large library takes seconds, where reading
@@ -319,7 +310,7 @@ pub fn scan(
     cache: &mut ProbeCache,
     probe_new: bool,
     mut checkpoint: impl FnMut(&ProbeCache),
-) -> ShareIndex {
+) -> (ShareIndex, usize) {
     struct Found {
         path: PathBuf,
         virtual_path: String,
@@ -377,12 +368,15 @@ pub fn scan(
         }
     }
 
+    let unknown: Vec<&Found> = found
+        .iter()
+        .filter(|f| AUDIO.contains(&f.extension.as_str()))
+        .filter(
+            |f| !matches!(cache.0.get(&f.path), Some(p) if p.size == f.size && p.mtime == f.mtime),
+        )
+        .collect();
+    let unprobed = unknown.len();
     if probe_new {
-        let unknown: Vec<&Found> = found
-            .iter()
-            .filter(|f| AUDIO.contains(&f.extension.as_str()))
-            .filter(|f| !matches!(cache.0.get(&f.path), Some(p) if p.size == f.size && p.mtime == f.mtime))
-            .collect();
         // Two readers: the library is usually one spinning disk, where more
         // concurrent readers only add seeks, and imports and uploads share it.
         let pool = rayon::ThreadPoolBuilder::new()
@@ -426,7 +420,7 @@ pub fn scan(
             extension: f.extension,
         })
         .collect();
-    ShareIndex::build(files)
+    (ShareIndex::build(files), unprobed)
 }
 
 /// Attributes in the combinations the network expects: lossless files carry
@@ -517,12 +511,10 @@ mod tests {
             "m\\Canada\\x.flac",
         ]);
         assert_eq!(idx.search("canada -mp3", 10, &[]).len(), 2);
-        assert_eq!(idx.search("*gaddi", 10, &[]).len(), 2);
         assert!(
-            idx.search("*di", 10, &[]).is_empty(),
-            "a short tail alone is not searched"
+            idx.search("*gaddi", 10, &[]).is_empty(),
+            "tails alone are refused"
         );
-        assert_eq!(idx.search("canada *di", 10, &[]).len(), 2);
         assert_eq!(idx.search("canada *gaddi", 10, &[]).len(), 2);
         assert_eq!(idx.search("canada *gaddi -mp3", 10, &[]).len(), 1);
         assert!(idx.search("canada *nothing", 10, &[]).is_empty());
@@ -572,11 +564,37 @@ mod tests {
         std::fs::write(root.join("Artist/Album/01 Song.flac"), b"not really flac").unwrap();
         std::fs::write(root.join(".hidden"), b"x").unwrap();
         let mut cache = ProbeCache::default();
-        let idx = scan(std::slice::from_ref(&root), &mut cache, true, |_| {});
+        let (idx, unprobed) = scan(std::slice::from_ref(&root), &mut cache, false, |_| {});
+        assert_eq!(unprobed, 1);
+        assert_eq!(idx.file_count(), 1);
+        let (idx, unprobed) = scan(std::slice::from_ref(&root), &mut cache, true, |_| {});
+        assert_eq!(unprobed, 1, "counted before probing");
+        let (_, unprobed) = scan(std::slice::from_ref(&root), &mut cache, false, |_| {});
+        assert_eq!(unprobed, 0);
         assert_eq!(idx.file_count(), 1);
         assert!(idx.get(b"music\\Artist\\Album\\01 Song.flac").is_some());
         let cache_file = dir.path().join("cache.bin");
         cache.save(&cache_file).unwrap();
         assert_eq!(ProbeCache::load(&cache_file).0.len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_path_that_is_not_utf8_survives_the_cache() {
+        use std::os::unix::ffi::OsStrExt;
+        let path = PathBuf::from(std::ffi::OsStr::from_bytes(b"/music/caf\xe9.flac"));
+        let mut cache = ProbeCache::default();
+        cache.0.insert(
+            path.clone(),
+            Probed {
+                size: 1,
+                mtime: 2,
+                attrs: vec![(1, 2)],
+            },
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("cache.bin");
+        cache.save(&file).unwrap();
+        assert!(ProbeCache::load(&file).0.contains_key(&path));
     }
 }

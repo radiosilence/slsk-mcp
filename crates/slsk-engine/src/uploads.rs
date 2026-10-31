@@ -21,7 +21,7 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::{Notify, oneshot};
 
 use crate::net::READ_CHUNK;
-use crate::{Direction, Error, Inner, Key, TransferView, peers};
+use crate::{Direction, Error, Inner, Key, Metrics, TransferView, peers};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -75,8 +75,32 @@ impl Upload {
         UploadState::from_u8(self.state.load(Ordering::Acquire))
     }
 
+    #[cfg(test)]
     fn set(&self, s: UploadState) {
         self.state.store(s as u8, Ordering::Release);
+    }
+
+    /// Move `from` → `to` only if nothing else (a cancel, a ban) moved it
+    /// first.
+    fn transition(&self, from: UploadState, to: UploadState) -> bool {
+        self.state
+            .compare_exchange(from as u8, to as u8, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
+    /// Cancel unless it already finished.
+    fn cancel(&self) -> bool {
+        let mut from = self.state();
+        while matches!(
+            from,
+            UploadState::Queued | UploadState::Starting | UploadState::Transferring
+        ) {
+            if self.transition(from, UploadState::Cancelled) {
+                return true;
+            }
+            from = self.state();
+        }
+        false
     }
 
     fn view(&self, place: Option<u32>) -> TransferView {
@@ -124,12 +148,16 @@ pub(crate) struct Uploads {
     /// Bytes per second of the last completed upload, which is what the
     /// protocol reports as our speed.
     last_speed: AtomicU64,
+    /// Hashes of the users an upload has completed to, for
+    /// [`Metrics::upload_users`]: eight bytes a user rather than a name.
+    served: Mutex<HashSet<u64>>,
+    metrics: Arc<Metrics>,
 }
 
 const HISTORY: usize = 500;
 
 impl Uploads {
-    pub fn new(slots: usize) -> Self {
+    pub fn new(slots: usize, metrics: Arc<Metrics>) -> Self {
         Self {
             queue: Mutex::new(Queue::default()),
             slots: AtomicUsize::new(slots.max(1)),
@@ -137,7 +165,55 @@ impl Uploads {
             responses: DashMap::new(),
             next_id: AtomicU64::new(0),
             last_speed: AtomicU64::new(0),
+            served: Mutex::new(HashSet::new()),
+            metrics,
         }
+    }
+
+    fn publish_waiting(&self, q: &Queue) {
+        self.metrics
+            .uploads_queued
+            .store(q.waiting as u64, Ordering::Relaxed);
+    }
+
+    /// Bytes per second across the uploads sending now.
+    pub fn speed(&self) -> u64 {
+        let q = self.queue.lock();
+        q.active
+            .values()
+            .filter(|u| u.state() == UploadState::Transferring)
+            .map(|u| u.speed.load(Ordering::Relaxed))
+            .sum()
+    }
+
+    /// Uploads under way or waiting.
+    pub fn pending(&self) -> usize {
+        let q = self.queue.lock();
+        let underway = q
+            .active
+            .values()
+            .filter(|u| matches!(u.state(), UploadState::Starting | UploadState::Transferring))
+            .count();
+        underway + q.waiting
+    }
+
+    /// Whether `username`'s `filename` finished, failed or was cancelled
+    /// lately: asked about again, it is not queued again.
+    pub fn settled(&self, username: &str, filename: &RawStr) -> bool {
+        let q = self.queue.lock();
+        q.history
+            .iter()
+            .any(|u| u.username == username && &u.filename == filename)
+    }
+
+    /// Forget what `username` has waiting; an upload under way carries on.
+    fn drop_queue(&self, username: &str) {
+        let mut q = self.queue.lock();
+        if let Some(list) = q.by_user.remove(username) {
+            q.waiting -= list.len();
+        }
+        q.order.retain(|o| o != username);
+        self.publish_waiting(&q);
     }
 
     pub fn set_slots(&self, slots: usize) {
@@ -179,15 +255,6 @@ impl Uploads {
         Some((rounds_ahead * q.order.len() + users_ahead + 1) as u32)
     }
 
-    /// Whether `username`'s `filename` finished, failed or was cancelled
-    /// lately: asked about again, it is not queued again.
-    pub fn settled(&self, username: &str, filename: &RawStr) -> bool {
-        let q = self.queue.lock();
-        q.history
-            .iter()
-            .any(|u| u.username == username && &u.filename == filename)
-    }
-
     pub fn on_response(&self, token: u32, allowed: bool, reason: Option<String>) {
         if let Some((_, tx)) = self.responses.remove(&token) {
             let _ = tx.send((allowed, reason));
@@ -197,8 +264,7 @@ impl Uploads {
     pub fn cancel(&self, username: &str, filename: &RawStr) -> bool {
         let mut q = self.queue.lock();
         if let Some(u) = q.active.get(&(username.to_string(), filename.0.clone())) {
-            u.set(UploadState::Cancelled);
-            return true;
+            return u.cancel();
         }
         if let Some(list) = q.by_user.get_mut(username)
             && let Some(i) = list.iter().position(|u| &u.filename == filename)
@@ -210,20 +276,12 @@ impl Uploads {
                 q.by_user.remove(username);
                 q.order.retain(|o| o != username);
             }
-            u.set(UploadState::Cancelled);
+            u.cancel();
             push_history(&mut q.history, u);
+            self.publish_waiting(&q);
             return true;
         }
         false
-    }
-
-    /// Forget what `username` has waiting; an upload under way carries on.
-    fn drop_queue(&self, username: &str) {
-        let mut q = self.queue.lock();
-        if let Some(list) = q.by_user.remove(username) {
-            q.waiting -= list.len();
-        }
-        q.order.retain(|o| o != username);
     }
 
     pub fn drop_users(&self, users: &HashSet<String>) {
@@ -233,30 +291,10 @@ impl Uploads {
         q.order.retain(|u| !users.contains(&u.to_lowercase()));
         for u in q.active.values() {
             if users.contains(&u.username.to_lowercase()) {
-                u.set(UploadState::Cancelled);
+                u.cancel();
             }
         }
-    }
-
-    /// Bytes per second across the uploads sending now.
-    pub fn speed(&self) -> u64 {
-        let q = self.queue.lock();
-        q.active
-            .values()
-            .filter(|u| u.state() == UploadState::Transferring)
-            .map(|u| u.speed.load(Ordering::Relaxed))
-            .sum()
-    }
-
-    /// Uploads under way or waiting.
-    pub fn pending(&self) -> usize {
-        let q = self.queue.lock();
-        let underway = q
-            .active
-            .values()
-            .filter(|u| matches!(u.state(), UploadState::Starting | UploadState::Transferring))
-            .count();
-        underway + q.waiting
+        self.publish_waiting(&q);
     }
 
     pub fn views(&self) -> Vec<TransferView> {
@@ -333,12 +371,8 @@ pub(crate) fn enqueue(
     if !q.order.iter().any(|u| u == username) {
         q.order.push_back(username.to_string());
     }
-    let waiting = q.waiting;
+    inner.uploads.publish_waiting(&q);
     drop(q);
-    inner
-        .metrics
-        .uploads_queued
-        .store(waiting as u64, Ordering::Relaxed);
     inner.uploads.wake.notify_one();
     Ok(())
 }
@@ -356,7 +390,9 @@ pub(crate) async fn schedule(inner: Arc<Inner>) {
                 if q.active.len() >= inner.uploads.slots.load(Ordering::Relaxed) {
                     break;
                 }
-                pick(&mut q, &inner.privileged.read())
+                let next = pick(&mut q, &inner.privileged.read());
+                inner.uploads.publish_waiting(&q);
+                next
             };
             let Some(upload) = next else { break };
             tokio::spawn(run(inner.clone(), upload));
@@ -392,18 +428,44 @@ fn pick(q: &mut Queue, privileged: &HashSet<String>) -> Option<Arc<Upload>> {
 }
 
 async fn run(inner: Arc<Inner>, u: Arc<Upload>) {
-    u.set(UploadState::Starting);
+    // Cancelled between being picked and starting: it never goes out.
+    if u.transition(UploadState::Queued, UploadState::Starting) {
+        serve(&inner, &u).await;
+    }
+    let mut q = inner.uploads.queue.lock();
+    if let Some(done) = q.active.remove(&(u.username.clone(), u.filename.0.clone())) {
+        push_history(&mut q.history, done);
+    }
+    drop(q);
+    inner.uploads.wake.notify_one();
+}
+
+async fn serve(inner: &Arc<Inner>, u: &Arc<Upload>) {
     inner.metrics.uploads_active.fetch_add(1, Ordering::Relaxed);
-    let result = send(&inner, &u).await;
+    let result = send(inner, u).await;
     inner.metrics.uploads_active.fetch_sub(1, Ordering::Relaxed);
     match result {
+        // Cancelled after the last write: the file went, but the upload is
+        // not counted or reported as served.
+        Ok(_) if !u.transition(UploadState::Transferring, UploadState::Completed) => {}
         Ok(speed) => {
-            u.set(UploadState::Completed);
             inner
                 .metrics
                 .uploads_completed
                 .fetch_add(1, Ordering::Relaxed);
             inner.uploads.last_speed.store(speed, Ordering::Relaxed);
+            let served = {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::hash::DefaultHasher::new();
+                u.username.to_lowercase().hash(&mut h);
+                let mut s = inner.uploads.served.lock();
+                s.insert(h.finish());
+                s.len()
+            };
+            inner
+                .metrics
+                .upload_users
+                .store(served as u64, Ordering::Relaxed);
             let _ = inner.send_server(ToServer::SendUploadSpeed {
                 speed: speed.min(u64::from(u32::MAX)) as u32,
             });
@@ -417,14 +479,15 @@ async fn run(inner: Arc<Inner>, u: Arc<Upload>) {
             if matches!(e, Error::Offline(_)) {
                 inner.uploads.drop_queue(&u.username);
             }
-            if u.state() != UploadState::Cancelled {
-                u.set(UploadState::Failed);
-            }
-            *u.error.lock() = Some(e.to_string());
-            inner.metrics.uploads_failed.fetch_add(1, Ordering::Relaxed);
+            // A cancel or a ban is not a failure, and the downloader is not
+            // told about one.
+            let failed = u.transition(UploadState::Starting, UploadState::Failed)
+                || u.transition(UploadState::Transferring, UploadState::Failed);
             // Told whether or not a byte went: a downloader not told waits
             // in a queue we have already left, and never asks again.
-            if u.state() != UploadState::Cancelled {
+            if failed {
+                *u.error.lock() = Some(e.to_string());
+                inner.metrics.uploads_failed.fetch_add(1, Ordering::Relaxed);
                 let frame = PeerMessage::UploadFailed {
                     filename: u.filename.clone(),
                 }
@@ -437,17 +500,6 @@ async fn run(inner: Arc<Inner>, u: Arc<Upload>) {
             }
         }
     }
-    let mut q = inner.uploads.queue.lock();
-    if let Some(done) = q.active.remove(&(u.username.clone(), u.filename.0.clone())) {
-        push_history(&mut q.history, done);
-    }
-    let waiting = q.waiting;
-    drop(q);
-    inner
-        .metrics
-        .uploads_queued
-        .store(waiting as u64, Ordering::Relaxed);
-    inner.uploads.wake.notify_one();
 }
 
 /// Offer the file, open the file connection, stream from the requested
@@ -489,7 +541,9 @@ async fn send(inner: &Arc<Inner>, u: &Upload) -> Result<u64, Error> {
     }
     file.seek(SeekFrom::Start(offset)).await?;
     u.bytes.store(offset, Ordering::Relaxed);
-    u.set(UploadState::Transferring);
+    if !u.transition(UploadState::Starting, UploadState::Transferring) {
+        return Err(std::io::Error::other(reason::CANCELLED).into());
+    }
 
     let started = Instant::now();
     let mut sent = offset;
@@ -565,7 +619,7 @@ mod tests {
 
     #[test]
     fn cancelling_a_users_last_file_leaves_nothing_queued_for_them() {
-        let uploads = Uploads::new(1);
+        let uploads = Uploads::new(1, Arc::default());
         *uploads.queue.lock() = queue(&[("a", "1"), ("b", "1")]);
         assert!(uploads.cancel("a", &"1".into()));
         let q = uploads.queue.lock();
@@ -587,6 +641,41 @@ mod tests {
         );
         q.active.clear();
         assert_eq!(pick(&mut q, &none).unwrap().filename.to_string_lossy(), "2");
+    }
+
+    #[tokio::test]
+    async fn an_upload_cancelled_before_it_starts_never_goes_out() {
+        let (e, _tmp) = crate::offline_engine().await;
+        let inner = &e.0;
+        let u = upload("peer", "f", 0);
+        u.set(UploadState::Cancelled);
+        inner
+            .uploads
+            .queue
+            .lock()
+            .active
+            .insert(("peer".into(), u.filename.0.clone()), u.clone());
+        run(inner.clone(), u.clone()).await;
+        assert_eq!(u.state(), UploadState::Cancelled);
+        assert_eq!(inner.metrics.uploads_failed.load(Ordering::Relaxed), 0);
+        let q = inner.uploads.queue.lock();
+        assert!(q.active.is_empty());
+        assert_eq!(q.history.len(), 1);
+    }
+
+    #[test]
+    fn a_finished_upload_is_not_relabelled_cancelled() {
+        let uploads = Uploads::new(1, Arc::default());
+        let u = upload("a", "1", 0);
+        u.set(UploadState::Completed);
+        uploads
+            .queue
+            .lock()
+            .active
+            .insert(("a".into(), u.filename.0.clone()), u.clone());
+        assert!(!uploads.cancel("a", &"1".into()));
+        uploads.drop_users(&HashSet::from(["a".to_string()]));
+        assert_eq!(u.state(), UploadState::Completed);
     }
 
     #[test]

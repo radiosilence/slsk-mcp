@@ -1,20 +1,26 @@
-<div id="jobs">
-{% if attention.is_empty() && underway.is_empty() && settled.is_empty() %}<p class="text-meta text-muted">Nothing yet. Search for something, or ask your assistant to grab it.</p>{% endif %}
-{% if !attention.is_empty() %}
-<section class="mt-5 min-w-0">
-  <h2 class="text-warn">Needs you <span class="text-ink">{{ attention.len() }}</span></h2>
-{% for j in attention %}
-  <article id="job-{{ j.id.as_str() }}" class="card {{ j.status }} border-warn/45" data-class:busy="${{ self.sig(j) }}">
+{% macro card(j, warn) %}
+  <article id="job-{{ j.id.as_str() }}" class="card {{ j.status }}{% if warn %} border-warn/45{% endif %}" data-class:busy="${{ self.sig(j) }}">
     <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
       <strong class="min-w-0 flex-auto wrap-anywhere" title="{% match j.folder %}{% when Some with (f) %}{{ f }}{% when None %}{% endmatch %}">{{ self.heading(j) }}</strong>
       <span class="pill">{{ self.label(j.status) }}</span>
     </div>
     <div class="text-meta text-muted wrap-anywhere">
-      {% match self.asked(j) %}{% when Some with (q) %}asked for “{{ q }}” · {% when None %}{% endmatch %}{% match j.username %}{% when Some with (u) %}from {{ u }}{% when None %}{% match j.host %}{% when Some with (h) %}from {{ h }}{% when None %}{% endmatch %}{% endmatch %}
+      {% match self.asked(j) %}{% when Some with (q) %}asked for “{{ q }}” · {% when None %}{% endmatch %}{% match j.username %}{% when Some with (u) %}from <a class="wrap-anywhere" href="{{ crate::ui::profile_href(u) }}">{{ u }}</a>{% when None %}{% match j.host %}{% when Some with (h) %}from {{ h }}{% when None %}{% endmatch %}{% endmatch %}
       {% if j.status == "downloading" %} · {{ self.progress(j) }}{% endif %}
       {% if j.status == "importing" %} · tagging and filing{% endif %}
     </div>
     {% if j.status == "downloading" %}<progress max="100" value="{{ self.pct(j) }}">{{ self.pct(j) }}%</progress>{% endif %}
+    {% if !warn && !j.files.is_empty() %}{% let open = self.open_sig(j) %}
+    <button type="button" class="quiet mt-1.5 px-2 py-0.5 text-meta" data-on:click="${{ open }} = !${{ open }}" data-text="(${{ open }} ? '▾ ' : '▸ ') + '{{ j.files.len() }} files'">▸ {{ j.files.len() }} files</button>
+    <ul class="mt-1 grid gap-1 text-meta" data-show="${{ open }}">
+      {% for f in j.files %}
+      <li class="flex min-w-0 flex-wrap items-baseline gap-x-2">
+        <span class="min-w-0 flex-[1_1_60%] wrap-anywhere{% if f.state == "completed" %} text-muted{% endif %}">{{ f.name }}</span>
+        <span class="{% if f.error.is_some() %}text-bad{% else %}text-muted{% endif %}">{{ self.file_progress(f) }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% endif %}
     {% match self.ask(j) %}{% when Some with (a) %}<p class="mt-2 mb-0.5">{{ a }}</p>{% when None %}{% endmatch %}
     {% match j.error %}{% when Some with (e) %}<p class="my-0.5 text-meta {% if j.status == "failed" %}text-bad{% else %}text-muted{% endif %} wrap-anywhere">{{ e }}</p>{% when None %}{% endmatch %}
     {% if !j.analysis.is_empty() && (j.status == "suspect" || j.status == "review") %}
@@ -54,7 +60,8 @@
       {% endfor %}
     </ul>
     <form id="release-{{ j.id.as_str() }}" class="my-1.5 flex flex-wrap items-center gap-2" data-on:submit__prevent="@post('/jobs/{{ j.id.as_str() }}/release', {contentType: 'form', selector: '#release-{{ j.id.as_str() }}'})">
-      <input class="flex-[1_1_12em]" name="release" placeholder="{% if discogs %}MusicBrainz or Discogs release id or link{% else %}MusicBrainz release id or link{% endif %}" autocomplete="off" required>
+      <input type="hidden" name="jobs" value="{{ crate::ui::PAGE }}" data-attr:value="$jobs">
+      <input class="flex-[1_1_12em]" name="release" aria-label="Release id or link" placeholder="{% if discogs %}MusicBrainz or Discogs release id or link{% else %}MusicBrainz release id or link{% endif %}" autocomplete="off" required>
       <button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}">Use release</button>
     </form>
     {% endif %}
@@ -72,83 +79,19 @@
       {% if j.status != "importing" %}<button class="quiet" data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="confirm('Remove this album and delete its downloaded files?') && @post('/jobs/{{ j.id.as_str() }}/remove')">Remove</button>{% endif %}
     </div>
   </article>
-{% endfor %}
+{% endmacro -%}
+<div id="jobs">
+{% if attention.is_empty() && underway.is_empty() && settled.is_empty() %}<p class="text-meta text-muted">Nothing yet. Search for something, or ask your assistant to grab it.</p>{% endif %}
+{% if !attention.is_empty() %}
+<section class="mt-5 min-w-0">
+  <h2 class="text-warn">Needs you <span class="text-ink">{{ attention.len() }}</span></h2>
+{% for j in attention %}{% call card(j, true) %}{% endcall %}{% endfor %}
 </section>
 {% endif %}
 {% if !underway.is_empty() %}
 <section class="mt-5 min-w-0">
   <h2>On the way <span class="text-ink">{{ underway.len() }}</span></h2>
-{% for j in underway %}
-  <article id="job-{{ j.id.as_str() }}" class="card {{ j.status }}" data-class:busy="${{ self.sig(j) }}">
-    <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
-      <strong class="min-w-0 flex-auto wrap-anywhere" title="{% match j.folder %}{% when Some with (f) %}{{ f }}{% when None %}{% endmatch %}">{{ self.heading(j) }}</strong>
-      <span class="pill">{{ self.label(j.status) }}</span>
-    </div>
-    <div class="text-meta text-muted wrap-anywhere">
-      {% match self.asked(j) %}{% when Some with (q) %}asked for “{{ q }}” · {% when None %}{% endmatch %}{% match j.username %}{% when Some with (u) %}from {{ u }}{% when None %}{% match j.host %}{% when Some with (h) %}from {{ h }}{% when None %}{% endmatch %}{% endmatch %}
-      {% if j.status == "downloading" %} · {{ self.progress(j) }}{% endif %}
-      {% if j.status == "importing" %} · tagging and filing{% endif %}
-    </div>
-    {% if j.status == "downloading" %}<progress max="100" value="{{ self.pct(j) }}">{{ self.pct(j) }}%</progress>{% endif %}
-    {% if !j.files.is_empty() %}{% let open = self.open_sig(j) %}
-    <button type="button" class="quiet mt-1.5 px-2 py-0.5 text-meta" data-on:click="${{ open }} = !${{ open }}" data-text="(${{ open }} ? '▾ ' : '▸ ') + '{{ j.files.len() }} files'">▸ {{ j.files.len() }} files</button>
-    <ul class="mt-1 grid gap-1 text-meta" data-show="${{ open }}">
-      {% for f in j.files %}
-      <li class="flex min-w-0 flex-wrap items-baseline gap-x-2">
-        <span class="min-w-0 flex-[1_1_60%] wrap-anywhere{% if f.state == "completed" %} text-muted{% endif %}">{{ f.name }}</span>
-        <span class="{% if f.error.is_some() %}text-bad{% else %}text-muted{% endif %}">{{ self.file_progress(f) }}</span>
-      </li>
-      {% endfor %}
-    </ul>
-    {% endif %}
-    {% match self.ask(j) %}{% when Some with (a) %}<p class="mt-2 mb-0.5">{{ a }}</p>{% when None %}{% endmatch %}
-    {% match j.error %}{% when Some with (e) %}<p class="my-0.5 text-meta {% if j.status == "failed" %}text-bad{% else %}text-muted{% endif %} wrap-anywhere">{{ e }}</p>{% when None %}{% endmatch %}
-    {% if !j.analysis.is_empty() && (j.status == "suspect" || j.status == "review") %}
-    <details class="mt-2" data-ignore-morph>
-      <summary class="text-muted">Spectral analysis</summary>
-      <ul class="mt-1.5 grid gap-1">
-      {% for t in j.analysis %}
-        <li class="flex flex-wrap items-baseline gap-2">
-          <span class="rounded-sm px-1.5 py-px text-[11px] {% let v = self.verdict(t) %}{% if v == "lossless" %}bg-brand/20 text-brand{% else if v == "lossy" || v == "upsampled" %}bg-bad/20 text-bad{% else %}bg-rule{% endif %}">{{ self.verdict(t) }}</span>
-          <span>{{ t.file }}</span>
-          <span class="text-meta text-muted wrap-anywhere">{% match t.cutoff_hz %}{% when Some with (c) %}ends at {{ c / 1000.0 }} kHz{% when None %}{% endmatch %}{% match t.estimate %}{% when Some with (e) %} · {{ e }}{% when None %}{% endmatch %}</span>
-          <a href="/jobs/{{ j.id.as_str() }}/spectrogram/{{ loop.index0 }}" target="_blank" rel="noopener">spectrogram</a>
-        </li>
-      {% endfor %}
-      </ul>
-    </details>
-    {% endif %}
-    {% if j.status == "review" %}
-    <ul class="mt-2 grid gap-1.5">
-      {% for c in j.candidates %}
-      <li class="flex flex-wrap items-baseline gap-2">
-        <button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/resolve/{{ c.release_id }}')">Use</button>
-        <span>{{ c.artist }} — {{ c.title }}</span>
-        <span class="text-meta text-muted wrap-anywhere">{% match c.date %}{% when Some with (d) %}{{ d }}{% when None %}{% endmatch %} {% match c.country %}{% when Some with (x) %}{{ x }}{% when None %}{% endmatch %} {% match c.media %}{% when Some with (m) %}{{ m }}{% when None %}{% endmatch %} · {{ c.tracks }} tracks · distance {{ c.distance }}{% if c.missing > 0 %} · {{ c.missing }} missing{% endif %}{% if c.extra > 0 %} · {{ c.extra }} extra{% endif %}</span>
-        {% let (site, href) = crate::library::release_link(c.release_id) %}<a class="text-meta" href="{{ href }}" target="_blank" rel="noopener">{{ site }}</a>
-      </li>
-      {% endfor %}
-    </ul>
-    <form id="release-{{ j.id.as_str() }}" class="my-1.5 flex flex-wrap items-center gap-2" data-on:submit__prevent="@post('/jobs/{{ j.id.as_str() }}/release', {contentType: 'form', selector: '#release-{{ j.id.as_str() }}'})">
-      <input class="flex-[1_1_12em]" name="release" placeholder="{% if discogs %}MusicBrainz or Discogs release id or link{% else %}MusicBrainz release id or link{% endif %}" autocomplete="off" required>
-      <button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}">Use release</button>
-    </form>
-    {% endif %}
-    {% match self.advice(j) %}{% when Some with (a) %}<p class="mt-2.5 mb-0 rounded-sm border-l-3 border-brand bg-brand/8 px-2.5 py-2"><strong>Suggested:</strong> {{ a.why }}</p>{% when None %}{% endmatch %}
-    {% match self.as_is_blocked(j) %}{% when Some with (b) %}{% if j.status == "review" %}<p class="my-0.5 text-meta text-muted">Import as-is won't work: {{ b }}</p>{% endif %}{% when None %}{% endmatch %}
-    <div class="mt-2.5 flex flex-wrap items-center gap-2">
-      {% match self.advice(j) %}{% when Some with (a) %}<button class="primary" data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/{{ a.action }}')">{{ a.label }}</button>{% when None %}{% endmatch %}
-      {% if self.offer(j, "approve") %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/approve')">Import anyway</button>{% endif %}
-      {% if self.offer(j, "next") %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/next')">Try another copy</button>{% endif %}
-      {% if self.offer(j, "as-is") %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/as-is')">Import as-is</button>{% endif %}
-      {% if self.offer(j, "retry") %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/retry')">Retry</button>{% endif %}
-      {% if self.offer(j, "cancel") %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/cancel')">Cancel</button>{% endif %}
-      <span class="flex-1 max-sm:hidden"></span>
-      {% if self.offer(j, "match") %}<button class="quiet" data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/retry')">Match again</button>{% endif %}
-      {% if j.status != "importing" %}<button class="quiet" data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="confirm('Remove this album and delete its downloaded files?') && @post('/jobs/{{ j.id.as_str() }}/remove')">Remove</button>{% endif %}
-    </div>
-  </article>
-{% endfor %}
+{% for j in underway %}{% call card(j, false) %}{% endcall %}{% endfor %}
 </section>
 {% endif %}
 {% if !settled.is_empty() %}
