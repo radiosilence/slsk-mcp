@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.10.1
+
+### Added
+
+- **Folders no release matches strongly can be identified by their audio.** sift 0.10.1 fingerprints them and looks the recordings up on AcoustID when `ACOUSTID_CLIENT` is set to an AcoustID application key; the deploy package takes it as `acoustidClient`, and Settings and the `tagger` query say whether it is on. The same sift release keeps the Discogs id of albums matched there, makes tag writes atomic, and stops a crashed ReplayGain decode from writing one track's gain into another.
+
+### Fixed
+
+- **Uploads are no longer refused right after a restart.** The service logs in only once its shares are indexed, so a peer that re-requests its queued files the moment it comes back online is no longer told they are not shared.
+
 ## 0.10.0
 
 ### Added
