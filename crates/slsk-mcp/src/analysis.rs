@@ -212,7 +212,7 @@ fn decode(path: &Path) -> Result<Option<Decoded>> {
         return Ok(None);
     };
 
-    let hop = match total_frames {
+    let mut hop = match total_frames {
         Some(n) if n > FFT as u64 => ((n - FFT as u64) / COLUMNS).max(FFT as u64 / 4),
         _ => u64::from(sample_rate / 4),
     } as usize;
@@ -231,7 +231,8 @@ fn decode(path: &Path) -> Result<Option<Decoded>> {
     let mut decode_errors = 0u32;
     let mut bit_mask = 0u32;
     let mut interleaved: Vec<i32> = Vec::new();
-    let mut columns = Vec::new();
+    let mut columns: Vec<Vec<f32>> = Vec::new();
+    let mut analysed = 0usize;
     let mut mean_power = vec![0f64; FFT / 2];
     let mut buf = vec![Complex32::default(); FFT];
 
@@ -281,6 +282,23 @@ fn decode(path: &Path) -> Result<Option<Decoded>> {
                 })
                 .collect();
             columns.push(column);
+            analysed += 1;
+            // A stream that does not say how long it is gets a column every
+            // quarter second, which for an hour-long file is a hundred
+            // megabytes of them. Past twice the picture's width, neighbours
+            // are merged and the step doubled, so memory stays fixed.
+            if columns.len() >= 2 * COLUMNS as usize {
+                columns = columns
+                    .chunks(2)
+                    .map(|pair| {
+                        let n = pair.len() as f32;
+                        (0..FFT / 2)
+                            .map(|i| pair.iter().map(|c| c[i]).sum::<f32>() / n)
+                            .collect()
+                    })
+                    .collect();
+                hop *= 2;
+            }
             next_column += hop;
             let drain = (next_column - pending_start).min(pending.len());
             pending.drain(..drain);
@@ -288,8 +306,8 @@ fn decode(path: &Path) -> Result<Option<Decoded>> {
         }
     }
 
-    if !columns.is_empty() {
-        let n = columns.len() as f64;
+    if analysed > 0 {
+        let n = analysed as f64;
         mean_power.iter_mut().for_each(|p| *p /= n);
     }
     Ok(Some(Decoded {

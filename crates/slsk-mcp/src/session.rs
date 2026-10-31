@@ -9,7 +9,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use slsk_engine::{Engine, EngineConfig, Event, Status};
+use slsk_engine::{Engine, EngineConfig, Status};
 use tokio::sync::{Mutex, OnceCell};
 
 use crate::config::Config;
@@ -95,20 +95,23 @@ impl Session {
 }
 
 /// Bans live in the database per account; push them into the engine every
-/// time a login lands, since the account may have changed.
+/// time a login lands, since the account may have changed. Followed on the
+/// status watch rather than the event channel: a lagging subscriber of that
+/// can miss a login, and banned users would then be served.
 async fn apply_bans_on_login(session: Arc<Session>, engine: Engine) {
-    let mut events = engine.events();
+    let mut status = engine.status();
     loop {
-        match events.recv().await {
-            Ok(Event::Status(Status::LoggedIn { .. })) => {
-                match db::bans(&session.db, &engine.username()).await {
-                    Ok(bans) => engine.set_banned(bans),
-                    Err(e) => tracing::warn!(error = %e, "could not load bans"),
-                }
+        let logged_in = matches!(*status.borrow_and_update(), Status::LoggedIn { .. });
+        if logged_in {
+            match db::bans(&session.db, &engine.username()).await {
+                Ok(bans) => engine.set_banned(bans),
+                Err(e) => tracing::warn!(error = %e, "could not load bans"),
             }
-            Ok(_) => {}
-            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
-            Err(_) => return,
+        }
+        // Until the next change of status: a login is seen however many
+        // came and went while the bans were read.
+        if status.changed().await.is_err() {
+            return;
         }
     }
 }

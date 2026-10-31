@@ -263,13 +263,16 @@ impl Social {
                 }
             }
             FromServer::RoomList(list) => *self.room_list.write() = list.public.clone(),
+            // Kept only for users watched, which a WatchUser reply adds:
+            // only buddies are shown, and the server reports others too.
             FromServer::UserStatus {
                 username,
                 status,
                 privileged,
             } => {
-                self.statuses
-                    .insert(username.clone(), (*status, *privileged));
+                if let Some(mut s) = self.statuses.get_mut(username) {
+                    *s = (*status, *privileged);
+                }
             }
             FromServer::WatchUser {
                 username, status, ..
@@ -325,6 +328,7 @@ impl Social {
             {
                 return;
             }
+            answered.retain(|_, at| at.elapsed() < CHALLENGE_EVERY);
             answered.insert(peer.to_string(), Instant::now());
         }
         if engine
@@ -503,6 +507,7 @@ impl Social {
         engine.send(ToServer::UnwatchUser {
             username: username.into(),
         })?;
+        self.statuses.remove(username);
         Ok(())
     }
 

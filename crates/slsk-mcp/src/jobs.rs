@@ -128,33 +128,33 @@ pub struct Jobs {
     import_lock: Mutex<()>,
     /// Imports put off while MusicBrainz is unavailable: when to try again,
     /// and how.
-    deferred: std::sync::Mutex<HashMap<Uuid, (tokio::time::Instant, How)>>,
+    deferred: parking_lot::Mutex<HashMap<Uuid, (tokio::time::Instant, How)>>,
     /// Times each job's import has been put off, kept while it runs.
-    deferrals: std::sync::Mutex<HashMap<Uuid, u32>>,
+    deferrals: parking_lot::Mutex<HashMap<Uuid, u32>>,
     /// Set once the jobs a previous process left are picked up again.
     resumed: std::sync::atomic::AtomicBool,
     /// Rounds of retrying a job's failed files from the same peer, and when
     /// the next may start.
-    retried: std::sync::Mutex<HashMap<Uuid, (u32, tokio::time::Instant)>>,
+    retried: parking_lot::Mutex<HashMap<Uuid, (u32, tokio::time::Instant)>>,
     /// Set on shutdown: imports still waiting for the lock leave the job
     /// `importing` for the next start to resume.
     closing: std::sync::atomic::AtomicBool,
     /// Per downloading job, when bytes last arrived and how many had then.
     /// A file finishing and the rest never starting is a stall, so this
     /// tracks progress rather than whether anything ever arrived.
-    stalled: std::sync::Mutex<HashMap<Uuid, (tokio::time::Instant, u64)>>,
+    stalled: parking_lot::Mutex<HashMap<Uuid, (tokio::time::Instant, u64)>>,
     /// Per downloading job, its best place in the peer's upload queue while
     /// nothing is transferring, for the UI.
-    places: std::sync::Mutex<HashMap<Uuid, u32>>,
+    places: parking_lot::Mutex<HashMap<Uuid, u32>>,
     /// When this process started: stalls are not judged until the session
     /// has had time to reach the network again.
     started: tokio::time::Instant,
     /// Peers that queued a download and sent nothing, and when: grab ranks
     /// their folders last for a day, since cancelling our queue with them
     /// makes them look idle again.
-    stalled_peers: std::sync::Mutex<HashMap<String, tokio::time::Instant>>,
+    stalled_peers: parking_lot::Mutex<HashMap<String, tokio::time::Instant>>,
     /// Fetches from URLs in progress, to follow and to stop.
-    fetches: std::sync::Mutex<HashMap<Uuid, (tokio::task::AbortHandle, Arc<Fetched>)>>,
+    fetches: parking_lot::Mutex<HashMap<Uuid, (tokio::task::AbortHandle, Arc<Fetched>)>>,
     http: reqwest::Client,
     wake: Notify,
 }
@@ -348,7 +348,6 @@ impl Jobs {
         use std::sync::atomic::Ordering::Relaxed;
         self.fetches
             .lock()
-            .expect("fetches")
             .get(&id)
             .map(|(_, f)| (f.received.load(Relaxed), f.size.load(Relaxed)))
     }
@@ -359,14 +358,14 @@ impl Jobs {
         let fetched = Arc::new(Fetched::default());
         // Held across the spawn, so the task cannot finish and remove its
         // entry before it is inserted.
-        let mut fetches = self.fetches.lock().expect("fetches");
+        let mut fetches = self.fetches.lock();
         if fetches.contains_key(&id) {
             return;
         }
         let (jobs, progress) = (self.clone(), fetched.clone());
         let task = tokio::spawn(async move {
             let outcome = jobs.download_url(id, &url, &progress).await;
-            jobs.fetches.lock().expect("fetches").remove(&id);
+            jobs.fetches.lock().remove(&id);
             let _ = tokio::fs::remove_file(jobs.fetch_file(id)).await;
             let reason = outcome.as_ref().err().map(|e| format!("{e:#}"));
             let moved = match &reason {
@@ -580,10 +579,7 @@ impl Jobs {
             // is no more likely to send today because this process is new.
             let now = tokio::time::Instant::now();
             for peer in db::stalled_peers(&self.db).await.unwrap_or_default() {
-                self.stalled_peers
-                    .lock()
-                    .expect("stalled peers")
-                    .insert(peer, now);
+                self.stalled_peers.lock().insert(peer, now);
             }
             for job in fetches {
                 if let Source::Url { url } = job.source.0 {
@@ -609,12 +605,12 @@ impl Jobs {
 
     /// The job's place in its peer's upload queue, while it is waiting in one.
     pub fn place(&self, id: Uuid) -> Option<u32> {
-        self.places.lock().expect("places").get(&id).copied()
+        self.places.lock().get(&id).copied()
     }
 
     /// Peers that stalled a download in the last day.
     pub fn recently_stalled(&self) -> std::collections::HashSet<String> {
-        let mut peers = self.stalled_peers.lock().expect("stalled peers");
+        let mut peers = self.stalled_peers.lock();
         peers.retain(|_, at| at.elapsed() < Duration::from_secs(24 * 3600));
         peers.keys().cloned().collect()
     }
@@ -645,7 +641,7 @@ impl Jobs {
 
     async fn tick(self: &Arc<Self>) -> Result<()> {
         let due: Vec<_> = {
-            let mut deferred = self.deferred.lock().expect("deferred imports");
+            let mut deferred = self.deferred.lock();
             let now = tokio::time::Instant::now();
             let ids: Vec<Uuid> = deferred
                 .iter()
@@ -669,6 +665,15 @@ impl Jobs {
             .filter(|j| !matches!(j.source.0, Source::Url { .. }))
             .collect();
         let ids: Vec<Uuid> = jobs.iter().map(|j| j.id).collect();
+        // A job leaves downloading by more routes than clear these as they
+        // go (failing in a fall back, a status set elsewhere); what is not
+        // downloading has nothing to follow.
+        {
+            let live: std::collections::HashSet<Uuid> = ids.iter().copied().collect();
+            self.stalled.lock().retain(|id, _| live.contains(id));
+            self.places.lock().retain(|id, _| live.contains(id));
+            self.retried.lock().retain(|id, _| live.contains(id));
+        }
         let mut files = db::files_of_jobs(&self.db, &ids).await?;
         // One job's failure is that job's: the rest still move.
         for job in jobs {
@@ -752,7 +757,7 @@ impl Jobs {
             // would hold the album forever while other sources sit
             // untried. A slow peer that is sending is left alone.
             {
-                let mut places = self.places.lock().expect("places");
+                let mut places = self.places.lock();
                 match place.filter(|_| !transferring) {
                     Some(p) => places.insert(job.id, p),
                     None => places.remove(&job.id),
@@ -760,7 +765,7 @@ impl Jobs {
             }
             let now = tokio::time::Instant::now();
             let since = {
-                let mut stalled = self.stalled.lock().expect("stalled");
+                let mut stalled = self.stalled.lock();
                 let entry = stalled.entry(job.id).or_insert_with(|| {
                     // From when this source was taken on, which the job
                     // row records, so a restart does not forgive a peer
@@ -781,10 +786,7 @@ impl Jobs {
                 // Nothing left to fall back to. Peers come and go, so a
                 // copy that was not there when the job began may be now.
                 // Restarting the clock spaces the searches a stall apart.
-                self.stalled
-                    .lock()
-                    .expect("stalled")
-                    .insert(job.id, (now, received));
+                self.stalled.lock().insert(job.id, (now, received));
                 let (jobs, engine, job) = (self.clone(), engine.clone(), job.clone());
                 tokio::spawn(async move {
                     if let Err(e) = jobs
@@ -796,26 +798,30 @@ impl Jobs {
                     }
                 });
             } else if stalled {
-                self.stalled.lock().expect("stalled").remove(&job.id);
+                self.stalled.lock().remove(&job.id);
                 tracing::info!(job = %job.id, "no data from the peer; trying another source");
                 if let Some(peer) = rows.first().map(|r| r.peer.clone()) {
-                    self.stalled_peers
-                        .lock()
-                        .expect("stalled peers")
-                        .insert(peer, now);
+                    self.stalled_peers.lock().insert(peer, now);
                 }
                 self.fall_back(engine, job, &rows, cause::STALLED_PEER)
                     .await?;
             }
             return Ok(());
         }
-        self.stalled.lock().expect("stalled").remove(&job.id);
-        self.places.lock().expect("places").remove(&job.id);
+        self.stalled.lock().remove(&job.id);
+        self.places.lock().remove(&job.id);
         if failed.is_none() && done.is_some() {
-            self.retried.lock().expect("retried").remove(&job.id);
+            self.retried.lock().remove(&job.id);
             // Cancelled or removed since this tick read it: left so.
             let how = How::Match(None);
             if db::claim_import(&self.db, job.id, &["downloading"], &how).await? {
+                // Every file is recorded completed above, and nothing reads
+                // the engine's entries for a job past downloading. Left, the
+                // engine would hold every file ever fetched until restart,
+                // and walk them all on every look at its transfers.
+                for f in &rows {
+                    engine.remove_download(&f.peer, &RawStr(f.remote.clone().into()));
+                }
                 self.import_in_background(job.id, how);
             }
         } else if failed.is_some() {
@@ -824,7 +830,7 @@ impl Jobs {
             // files; a new source would start the album from nothing.
             let now = tokio::time::Instant::now();
             let round = {
-                let mut retried = self.retried.lock().expect("retried");
+                let mut retried = self.retried.lock();
                 let (rounds, next) = retried.entry(job.id).or_insert((0, now));
                 if *rounds >= RETRY_ROUNDS {
                     retried.remove(&job.id);
@@ -974,7 +980,7 @@ impl Jobs {
                 .await
                 .unwrap_or_else(|e| Err(anyhow::anyhow!("the import stopped: {e}")));
             if let Err(e) = &outcome {
-                jobs.deferrals.lock().expect("deferrals").remove(&id);
+                jobs.deferrals.lock().remove(&id);
                 let reason = format!("{e:#}");
                 if let Err(e) =
                     db::move_status(&jobs.db, id, &["importing"], "failed", Some(&reason)).await
@@ -1112,7 +1118,7 @@ impl Jobs {
             Err(e) => tracing::info!(%id, error = %e, "import finished: not filed"),
         }
         if !matches!(&outcome, Err(e) if e.is_transient()) {
-            self.deferrals.lock().expect("deferrals").remove(&id);
+            self.deferrals.lock().remove(&id);
         }
         match outcome {
             Ok(sift::Outcome::Imported { dir: path, log, .. }) => {
@@ -1180,13 +1186,13 @@ impl Jobs {
             // person to retry, rather than leave it importing for good.
             Err(e) if e.is_transient() => {
                 let tries = {
-                    let mut deferrals = self.deferrals.lock().expect("deferrals");
+                    let mut deferrals = self.deferrals.lock();
                     let tries = deferrals.entry(id).or_default();
                     *tries += 1;
                     *tries
                 };
                 if tries > DEFER_TRIES {
-                    self.deferrals.lock().expect("deferrals").remove(&id);
+                    self.deferrals.lock().remove(&id);
                     let reason = format!(
                         "{e:#}; MusicBrainz stayed unavailable through {DEFER_TRIES} tries: retry it later"
                     );
@@ -1214,7 +1220,6 @@ impl Jobs {
                 .await;
                 self.deferred
                     .lock()
-                    .expect("deferred imports")
                     .insert(id, (tokio::time::Instant::now() + DEFER, how));
             }
             // Another copy of this album is already filed, in this format's
@@ -1475,18 +1480,21 @@ impl Jobs {
             }
         }
         self.forget(id);
+        // The fetch was stopped before it could clear up after itself, and
+        // a retry starts the file again.
+        let _ = tokio::fs::remove_file(self.fetch_file(id)).await;
         Ok(())
     }
 
     /// Drop what this process remembers about a job between ticks: a
     /// deferred import in particular would otherwise run after it stopped.
     fn forget(&self, id: Uuid) {
-        self.deferred.lock().expect("deferred imports").remove(&id);
-        self.deferrals.lock().expect("deferrals").remove(&id);
-        self.retried.lock().expect("retried").remove(&id);
-        self.stalled.lock().expect("stalled").remove(&id);
-        self.places.lock().expect("places").remove(&id);
-        if let Some((task, _)) = self.fetches.lock().expect("fetches").remove(&id) {
+        self.deferred.lock().remove(&id);
+        self.deferrals.lock().remove(&id);
+        self.retried.lock().remove(&id);
+        self.stalled.lock().remove(&id);
+        self.places.lock().remove(&id);
+        if let Some((task, _)) = self.fetches.lock().remove(&id) {
             task.abort();
         }
     }
@@ -1529,7 +1537,7 @@ impl Jobs {
             let responses =
                 crate::graphql::responses(engine, &job.title, SEARCH_WAIT.as_secs()).await?;
             Ok(crate::folders::relevant_complete_first(
-                crate::folders::group(&responses, filter),
+                crate::folders::group(responses.iter().map(Arc::as_ref), filter),
                 &job.title,
             )
             .into_iter()
@@ -1566,7 +1574,6 @@ impl Jobs {
         tracing::info!(job = %job.id, copies = found.len(), "found other copies; moving off {current}");
         self.stalled_peers
             .lock()
-            .expect("stalled peers")
             .insert(current, tokio::time::Instant::now());
         let mut job = job.clone();
         job.alternates = Json(found.into_iter().take(4).map(Alternate::from).collect());
@@ -1628,13 +1635,7 @@ impl Jobs {
     pub async fn remove(&self, id: Uuid) -> Result<()> {
         // An import put off until MusicBrainz is back is not filing
         // anything: taken off the waiting list, it can go like any other.
-        if self
-            .deferred
-            .lock()
-            .expect("deferred imports")
-            .remove(&id)
-            .is_some()
-        {
+        if self.deferred.lock().remove(&id).is_some() {
             db::move_status(&self.db, id, &["importing"], "removing", None).await?;
         }
         // Its files may be on their way into the library, and deleting the

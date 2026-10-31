@@ -76,7 +76,10 @@ fn ext(entry: &FileEntry, name: &str) -> String {
         .unwrap_or_default()
 }
 
-pub fn group(responses: &[SearchResponse], filter: &Filter) -> Vec<Folder> {
+pub fn group<'a>(
+    responses: impl IntoIterator<Item = &'a SearchResponse>,
+    filter: &Filter,
+) -> Vec<Folder> {
     let mut map: HashMap<(String, Vec<u8>), Folder> = HashMap::new();
     for r in responses {
         for entry in &r.files {

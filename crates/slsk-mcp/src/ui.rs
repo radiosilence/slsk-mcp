@@ -560,16 +560,14 @@ async fn status_html(app: &App) -> String {
                 ),
                 S::Disconnected { error } => ("disconnected", Some(error.clone())),
             };
-            let speed = |v: Vec<slsk_engine::TransferView>| {
-                human(v.iter().map(|t| t.speed).sum::<u64>()) + "/s"
-            };
+            let (up, down) = e.speeds();
             StatusView {
                 state,
                 username: Some(e.username()),
                 detail,
                 files: e.share_counts().1,
-                up: speed(e.uploads()),
-                down: speed(e.downloads()),
+                up: human(up) + "/s",
+                down: human(down) + "/s",
                 children: e.distributed().3,
             }
         }
@@ -996,12 +994,7 @@ impl UploadsView {
 
 /// The Uploads tab's badge: files being sent or waiting to be.
 fn up_count_html(app: &App) -> String {
-    let n = app.session.engine().map_or(0, |e| {
-        e.uploads()
-            .iter()
-            .filter(|t| !matches!(t.state, "completed" | "cancelled" | "failed"))
-            .count()
-    });
+    let n = app.session.engine().map_or(0, |e| e.uploads_pending());
     let text = if n > 0 { n.to_string() } else { String::new() };
     format!(r#"<span id="up-count" class="text-ink empty:hidden">{text}</span>"#)
 }
@@ -1283,7 +1276,7 @@ async fn search(State(s): State<UiState>, Query(view): Query<SearchQuery>) -> Re
                 )));
                 break;
             }
-            let mut folders = crate::folders::relevant(crate::folders::group(&responses, &filter), &query);
+            let mut folders = crate::folders::relevant(crate::folders::group(responses.iter().map(Arc::as_ref), &filter), &query);
             let more = folders.len().saturating_sub(found);
             folders.truncate(found);
             let view = ResultsView { query: query.clone(), folders, more, next: next.clone(), searching: !done, responses: responses.len() };
