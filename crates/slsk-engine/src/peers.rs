@@ -8,7 +8,7 @@
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
@@ -22,7 +22,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex, mpsc, oneshot};
 
 use crate::net::{self, Conn};
-use crate::{Defer, Error, Inner, Result, distributed, downloads, uploads};
+use crate::{Defer, Error, Inner, Result, Status, distributed, downloads, uploads};
 
 /// A peer connection that carries nothing for this long is closed. Peers
 /// reconnect on demand, and an idle socket is a file descriptor and two
@@ -46,6 +46,9 @@ const ADDRESS_TTL: Duration = Duration::from_secs(600);
 pub(crate) struct Link {
     id: u64,
     ip: Option<IpAddr>,
+    /// Set for a connection we opened, or an inbound one whose address the
+    /// server has confirmed belongs to the user it named.
+    trusted: Arc<AtomicBool>,
     pub tx: mpsc::Sender<Bytes>,
 }
 
@@ -230,6 +233,7 @@ pub(crate) async fn connect(inner: &Arc<Inner>, username: &str, kind: ConnKind) 
 pub(crate) async fn link(inner: &Arc<Inner>, username: &str) -> Result<mpsc::Sender<Bytes>> {
     if let Some(l) = inner.peers.links.get(username)
         && !l.tx.is_closed()
+        && l.trusted.load(Ordering::Relaxed)
     {
         return Ok(l.tx.clone());
     }
@@ -239,15 +243,27 @@ pub(crate) async fn link(inner: &Arc<Inner>, username: &str) -> Result<mpsc::Sen
         .entry(username.to_string())
         .or_default()
         .clone();
-    let _forget = Defer::new(|| {
-        inner.peers.connecting.remove(username);
-    });
     let _guard = lock.lock().await;
-    if let Some(l) = inner.peers.links.get(username)
-        && !l.tx.is_closed()
+    let live = inner
+        .peers
+        .links
+        .get(username)
+        .filter(|l| !l.tx.is_closed())
+        .map(|l| (l.tx.clone(), l.ip, l.trusted.clone()));
+    if let Some((tx, ip, trusted)) = live
+        && (trusted.load(Ordering::Relaxed) || verify(inner, username, ip).await)
     {
-        return Ok(l.tx.clone());
+        trusted.store(true, Ordering::Relaxed);
+        return Ok(tx);
     }
+    // Only the caller that connects clears the entry, and only its own, so a
+    // waiter giving up cannot let a second attempt start beside this one.
+    let _forget = Defer::new(|| {
+        inner
+            .peers
+            .connecting
+            .remove_if(username, |_, l| Arc::ptr_eq(l, &lock));
+    });
     let conn = connect(inner, username, ConnKind::Peer).await?;
     Ok(spawn_peer(inner.clone(), username.to_string(), conn, None))
 }
@@ -260,8 +276,42 @@ pub(crate) async fn send(inner: &Arc<Inner>, username: &str, frame: Bytes) -> Re
         .map_err(|_| Error::Unreachable(username.to_string()))
 }
 
+/// Whether `ip` is where the server says `username` is. A peer that opens a
+/// connection names itself, and this is all that makes the name good. A
+/// private address passes for a user the server places at our own public
+/// address: a peer on our side of the same NAT.
+async fn verify(inner: &Inner, username: &str, ip: Option<IpAddr>) -> bool {
+    let Some(IpAddr::V4(ip)) = ip else {
+        return false;
+    };
+    let Ok(addr) = address(inner, username).await else {
+        return false;
+    };
+    let known = *addr.ip();
+    known == ip
+        || ((ip.is_private() || ip.is_loopback() || ip.is_link_local())
+            && matches!(&*inner.status.borrow(), Status::LoggedIn { own_ip } if *own_ip == known))
+}
+
+/// Messages that answer something we asked of `username`, or act on a
+/// transfer with them. A request, or a search response, means nothing more
+/// coming from someone else, so only these need the sender verified.
+fn answers_us(msg: &PeerMessage) -> bool {
+    matches!(
+        msg,
+        PeerMessage::SharedFileList { .. }
+            | PeerMessage::FolderContentsResponse { .. }
+            | PeerMessage::UserInfoResponse(_)
+            | PeerMessage::TransferRequest { direction: 1, .. }
+            | PeerMessage::TransferResponse { .. }
+            | PeerMessage::PlaceInQueueResponse { .. }
+            | PeerMessage::UploadFailed { .. }
+            | PeerMessage::UploadDenied { .. }
+    )
+}
+
 /// `inbound` is set for a connection a stranger opened and named themselves
-/// on, which is trusted less than one we opened.
+/// on. It is not trusted as that user until [`verify`] says so.
 fn spawn_peer(
     inner: Arc<Inner>,
     username: String,
@@ -273,18 +323,19 @@ fn spawn_peer(
     let (tx, rx) = mpsc::channel(256);
     net::spawn_writer(writer, rx);
     let id = inner.peers.next_id.fetch_add(1, Ordering::Relaxed);
+    let trusted = Arc::new(AtomicBool::new(inbound.is_none()));
     let link = Link {
         id,
         ip,
+        trusted: trusted.clone(),
         tx: tx.clone(),
     };
     match inner.peers.links.entry(username.clone()) {
-        // Anyone can connect claiming any name. Taking over a live link from
-        // another address would let them answer, and be answered, in that
-        // peer's place.
-        Entry::Occupied(e) if inbound.is_some() && !e.get().tx.is_closed() && e.get().ip != ip => {
-            tracing::debug!(%username, ?ip, "inbound connection beside a live link kept apart");
-        }
+        // An unverified link never displaces a live trusted one.
+        Entry::Occupied(e)
+            if inbound.is_some()
+                && !e.get().tx.is_closed()
+                && e.get().trusted.load(Ordering::Relaxed) => {}
         Entry::Occupied(mut e) => {
             e.insert(link);
         }
@@ -299,6 +350,7 @@ fn spawn_peer(
     let reply = tx.clone();
     tokio::spawn(async move {
         let _inbound = inbound;
+        let mut refused = false;
         loop {
             match tokio::time::timeout(IDLE, reader.ready()).await {
                 Ok(Ok(true)) => {}
@@ -343,6 +395,15 @@ fn spawn_peer(
                 PeerMessage::decode(code, frame.body)
             };
             match decoded {
+                Ok(msg) if answers_us(&msg) && !trusted.load(Ordering::Relaxed) => {
+                    if !refused && verify(&inner, &username, ip).await {
+                        trusted.store(true, Ordering::Relaxed);
+                        on_message(&inner, &username, msg, &reply);
+                    } else {
+                        refused = true;
+                        tracing::debug!(%username, ?ip, code, "answer from an unverified peer ignored");
+                    }
+                }
                 Ok(msg) => on_message(&inner, &username, msg, &reply),
                 Err(e) => {
                     tracing::debug!(%username, code, error = %e, "undecodable peer message")
@@ -544,18 +605,6 @@ async fn accept(inner: Arc<Inner>, stream: TcpStream, addr: SocketAddr, inbound:
     };
     match init {
         Ok(PeerInit::PeerInit { username, kind, .. }) => {
-            // The server's word on where a user is outranks a stranger's
-            // claim to be them.
-            let known = inner
-                .peers
-                .addresses
-                .get(&username)
-                .filter(|a| a.1.elapsed() < ADDRESS_TTL)
-                .map(|a| IpAddr::V4(*a.0.ip()));
-            if known.is_some_and(|ip| ip != addr.ip().to_canonical()) {
-                tracing::debug!(%addr, %username, ?known, "peer init from the wrong address");
-                return;
-            }
             route(inner, username, kind, conn, Some(inbound))
         }
         // A pierce answers a request of ours, so it is no stranger's.
@@ -591,7 +640,7 @@ fn route(
                 drop(inbound);
             });
         }
-        ConnKind::Distributed => distributed::on_child(inner, username, conn),
+        ConnKind::Distributed => distributed::on_child(inner, username, conn, inbound),
     }
 }
 

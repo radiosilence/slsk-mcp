@@ -104,13 +104,17 @@ async fn read_frame<R: AsyncReadExt + Unpin>(
         CodeWidth::U8 => 1,
         CodeWidth::U32 => 4,
     };
+    // Fixed once the header is in, so the bound cannot change mid-frame.
+    let mut limit = None;
     loop {
-        let limit = match buf.get(4..header) {
-            Some([c]) => max(u32::from(*c)),
-            Some(c) => max(u32::from_le_bytes(c.try_into().unwrap())),
-            None => usize::MAX,
-        };
-        match slsk_proto::frame::decode(buf, width, limit) {
+        if limit.is_none() {
+            limit = match buf.get(4..header) {
+                Some([c]) => Some(max(u32::from(*c))),
+                Some(c) => Some(max(u32::from_le_bytes(c.try_into().unwrap()))),
+                None => None,
+            };
+        }
+        match slsk_proto::frame::decode(buf, width, limit.unwrap_or(usize::MAX)) {
             Ok(Some(f)) => return Ok(Some(f)),
             Ok(None) => {}
             Err(e) => return Err(io::Error::new(io::ErrorKind::InvalidData, e)),

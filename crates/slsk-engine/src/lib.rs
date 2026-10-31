@@ -558,15 +558,14 @@ impl Engine {
             .entry(username.to_string())
             .or_default()
             .push(tx);
-        let result = async {
+        async {
             peers::send(&self.0, username, PeerMessage::GetSharedFileList.encode()).await?;
             tokio::time::timeout(Duration::from_secs(180), rx)
                 .await
                 .map_err(|_| Error::TimedOut)?
                 .map_err(|_| Error::TimedOut)
         }
-        .await;
-        result
+        .await
     }
 
     pub async fn folder_contents(&self, username: &str, folder: &RawStr) -> Result<Vec<Directory>> {
@@ -580,15 +579,14 @@ impl Engine {
             token,
             folder: folder.clone(),
         };
-        let result = async {
+        async {
             peers::send(&self.0, username, msg.encode()).await?;
             tokio::time::timeout(Duration::from_secs(60), rx)
                 .await
                 .map_err(|_| Error::TimedOut)?
                 .map_err(|_| Error::TimedOut)
         }
-        .await;
-        result
+        .await
     }
 
     pub async fn user_info(&self, username: &str) -> Result<UserInfo> {
@@ -599,15 +597,14 @@ impl Engine {
             .entry(username.to_string())
             .or_default()
             .push(tx);
-        let result = async {
+        async {
             peers::send(&self.0, username, PeerMessage::UserInfoRequest.encode()).await?;
             tokio::time::timeout(Duration::from_secs(60), rx)
                 .await
                 .map_err(|_| Error::TimedOut)?
                 .map_err(|_| Error::TimedOut)
         }
-        .await;
-        result
+        .await
     }
 
     /// Queue a download. `dest` is the final path; data lands beside it as

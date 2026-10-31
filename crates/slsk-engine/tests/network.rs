@@ -349,3 +349,43 @@ async fn inbound_connections_are_capped_per_address() {
     let mut again = stranger(&engine).await;
     assert!(!closed_within(&mut again, Duration::from_millis(500)).await);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stranger_claiming_a_name_is_not_taken_for_that_user() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let server = server().await.unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let engine = engine(&server, "asker", Vec::new(), tmp.path()).await;
+    // "ghost" is not logged in, so the server places them nowhere and this
+    // connection cannot be theirs. Taken at its word, it would receive the
+    // request and answer it.
+    let mut s = tokio::net::TcpStream::connect(("127.0.0.1", engine.listen_port()))
+        .await
+        .unwrap();
+    let init = slsk_proto::peer::PeerInit::PeerInit {
+        username: "ghost".into(),
+        kind: slsk_proto::ConnKind::Peer,
+        token: 0,
+    };
+    s.write_all(&init.encode()).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let forger = tokio::spawn(async move {
+        let mut buf = [0u8; 64];
+        let _ = tokio::time::timeout(Duration::from_secs(2), s.read(&mut buf)).await;
+        let forged = slsk_proto::peer::PeerMessage::UserInfoResponse(slsk_proto::peer::UserInfo {
+            description: "forged".into(),
+            picture: None,
+            total_uploads: 0,
+            queue_size: 0,
+            slots_free: true,
+            upload_permitted: None,
+        });
+        let _ = s.write_all(&forged.encode()).await;
+        s
+    });
+    let info = tokio::time::timeout(Duration::from_secs(20), engine.user_info("ghost"))
+        .await
+        .unwrap();
+    assert!(info.is_err(), "took a stranger's answer: {info:?}");
+    drop(forger.await);
+}
