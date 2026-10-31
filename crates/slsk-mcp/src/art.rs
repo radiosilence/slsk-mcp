@@ -325,15 +325,19 @@ pub async fn put_cover(
             part.display()
         )));
     }
-    let new = tokio::fs::metadata(dest).await?;
     for (from, _) in moves {
         // An old cover the rename replaced (the same name, or the same file
         // under another case of it) is gone already.
-        let Ok(old) = tokio::fs::metadata(from).await else {
-            continue;
-        };
-        if same_file(&old, &new) {
-            continue;
+        match same_file::is_same_file(from, dest) {
+            Ok(false) => {}
+            Ok(true) => continue,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                return Err(anyhow::Error::new(e).context(format!(
+                    "comparing {} with the new cover; the new cover is in place and a copy of the old one is in the bin",
+                    from.display()
+                )));
+            }
         }
         if let Err(e) = tokio::fs::remove_file(from).await {
             return Err(anyhow::Error::new(e).context(format!(
@@ -343,12 +347,6 @@ pub async fn put_cover(
         }
     }
     Ok(())
-}
-
-#[cfg(unix)]
-fn same_file(a: &std::fs::Metadata, b: &std::fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    (a.dev(), a.ino()) == (b.dev(), b.ino())
 }
 
 /// Fetch an image from an http or https URL, refusing a web page or

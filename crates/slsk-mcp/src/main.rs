@@ -422,14 +422,34 @@ async fn state_metrics(app: &App, out: &mut String) {
     }
 }
 
-/// Kubernetes stops a pod with SIGTERM; a terminal with Ctrl-C.
+/// Kubernetes stops a pod with SIGTERM; a terminal with Ctrl-C; Windows by
+/// closing the console or logging off.
 async fn shutdown() {
+    #[cfg(unix)]
     let term = async {
         match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
             Ok(mut s) => {
                 s.recv().await;
             }
             Err(_) => std::future::pending().await,
+        }
+    };
+    #[cfg(windows)]
+    let term = async {
+        use tokio::signal::windows;
+        match (
+            windows::ctrl_close(),
+            windows::ctrl_shutdown(),
+            windows::ctrl_logoff(),
+        ) {
+            (Ok(mut close), Ok(mut down), Ok(mut off)) => {
+                tokio::select! {
+                    _ = close.recv() => {}
+                    _ = down.recv() => {}
+                    _ = off.recv() => {}
+                }
+            }
+            _ => std::future::pending().await,
         }
     };
     tokio::select! {
