@@ -2,7 +2,7 @@
   <input type="hidden" name="path" value="{{ path }}">
   {% include "library_filter.html" %}
   {% if let Some(e) = error %}<p class="text-meta text-bad wrap-anywhere">{{ e }}</p>{% endif %}
-  {% if candidates.is_empty() %}<p class="text-meta text-muted">MusicBrainz has nothing that fits these files. Paste a release from its page.</p>{% else %}
+  {% if candidates.is_empty() %}<p class="text-meta text-muted">{% if discogs %}Neither MusicBrainz nor Discogs has{% else %}MusicBrainz has{% endif %} nothing that fits these files. Paste a release from its page.</p>{% else %}
   <p class="text-meta text-muted">Releases that fit these files, closest first. Pick one to see every tag it would change.{% if let Some(r) = review %} The tagger would not choose on its own: {{ r }}.{% endif %}</p>
   <ul class="rows">
   {% for c in candidates %}
@@ -12,13 +12,13 @@
         <span class="min-w-0 wrap-anywhere">{{ c.artist }} — {{ c.title }}</span>
       </label>
       <span class="text-meta text-muted wrap-anywhere">{% if let Some(d) = c.date %}{{ d }} · {% endif %}{% if let Some(co) = c.country %}{{ co }} · {% endif %}{% if let Some(m) = c.media %}{{ m }} · {% endif %}{{ c.tracks }} tracks · distance {{ c.distance }}{% if c.missing > 0 %} · {{ c.missing }} missing{% endif %}{% if c.extra > 0 %} · {{ c.extra }} unmatched{% endif %}{% if let Some(d) = c.disambiguation %} · {{ d }}{% endif %}</span>
-      {% if !c.id.starts_with("discogs:") %}<a class="text-meta" href="https://musicbrainz.org/release/{{ c.id }}" target="_blank" rel="noopener">MusicBrainz</a>{% endif %}
+      {% let (site, href) = self.link(c.id) %}<a class="text-meta" href="{{ href }}" target="_blank" rel="noopener">{{ site }}</a>
     </li>
   {% endfor %}
   </ul>
   {% endif %}
   <div class="flex flex-wrap items-center gap-2">
-    <input class="basis-full" name="pasted" placeholder="Or paste a MusicBrainz release id or link" autocomplete="off">
+    <input class="basis-full" name="pasted" placeholder="{% if discogs %}Or paste a MusicBrainz or Discogs release id or link{% else %}Or paste a MusicBrainz release id or link{% endif %}" autocomplete="off">
     <button class="flex-auto" type="button" data-indicator="_pv_retag" data-attr:disabled="$_pv_retag" data-class:busy="$_pv_retag" data-on:click="@post('/library/preview/reimport', {contentType: 'form', selector: '#lib-retag'})">Preview re-tag</button>
   </div>
 </form>

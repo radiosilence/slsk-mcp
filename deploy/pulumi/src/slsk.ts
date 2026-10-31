@@ -76,9 +76,10 @@ export function createSlsk(
      */
     account?: { username: pulumi.Input<string>; password: pulumi.Input<string> };
     /**
-     * A Discogs personal access token. With `discogs` in the beets config's
-     * plugins, the importer consults Discogs when MusicBrainz has no strong
-     * match; without a token it does not.
+     * A Discogs personal access token, generated under Settings → Developers
+     * on discogs.com. With it the importer consults Discogs when MusicBrainz
+     * has no strong match, and Discogs releases can be chosen in review; no
+     * beets config change is needed. Without it only MusicBrainz is used.
      */
     discogsToken?: pulumi.Input<string>;
     /** Pod labels allowed to reach the internal port. */

@@ -21,6 +21,7 @@ use super::{UiState, failed, fields, flash_ok, patch, sse};
 use crate::art::{AlbumArt, ArtRemoved, ArtSet, Image, Target};
 use crate::library::{
     AlbumEdit, AlbumMove, CreditWrite, LibraryAlbum, Overview, Preview, TagEdits, by_path,
+    release_id,
 };
 
 pub(super) fn routes() -> Router<UiState> {
@@ -830,19 +831,27 @@ struct ReleasesView<'a> {
     candidates: Vec<sift::Candidate>,
     review: Option<String>,
     error: Option<String>,
+    discogs: bool,
 }
 
-/// The releases MusicBrainz has for an album's files, closest first, to
-/// re-tag it from; or one pasted.
+impl ReleasesView<'_> {
+    fn link(&self, release: &str) -> (&'static str, String) {
+        crate::library::release_link(release)
+    }
+}
+
+/// The releases MusicBrainz (and Discogs, when enabled) has for an album's
+/// files, closest first, to re-tag it from; or one pasted.
 async fn releases(
     State(s): State<UiState>,
     Query(AlbumQuery { filter, path }): Query<AlbumQuery>,
 ) -> Response {
     sse(async_stream::stream! {
         yield Ok(patch(r#"<div id="lib-retag"><p class="text-meta text-muted">Asking MusicBrainz for releases that fit these files…</p></div>"#));
+        let discogs = s.app.jobs.discogs();
         let view = match s.app.library.rematch(&path).await {
-            Ok(r) => ReleasesView { path: &path, filter: &filter, candidates: r.candidates, review: r.review, error: None },
-            Err(e) => ReleasesView { path: &path, filter: &filter, candidates: Vec::new(), review: None, error: Some(format!("{e:#}")) },
+            Ok(r) => ReleasesView { path: &path, filter: &filter, candidates: r.candidates, review: r.review, error: None, discogs },
+            Err(e) => ReleasesView { path: &path, filter: &filter, candidates: Vec::new(), review: None, error: Some(format!("{e:#}")), discogs },
         };
         yield Ok(patch(&view.render().unwrap_or_default()));
     })
@@ -1124,35 +1133,6 @@ impl ArtChoice {
     }
 }
 
-/// A MusicBrainz release id from what was pasted: the id, or a link to the
-/// release or any of its pages. Links to anything else on MusicBrainz are
-/// refused. Discogs ids (`discogs:123`) pass through.
-pub(super) fn release_id(s: &str) -> Option<String> {
-    let s = s.trim();
-    if s.starts_with("discogs:") {
-        return Some(s.to_string());
-    }
-    let uuid = |id: &str| {
-        id.len() == 36
-            && id.chars().enumerate().all(|(i, c)| {
-                if [8, 13, 18, 23].contains(&i) {
-                    c == '-'
-                } else {
-                    c.is_ascii_hexdigit()
-                }
-            })
-    };
-    let id = if s.contains('/') {
-        let path = s.split(['?', '#']).next().unwrap_or(s);
-        let mut segments = path.split('/');
-        segments.find(|seg| *seg == "release")?;
-        segments.next()?
-    } else {
-        s
-    };
-    uuid(id).then(|| id.to_ascii_lowercase())
-}
-
 /// One album in a preview: what applying would do to it.
 struct Planned {
     key: String,
@@ -1308,6 +1288,9 @@ struct PlannedView<'a> {
 }
 
 impl PlannedView<'_> {
+    fn link(&self, release: &str) -> (&'static str, String) {
+        crate::library::release_link(release)
+    }
     fn rel<'b>(&self, p: &'b str) -> &'b str {
         rel(self.root, p)
     }
@@ -1863,7 +1846,7 @@ async fn ask(
         Action::Reimport => {
             let release = match super::field(form, "pasted") {
                 Some(p) => Some(release_id(p).ok_or_else(|| {
-                    anyhow::anyhow!("{p:?} is not a MusicBrainz release id or link")
+                    anyhow::anyhow!("{p:?} is not a MusicBrainz or Discogs release id or link")
                 })?),
                 None => super::field(form, "release").map(str::to_string),
             };

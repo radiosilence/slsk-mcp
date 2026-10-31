@@ -1,7 +1,7 @@
 <div id="cmp-{{ id }}" class="mt-1.5">
 {% if let Some(e) = error %}<p class="text-meta text-bad wrap-anywhere">{{ e }}</p>{% endif %}
 {% if let Some(c) = cmp %}
-<p class="my-1 text-meta text-muted">album {{ self.dist(c.parts.album) }} · artist {{ self.dist(c.parts.artist) }} · titles {{ self.dist(c.parts.titles) }} · lengths {{ self.dist(c.parts.lengths) }} · <a href="https://musicbrainz.org/release/{{ c.release.id }}" target="_blank" rel="noopener">MusicBrainz</a></p>
+<p class="my-1 text-meta text-muted">album {{ self.dist(c.parts.album) }} · artist {{ self.dist(c.parts.artist) }} · titles {{ self.dist(c.parts.titles) }} · lengths {{ self.dist(c.parts.lengths) }}{% let (site, href) = self.link(c.release.id) %} · <a href="{{ href }}" target="_blank" rel="noopener">{{ site }}</a></p>
 <ul class="grid gap-1">
 {% for p in c.pairs %}
   <li class="flex min-w-0 flex-wrap items-baseline gap-x-2">
