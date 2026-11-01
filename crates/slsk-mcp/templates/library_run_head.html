@@ -4,5 +4,6 @@
   <p class="text-meta text-muted">{{ run.done }} of {{ run.total }}{% if let Some(c) = run.current %} · now {{ self::rel(root, c) }}{% endif %}</p>
   <progress max="{{ run.total.max(1) }}" value="{{ run.done }}">{{ run.done }}</progress>
   {% endif %}
+  {% if !run.waiting.is_empty() %}<p class="text-meta text-muted">Then {% for q in run.waiting %}{% if !loop.first %} · {% endif %}{{ q.label()|lower }}{% endfor %}</p>{% endif %}
   {% if let Some(e) = run.error %}<p class="text-meta text-bad wrap-anywhere">{{ e }}</p>{% endif %}
 </div>

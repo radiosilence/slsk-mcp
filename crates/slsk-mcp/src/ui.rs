@@ -50,6 +50,8 @@ pub struct UiState {
     pub http: reqwest::Client,
     /// The library action running in the background, or the last one.
     run: Arc<parking_lot::Mutex<library::LibraryRun>>,
+    /// Held by the library action running; the ones waiting take it in turn.
+    slot: Arc<tokio::sync::Mutex<()>>,
     /// Album art previewed and not yet applied.
     art: library::ArtStash,
     browsed: browse::Cache,
@@ -66,6 +68,7 @@ pub fn router(app: Arc<App>) -> Router {
         app,
         http: reqwest::Client::new(),
         run: Default::default(),
+        slot: Default::default(),
         art: Default::default(),
         browsed: Default::default(),
         profiles: Default::default(),

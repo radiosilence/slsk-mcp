@@ -1,0 +1,1 @@
+- **Library actions queue.** Applying an action while another runs now waits its turn instead of being refused, and follows albums the run before it moved.
