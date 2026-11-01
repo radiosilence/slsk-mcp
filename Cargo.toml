@@ -6,7 +6,6 @@ resolver = "3"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/radiosilence/slsk-mcp"
-rust-version = "1.91"
 
 [workspace.dependencies]
 bytes = "1"
