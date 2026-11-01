@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.10.2
+
+### Changed
+
+- **Library actions queue.** Applying an action while another runs now waits its turn instead of being refused, and follows albums the run before it moved.
+
+### Internal
+
+- **Builds use the latest stable Rust.** `rust-version` is removed from the manifests, so dependency resolution targets the toolchain in use instead of holding crates back for an old compiler; mise installs `rust` at `latest`.
+
 ## 0.10.1
 
 ### Added
