@@ -1903,6 +1903,38 @@ pub(super) struct LibraryRun {
     running: bool,
     results: Vec<Outcome>,
     error: Option<String>,
+    /// Runs asked for while this one works, in the order they start.
+    waiting: Vec<Queued>,
+    tickets: u64,
+}
+
+struct Queued {
+    ticket: u64,
+    action: Action,
+    paths: Vec<String>,
+    with: HashMap<String, String>,
+}
+
+impl Queued {
+    /// Points the run at where the run before it moved its albums.
+    fn follow(&mut self, moved: &HashMap<String, String>) {
+        for path in &mut self.paths {
+            if let Some(to) = moved.get(path) {
+                if let Some(w) = self.with.remove(&key(path)) {
+                    self.with.insert(key(to), w);
+                }
+                *path = to.clone();
+            }
+        }
+    }
+    fn label(&self) -> String {
+        let n = self.paths.len();
+        format!(
+            "{} {n} album{}",
+            self.action.doing(),
+            if n == 1 { "" } else { "s" }
+        )
+    }
 }
 
 struct Outcome {
@@ -1951,7 +1983,7 @@ struct RunRow<'a> {
 /// What a page's stream last sent of the run panel.
 #[derive(Default)]
 pub(super) struct RunSent {
-    stamp: Option<(u64, bool, usize, usize, Option<String>, bool)>,
+    stamp: Option<(u64, bool, usize, usize, Option<String>, bool, u64)>,
     rows: usize,
 }
 
@@ -1966,6 +1998,7 @@ pub(super) fn run_events(s: &UiState, sent: &mut RunSent) -> Vec<axum::response:
         run.total,
         run.current.clone(),
         run.error.is_some(),
+        run.tickets,
     );
     if sent.stamp.as_ref() == Some(&stamp) {
         return Vec::new();
@@ -2038,29 +2071,43 @@ async fn apply(State(s): State<UiState>, Path(action): Path<String>, body: Bytes
         .iter()
         .filter_map(|(k, v)| Some((k.strip_prefix("with-")?.to_string(), v.clone())))
         .collect();
-    {
+    let ticket = {
         let mut run = s.run.lock();
-        if run.running {
-            return failed(&anyhow::anyhow!(
-                "Already {} albums; start another when it finishes.",
-                run.action
-                    .map_or("working on", |a| a.doing())
-                    .to_lowercase()
-            ));
-        }
-        *run = LibraryRun {
-            id: run.id + 1,
-            action: Some(action),
-            total: paths.len(),
-            running: true,
-            ..Default::default()
-        };
-    }
+        run.tickets += 1;
+        let ticket = run.tickets;
+        run.waiting.push(Queued {
+            ticket,
+            action,
+            paths,
+            with,
+        });
+        ticket
+    };
     let (tx, rx) = tokio::sync::oneshot::channel();
-    let (app, state, art) = (s.app.clone(), s.run.clone(), s.art.clone());
+    let (app, state, art, slot) = (s.app.clone(), s.run.clone(), s.art.clone(), s.slot.clone());
     let split = super::field(&form, "split").unwrap_or_default().to_string();
     tokio::spawn(async move {
         use futures_util::FutureExt;
+        let _slot = slot.lock().await;
+        let Some(Queued { paths, with, .. }) = ({
+            let mut run = state.lock();
+            let mine = run.waiting.iter().position(|q| q.ticket == ticket);
+            mine.map(|i| {
+                let q = run.waiting.remove(i);
+                *run = LibraryRun {
+                    id: run.id + 1,
+                    action: Some(action),
+                    total: q.paths.len(),
+                    running: true,
+                    waiting: std::mem::take(&mut run.waiting),
+                    tickets: run.tickets,
+                    ..Default::default()
+                };
+                q
+            })
+        }) else {
+            return;
+        };
         // A panic in the run still frees the slot.
         match std::panic::AssertUnwindSafe(run(&app, &state, &art, action, &paths, &with, &split))
             .catch_unwind()
@@ -2070,26 +2117,36 @@ async fn apply(State(s): State<UiState>, Path(action): Path<String>, body: Bytes
             Ok(Err(e)) => state.lock().error = Some(format!("{e:#}")),
             Err(_) => state.lock().error = Some("stopped by an internal error".into()),
         }
-        {
+        let ended = {
             let mut run = state.lock();
             run.current = None;
             run.running = false;
-        }
-        let _ = tx.send(());
+            let moved: HashMap<String, String> = run
+                .results
+                .iter()
+                .filter_map(|r| Some((r.path.clone(), r.to.clone()?)))
+                .collect();
+            for q in &mut run.waiting {
+                q.follow(&moved);
+            }
+            (moved, run.done, run.failed())
+        };
+        let _ = tx.send(ended);
     });
     sse(async_stream::stream! {
         yield Ok(patch(&run_html(&s)));
         yield Ok(patch(r#"<div id="lib-preview"></div>"#));
-        let _ = rx.await;
+        let Ok((moved, done, failed)) = rx.await else {
+            return;
+        };
         yield Ok(patch(&run_html(&s)));
         // The album open in detail is drawn again where it now is, or
         // closed when it has left the library (binned).
         let mut filter = filter;
         let was_open = !filter.album.is_empty();
         if was_open {
-            let moved = s.run.lock().results.iter().find(|r| r.path == filter.album).and_then(|r| r.to.clone());
-            if let Some(to) = moved {
-                filter.album = to;
+            if let Some(to) = moved.get(&filter.album) {
+                filter.album = to.clone();
             }
             let gone = rows(&s, &by_path([filter.album.as_str()])).await.is_ok_and(|r| r.is_empty());
             if gone {
@@ -2107,10 +2164,6 @@ async fn apply(State(s): State<UiState>, Path(action): Path<String>, body: Bytes
             yield Ok(opened(&filter.album));
             yield Ok(super::place(&filter.url()));
         }
-        let (done, failed) = {
-            let run = s.run.lock();
-            (run.done, run.results.iter().filter(|r| !r.ok).count())
-        };
         let msg = format!(
             "{} {} albums{}",
             action.done(),
