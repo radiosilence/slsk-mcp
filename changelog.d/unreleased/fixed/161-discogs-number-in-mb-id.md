@@ -1,0 +1,1 @@
+- **Credit artists works on albums whose MusicBrainz album id is a Discogs number.** beets' discogs plugin writes the Discogs release number there; sift 0.10.2 reads it as Discogs instead of asking MusicBrainz and giving up, and splits the credit when no release can be fetched.
