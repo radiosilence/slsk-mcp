@@ -1980,10 +1980,13 @@ struct RunRow<'a> {
     root: &'a str,
 }
 
+/// What of the run decides whether its panel needs sending again.
+type Stamp = (u64, bool, usize, usize, Option<String>, bool, u64);
+
 /// What a page's stream last sent of the run panel.
 #[derive(Default)]
 pub(super) struct RunSent {
-    stamp: Option<(u64, bool, usize, usize, Option<String>, bool, u64)>,
+    stamp: Option<Stamp>,
     rows: usize,
 }
 
