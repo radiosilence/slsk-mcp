@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.12.0
+
+### Changed
+
+- **Switching search tabs stays on the page.** A tab's results replace the last ones in place, and a finished tab's results arrive with the page itself, rather than reloading the page and fetching them after it. Tabs are named by UUID in their addresses.
+
+### Fixed
+
+- **Credit artists works on albums whose MusicBrainz album id is a Discogs number.** beets' discogs plugin writes the Discogs release number there; sift 0.10.2 reads it as Discogs instead of asking MusicBrainz and giving up, and splits the credit when no release can be fetched.
+- **Web UI responses are compressed.** Pages, fragments and assets were sent uncompressed; they now go out as brotli, zstd or gzip, whichever the browser accepts. Live event streams stay uncompressed, since an encoder would hold their updates back.
+- **The library list opens quickly on a large library.** It drew every album at once, around 10 MB of HTML for six thousand albums, which the browser took seconds to lay out. It now draws 200 at a time with "Show more", and the album list is read from the index once per change to the library rather than on every request.
+
 ## 0.11.0
 
 ### Added
