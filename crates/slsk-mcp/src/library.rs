@@ -1524,3 +1524,53 @@ fn sorted<'a>(albums: Vec<&'a Album>, query: &Query) -> Vec<&'a Album> {
     });
     keyed.into_iter().map(|(_, a)| a).collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn album(dir: &str, artist: Option<&str>, title: &str, added: i64) -> Album {
+        Album {
+            dir: PathBuf::from(dir),
+            items: vec![sift::library::Item {
+                track: sift::meta::Track {
+                    path: PathBuf::from(format!("{dir}/01.flac")),
+                    album: Some(title.into()),
+                    album_artist: artist.map(String::from),
+                    ..Default::default()
+                },
+                size: 1,
+                mtime: 0,
+                added,
+            }],
+        }
+    }
+
+    fn order(albums: &[Album], terms: &[&str]) -> Vec<String> {
+        let query = Query::parse(terms).unwrap();
+        sorted(
+            albums.iter().filter(|a| query.matches_album(a)).collect(),
+            &query,
+        )
+        .iter()
+        .map(|a| a.dir.to_string_lossy().into_owned())
+        .collect()
+    }
+
+    #[test]
+    fn listings_sort_as_sift_does() {
+        let albums = [
+            album("/m/b", Some("beta"), "One", 10),
+            album("/m/a", Some("Alpha"), "Two", 10),
+            album("/m/none", None, "Three", 10),
+            album("/m/new", Some("zeta"), "Four", 20),
+        ];
+        // Newest import first, then artist as lowercase text, missing first.
+        assert_eq!(
+            order(&albums, &["added-", "albumartist+", "album+"]),
+            ["/m/new", "/m/none", "/m/a", "/m/b"]
+        );
+        assert_eq!(order(&albums, &["alpha"]), ["/m/a"]);
+        assert_eq!(order(&albums, &[]), ["/m/none", "/m/a", "/m/b", "/m/new"]);
+    }
+}

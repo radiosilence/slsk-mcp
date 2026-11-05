@@ -1,0 +1,1 @@
+- **Web UI responses are compressed.** Pages, fragments and assets were sent uncompressed; they now go out as brotli, zstd or gzip, whichever the browser accepts. Live event streams stay uncompressed, since an encoder would hold their updates back.

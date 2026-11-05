@@ -1,0 +1,1 @@
+- **Switching search tabs stays on the page.** A tab's results replace the last ones in place, and a finished tab's results arrive with the page itself, rather than reloading the page and fetching them after it. Tabs are named by UUID in their addresses.
