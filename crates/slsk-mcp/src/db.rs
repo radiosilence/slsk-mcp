@@ -99,6 +99,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0004_profiles.sql"),
     include_str!("../migrations/0005_end_sessions.sql"),
     include_str!("../migrations/0006_waiting.sql"),
+    include_str!("../migrations/0007_search_tabs.sql"),
 ];
 
 /// How many idle connections to keep. More than the concurrency the service
@@ -763,6 +764,176 @@ pub async fn set_ban(db: &Db, account: &str, username: &str, banned: bool) -> Re
     let (account, username) = (account.to_string(), username.to_string());
     db.run(move |c| {
         c.execute(q, params![account, username])?;
+        Ok(())
+    })
+    .await
+}
+
+/// A search open as a tab on the Search page.
+#[derive(Debug, Clone)]
+pub struct SearchTab {
+    pub id: i64,
+    pub query: String,
+    pub lossless: bool,
+    pub pinned: bool,
+    /// When it finished; none while it runs.
+    pub searched_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub responses: i64,
+    /// Folders it found, of which the best are kept.
+    pub found: i64,
+    pub error: Option<String>,
+}
+
+impl SearchTab {
+    fn from_row(r: &rusqlite::Row<'_>) -> Result<Self> {
+        Ok(Self {
+            id: r.get("id")?,
+            query: r.get("query")?,
+            lossless: r.get("lossless")?,
+            pinned: r.get("pinned")?,
+            searched_at: r
+                .get::<_, Option<String>>("searched_at")?
+                .map(|t| ts_from(&t))
+                .transpose()?,
+            responses: r.get("responses")?,
+            found: r.get("found")?,
+            error: r.get("error")?,
+        })
+    }
+}
+
+const SEARCH_TAB: &str =
+    "SELECT id, query, lossless, pinned, searched_at, responses, found, error FROM search_tabs";
+
+/// Unpinned tabs kept; opening another closes the oldest past this.
+const UNPINNED_TABS: i64 = 100;
+
+/// Pinned first, then in the order they were opened.
+pub async fn search_tabs(db: &Db) -> Result<Vec<SearchTab>> {
+    db.run(|c| {
+        c.prepare_cached(&format!("{SEARCH_TAB} ORDER BY pinned DESC, id"))?
+            .query_map([], SearchTab::from_row)?
+            .collect()
+    })
+    .await
+}
+
+pub async fn search_tab(db: &Db, id: i64) -> Result<Option<SearchTab>> {
+    db.run(move |c| {
+        c.prepare_cached(&format!("{SEARCH_TAB} WHERE id = ?1"))?
+            .query_row(params![id], SearchTab::from_row)
+            .optional()
+    })
+    .await
+}
+
+/// The tab already open for these words and filter.
+pub async fn find_search_tab(db: &Db, query: &str, lossless: bool) -> Result<Option<SearchTab>> {
+    let query = query.to_string();
+    db.run(move |c| {
+        c.prepare_cached(&format!(
+            "{SEARCH_TAB} WHERE lower(query) = lower(?1) AND lossless = ?2 ORDER BY id LIMIT 1"
+        ))?
+        .query_row(params![query, lossless], SearchTab::from_row)
+        .optional()
+    })
+    .await
+}
+
+/// A new tab, running; the oldest unpinned tabs past the limit are closed.
+pub async fn open_search_tab(db: &Db, query: &str, lossless: bool) -> Result<i64> {
+    let query = query.to_string();
+    db.run(move |c| {
+        c.execute(
+            "INSERT INTO search_tabs (query, lossless) VALUES (?1, ?2)",
+            params![query, lossless],
+        )?;
+        let id = c.last_insert_rowid();
+        c.execute(
+            "DELETE FROM search_tabs WHERE id IN (SELECT id FROM search_tabs WHERE NOT pinned \
+             ORDER BY id DESC LIMIT -1 OFFSET ?1)",
+            params![UNPINNED_TABS],
+        )?;
+        Ok(id)
+    })
+    .await
+}
+
+/// The best folders a finished tab kept.
+pub async fn search_tab_folders(db: &Db, id: i64) -> Result<Vec<crate::folders::Folder>> {
+    db.run(move |c| {
+        let folders: Option<Json<Vec<crate::folders::Folder>>> = c
+            .query_row(
+                "SELECT folders FROM search_tabs WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .optional()?
+            .flatten();
+        Ok(folders.map(|f| f.0).unwrap_or_default())
+    })
+    .await
+}
+
+/// Forget what the tab found, as it searches again.
+pub async fn rerun_search_tab(db: &Db, id: i64) -> Result<()> {
+    db.run(move |c| {
+        c.execute(
+            "UPDATE search_tabs SET searched_at = NULL, responses = 0, found = 0, folders = NULL, \
+             error = NULL WHERE id = ?1",
+            params![id],
+        )?;
+        Ok(())
+    })
+    .await
+}
+
+/// What the tab's search found, or why it could not run.
+pub async fn finish_search_tab(
+    db: &Db,
+    id: i64,
+    responses: usize,
+    found: usize,
+    folders: Vec<crate::folders::Folder>,
+    error: Option<String>,
+) -> Result<()> {
+    let now = ts(&chrono::Utc::now());
+    db.run(move |c| {
+        c.execute(
+            "UPDATE search_tabs SET searched_at = ?2, responses = ?3, found = ?4, folders = ?5, \
+             error = ?6 WHERE id = ?1",
+            params![
+                id,
+                now,
+                responses as i64,
+                found as i64,
+                Json(folders),
+                error
+            ],
+        )?;
+        Ok(())
+    })
+    .await
+}
+
+pub async fn pin_search_tab(db: &Db, id: i64, pinned: bool) -> Result<()> {
+    db.run(move |c| {
+        c.execute(
+            "UPDATE search_tabs SET pinned = ?2 WHERE id = ?1",
+            params![id, pinned],
+        )?;
+        Ok(())
+    })
+    .await
+}
+
+/// Close one tab, or with no `id` every unpinned one.
+pub async fn close_search_tabs(db: &Db, id: Option<i64>) -> Result<()> {
+    db.run(move |c| {
+        match id {
+            Some(id) => c.execute("DELETE FROM search_tabs WHERE id = ?1", params![id])?,
+            None => c.execute("DELETE FROM search_tabs WHERE NOT pinned", [])?,
+        };
         Ok(())
     })
     .await
@@ -1567,5 +1738,72 @@ mod tests {
                 .import_how
                 .is_none()
         );
+    }
+
+    #[tokio::test]
+    async fn search_tabs_keep_their_folders_and_find_the_same_words() {
+        use crate::folders::{File, Folder};
+        let db = Db::memory().await;
+        let id = open_search_tab(&db, "Artist Album", true).await.unwrap();
+        assert_eq!(
+            find_search_tab(&db, "artist album", true)
+                .await
+                .unwrap()
+                .map(|t| t.id),
+            Some(id)
+        );
+        assert!(
+            find_search_tab(&db, "artist album", false)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        // A Latin-1 path must come back byte for byte.
+        let raw = slsk_engine::slsk_proto::RawStr(b"@@m\\Caf\xe9".to_vec().into());
+        let folder = Folder {
+            username: "u".into(),
+            path: raw.to_string_lossy(),
+            remote_path: raw.clone(),
+            files: vec![File {
+                remote: raw.clone(),
+                name: "a.flac".into(),
+                size: 1,
+                extension: "flac".into(),
+                bitrate: None,
+                duration: None,
+                sample_rate: None,
+                bit_depth: None,
+            }],
+            audio_files: 1,
+            total_size: 1,
+            lossless: true,
+            bit_depth: None,
+            sample_rate: None,
+            bitrate: None,
+            free_slot: true,
+            speed: 0,
+            queue_length: 0,
+            score: 0.0,
+        };
+        finish_search_tab(&db, id, 3, 7, vec![folder], None)
+            .await
+            .unwrap();
+        let tab = search_tab(&db, id).await.unwrap().unwrap();
+        assert!(tab.searched_at.is_some());
+        assert_eq!((tab.responses, tab.found), (3, 7));
+        let kept = search_tab_folders(&db, id).await.unwrap();
+        assert_eq!(kept[0].remote_path, raw);
+        assert_eq!(kept[0].files[0].remote, raw);
+
+        let pinned = open_search_tab(&db, "pinned", true).await.unwrap();
+        pin_search_tab(&db, pinned, true).await.unwrap();
+        close_search_tabs(&db, None).await.unwrap();
+        let left: Vec<i64> = search_tabs(&db)
+            .await
+            .unwrap()
+            .iter()
+            .map(|t| t.id)
+            .collect();
+        assert_eq!(left, [pinned]);
     }
 }

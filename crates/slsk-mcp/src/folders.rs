@@ -9,16 +9,38 @@ use std::collections::HashMap;
 use slsk_engine::slsk_proto::RawStr;
 use slsk_engine::slsk_proto::peer::{FileEntry, SearchResponse};
 
+/// A peer's path stored as base64 of its bytes, which may not be UTF-8 and
+/// must go back to the peer unchanged.
+mod raw {
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD_NO_PAD;
+    use serde::{Deserialize, Deserializer, Serializer};
+    use slsk_engine::slsk_proto::RawStr;
+
+    pub fn serialize<S: Serializer>(r: &RawStr, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&STANDARD_NO_PAD.encode(r.as_bytes()))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<RawStr, D::Error> {
+        let s = String::deserialize(d)?;
+        STANDARD_NO_PAD
+            .decode(s)
+            .map(|b| RawStr(b.into()))
+            .map_err(serde::de::Error::custom)
+    }
+}
+
 pub(crate) const LOSSLESS: &[&str] = &["flac", "wav", "aiff", "aif", "ape", "wv", "alac"];
 const UNCOMPRESSED: &[&str] = &["wav", "aiff", "aif"];
 pub(crate) const AUDIO: &[&str] = &[
     "flac", "wav", "aiff", "aif", "ape", "wv", "alac", "mp3", "m4a", "aac", "ogg", "opus", "wma",
 ];
 
-#[derive(Debug, Clone, async_graphql::SimpleObject)]
+#[derive(Debug, Clone, async_graphql::SimpleObject, serde::Serialize, serde::Deserialize)]
 pub struct File {
     /// The full path on the peer, as it must be requested.
     #[graphql(skip)]
+    #[serde(with = "raw")]
     pub remote: RawStr,
     pub name: String,
     pub size: u64,
@@ -29,12 +51,13 @@ pub struct File {
     pub bit_depth: Option<u32>,
 }
 
-#[derive(Debug, Clone, async_graphql::SimpleObject)]
+#[derive(Debug, Clone, async_graphql::SimpleObject, serde::Serialize, serde::Deserialize)]
 pub struct Folder {
     pub username: String,
     /// The folder's path on the peer.
     pub path: String,
     #[graphql(skip)]
+    #[serde(with = "raw")]
     pub remote_path: RawStr,
     pub files: Vec<File>,
     pub audio_files: usize,

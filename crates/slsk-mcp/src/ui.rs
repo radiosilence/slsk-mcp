@@ -38,6 +38,7 @@ mod browse;
 mod chat;
 mod library;
 mod profile;
+mod search;
 #[cfg(test)]
 mod tests;
 mod wishlist;
@@ -79,7 +80,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/uploads", get(StatusCode::NOT_FOUND))
         .route("/jobs/{id}", get(StatusCode::NOT_FOUND))
         .route("/stream", get(stream))
-        .route("/search", get(search))
+        .route("/search", get(search::results))
         .route("/grab", post(grab))
         .route("/import-url", post(import_url))
         .route("/download", post(download))
@@ -94,6 +95,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/ban", post(ban))
         .route("/account", post(account))
         .route("/reconnect", post(reconnect))
+        .merge(search::routes())
         .merge(wishlist::routes())
         .merge(library::routes())
         .merge(browse::routes())
@@ -342,7 +344,7 @@ fn percent(done: u64, total: u64) -> u64 {
 /// The pages, in the order the nav lists them: name, address and label.
 const PAGES: &[(&str, &str, &str)] = &[
     ("search", "/search", "Search"),
-    ("albums", "/", "Albums"),
+    ("albums", "/", "Downloads"),
     ("uploads", "/uploads", "Uploads"),
     ("wishlist", "/wishlist", "Wishlist"),
     ("library", "/library", "Library"),
@@ -413,13 +415,6 @@ struct AlbumsPage {
     jobs: String,
 }
 
-#[derive(Template)]
-#[template(path = "pages/search.html")]
-struct SearchPage {
-    q: String,
-    lossless: bool,
-}
-
 /// A browser asking for a page's address gets the whole page. The same
 /// address fetched by the page itself (`Datastar-Request`) is a fragment of
 /// it, and goes on to its own handler.
@@ -432,12 +427,25 @@ async fn pages(State(s): State<UiState>, request: Request, next: Next) -> Respon
             .map(|p| p.0)
             .or_else(|| job_of_path(request.uri().path()).map(|_| "job"))
     {
-        // Searches were once drawn on Albums, at `/?q=…`.
+        // Searches were once drawn on the downloads page, at `/?q=…`.
         if tab == "albums"
             && let Some(query) = request.uri().query()
             && url::form_urlencoded::parse(query.as_bytes()).any(|(k, v)| k == "q" && !v.is_empty())
         {
             return axum::response::Redirect::to(&format!("/search?{query}")).into_response();
+        }
+        // A search typed or pasted opens its tabs, and the page moves to the first.
+        if tab == "search" {
+            let view: search::SearchQuery = query(request.uri());
+            if !view.q.trim().is_empty() {
+                return match search::open(&s.app, &view.q, !view.lossless.is_empty()).await {
+                    Ok(first) => axum::response::Redirect::to(
+                        &first.map_or("/search".to_string(), |id| format!("/search?tab={id}")),
+                    )
+                    .into_response(),
+                    Err(e) => crate::error::AppError::from(e).into_response(),
+                };
+            }
         }
         return match render_page(&s, tab, request.uri()).await {
             Ok(html) => html.into_response(),
@@ -514,11 +522,10 @@ async fn render_page(
     uri: &http::Uri,
 ) -> Result<(StatusCode, Html<String>), crate::error::AppError> {
     let url = uri.path_and_query().map_or("/", |p| p.as_str()).to_string();
-    let search: SearchQuery = match tab {
-        "search" => query(uri),
-        _ => SearchQuery::default(),
+    let search_tab = match tab {
+        "search" => search::active(&s.app, &query(uri)).await,
+        _ => None,
     };
-    let lossless = search.q.is_empty() || !search.lossless.is_empty();
     let filter: library::Filter = match tab {
         "library" => query(uri),
         _ => library::Filter::default(),
@@ -529,8 +536,9 @@ async fn render_page(
     };
     let signals = serde_json::json!({
         "job": job.map(|id| id.to_string()).unwrap_or_default(),
-        "q": search.q,
-        "lossless": lossless,
+        "q": "",
+        "lossless": search_tab.as_ref().is_none_or(|t| t.lossless),
+        "tab": search_tab.as_ref().map(|t| t.id.to_string()).unwrap_or_default(),
         "busy": false,
         "jobs": PAGE,
         "history": PAGE,
@@ -542,7 +550,7 @@ async fn render_page(
         "_libalbum": filter.album,
     })
     .to_string();
-    let (mut status, mut heading) = (StatusCode::OK, None);
+    let (mut status, mut heading) = (StatusCode::OK, search_tab.as_ref().map(|t| t.query.clone()));
     let body = match tab {
         "job" => match job {
             Some(id) => match job_page(&s.app, id).await? {
@@ -565,12 +573,7 @@ async fn render_page(
         }
         .render()
         .unwrap_or_default(),
-        "search" => SearchPage {
-            q: search.q,
-            lossless,
-        }
-        .render()
-        .unwrap_or_default(),
+        "search" => search::page(&s.app, search_tab.as_ref()).await,
         "uploads" => uploads_html(&s.app, PAGE).await,
         "wishlist" => wishlist::page(&s.app).await,
         "library" => library::page(s, &filter),
@@ -1382,6 +1385,8 @@ struct Shown {
     history: i64,
     /// The job a job's page shows; empty on every other page.
     job: String,
+    /// The search tab the Search page shows; empty on every other page.
+    tab: String,
 }
 
 impl Default for Shown {
@@ -1390,6 +1395,7 @@ impl Default for Shown {
             jobs: PAGE,
             history: PAGE,
             job: String::new(),
+            tab: String::new(),
         }
     }
 }
@@ -1429,6 +1435,7 @@ async fn stream(
                         Err(_) => String::new(),
                     },
                     "uploads" => uploads_html(&app, shown.history).await,
+                    "search" => search::tabs_html(&app, shown.tab.parse().ok()).await,
                     _ => String::new(),
                 },
                 up_count_html(&app),
@@ -1464,140 +1471,6 @@ struct GrabQuery {
     jobs: Option<i64>,
 }
 
-/// A search's view, all of it in the address.
-#[derive(serde::Deserialize, Default)]
-struct SearchQuery {
-    #[serde(default)]
-    q: String,
-    /// Any value means lossless, as the page reads it.
-    #[serde(default)]
-    lossless: String,
-    /// How many folders are drawn.
-    #[serde(default)]
-    shown: String,
-}
-
-/// Folders shown at first, and added by each "Show more", in search results.
-/// A generic query is answered with thousands, and a page drawing them all
-/// every second stops responding.
-const FOUND: usize = 100;
-
-/// How long the web UI's searches listen for peers: as long as a grab, so
-/// either stands in for the other.
-const LISTEN: u64 = 10;
-
-#[derive(Template)]
-#[template(path = "results.html")]
-struct ResultsView {
-    query: String,
-    folders: Vec<Folder>,
-    /// Folders found beyond those shown.
-    more: usize,
-    /// The address that shows another page of them.
-    next: String,
-    searching: bool,
-    responses: usize,
-}
-
-impl ResultsView {
-    fn key(&self, f: &Folder) -> String {
-        URL_SAFE_NO_PAD.encode(f.remote_path.as_bytes())
-    }
-    /// A file as the download form sends it: its path, then its size.
-    fn file_key(&self, x: &crate::folders::File) -> String {
-        format!("{}.{}", URL_SAFE_NO_PAD.encode(x.remote.as_bytes()), x.size)
-    }
-    /// Stable across regroups, so an open preview stays with its folder.
-    fn id(&self, f: &Folder) -> u64 {
-        use std::hash::{Hash, Hasher};
-        let mut h = std::hash::DefaultHasher::new();
-        (&f.username, f.remote_path.as_bytes()).hash(&mut h);
-        h.finish()
-    }
-    fn crumbs(&self, f: &Folder) -> Vec<browse::Child> {
-        browse::crumbs(f.remote_path.as_bytes())
-    }
-    /// A file's path below the result's folder, which keeps a disc
-    /// subfolder's name when discs are grouped into one result.
-    fn within(&self, f: &Folder, file: &crate::folders::File) -> String {
-        let full = file.remote.as_bytes();
-        let rest = full
-            .strip_prefix(f.remote_path.as_bytes())
-            .and_then(|r| r.strip_prefix(b"\\"))
-            .unwrap_or(full);
-        RawStr(rest.to_vec().into())
-            .to_string_lossy()
-            .replace('\\', "/")
-    }
-    fn size(&self, b: &u64) -> String {
-        human(*b)
-    }
-    fn quality(&self, f: &Folder) -> String {
-        match (f.lossless, f.bit_depth, f.sample_rate, f.bitrate) {
-            (true, Some(d), Some(r), _) => format!("{d}/{}", r as f64 / 1000.0),
-            (true, ..) => "lossless".into(),
-            (false, _, _, Some(b)) => format!("{b} kbps"),
-            _ => "lossy".into(),
-        }
-    }
-}
-
-/// The results for the address's query, regrouped as peers answer, at most
-/// once a second, the first `shown` of them. The search is shared with any of the same words from the
-/// last ten minutes, so reopening or reloading the page, or showing more,
-/// sends nothing to the network.
-async fn search(State(s): State<UiState>, Query(view): Query<SearchQuery>) -> Response {
-    let Some(engine) = s.app.session.engine().cloned() else {
-        return one(
-            r#"<div id="results" class="text-meta text-muted">Sign in to Soulseek first.</div>"#
-                .into(),
-        );
-    };
-    let query = view.q.trim().to_string();
-    if query.is_empty() {
-        return one(r#"<div id="results"></div>"#.into());
-    }
-    let filter = Filter {
-        lossless: !view.lossless.is_empty(),
-        ..Default::default()
-    };
-    let lossless = if filter.lossless { "true" } else { "" };
-    let found = view
-        .shown
-        .parse()
-        .map_or(FOUND, |n: usize| n.clamp(1, MOST as usize));
-    let next = place_url(
-        "/search",
-        &[
-            ("q", &query),
-            ("lossless", lossless),
-            ("shown", &(found + FOUND).to_string()),
-        ],
-    );
-    let events = async_stream::stream! {
-        let mut heard = graphql::listen(&engine, &query, LISTEN);
-        loop {
-            let crate::graphql::Heard { responses, done, error } = heard.borrow_and_update().clone();
-            if let Some(e) = error {
-                yield Ok(patch(&format!(
-                    r#"<div id="results" class="text-meta text-muted">{}</div>"#,
-                    escape(&e)
-                )));
-                break;
-            }
-            let mut folders = crate::folders::relevant(crate::folders::group(responses.iter().map(Arc::as_ref), &filter), &query);
-            let more = folders.len().saturating_sub(found);
-            folders.truncate(found);
-            let view = ResultsView { query: query.clone(), folders, more, next: next.clone(), searching: !done, responses: responses.len() };
-            yield Ok(patch(&view.render().unwrap_or_default()));
-            if done || heard.changed().await.is_err() {
-                break;
-            }
-        }
-    };
-    sse(events).into_response()
-}
-
 async fn grab(
     State(s): State<UiState>,
     Query(shown): Query<GrabQuery>,
@@ -1607,7 +1480,7 @@ async fn grab(
         lossless: true,
         ..Default::default()
     });
-    match graphql::grab(&s.app, form.q.trim(), LISTEN, filter, false).await {
+    match graphql::grab(&s.app, form.q.trim(), search::LISTEN, filter, false).await {
         // Albums shows the new card; Search has no job list, so it says so.
         Ok(_) => match shown.jobs {
             Some(shown) => done(&s.app, shown, "").await,

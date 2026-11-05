@@ -34,9 +34,9 @@ to give back at least as much as it takes, and its defaults reflect that.
   searches from its own shares.
 - **It searches sparingly.** An assistant left to itself searches far more
   than a person would, and every search is relayed to thousands of peers.
-  After a quiet spell, a burst of six searches goes out a second apart, after which
-  they are spaced four seconds apart, and they are capped per hour
-  (`SEARCHES_PER_HOUR`, default 200). The same words searched again within ten
+  After a quiet spell, a burst of four searches goes out a second apart, after which
+  they are spaced three seconds apart, and they are capped per hour
+  (`SEARCHES_PER_HOUR`, default 600). The same words searched again within ten
   minutes reuse the earlier answers.
 - **It says what it is.** The default user info (`DESCRIPTION`) identifies it
   as an automated client that shares its library, so sharers can decide for
@@ -109,8 +109,8 @@ say whether it is on. Without a token, a pasted Discogs release is refused.
 ### From a URL
 
 An album bought elsewhere, such as on Bandcamp, arrives as a download link
-rather than a peer's folder. `importUrl(url)`, or the link field under the
-Albums page's search, fetches it over HTTP into the same place a download
+rather than a peer's folder. `importUrl(url)`, or the link field on the
+Downloads page, fetches it over HTTP into the same place a download
 lands, unpacks it if it is a zip (one folder wrapping everything is
 unwrapped, and an entry naming a path outside the archive refuses it), and
 continues from step 3. The tags are checked and chosen in the same review
@@ -300,7 +300,7 @@ startup.
 | `STATE_DIR` | `/data` | `slsk.db` (jobs, sealed credentials, bans, messages), the library index and the share-probe cache. On a local disk: SQLite over a network filesystem loses its locking. |
 | `LISTEN_PORT` | `2234` | The peer port. Must be reachable for peers behind NAT to connect. |
 | `UPLOAD_SLOTS`, `UPLOAD_LIMIT`, `DOWNLOAD_LIMIT` | `500`, `0`, `0` | Uploads at once, then limits in bytes per second (0 is unlimited). Each running upload holds a socket and a 256 KiB buffer; past what saturates the uplink, more slots split it more ways rather than send more. |
-| `SEARCHES_PER_HOUR` | `200` | Searches allowed in any rolling hour, 0 for unlimited. Every search is relayed to thousands of peers, and the server temporarily bans accounts that search in floods; past the budget a search is refused with when the next is free. |
+| `SEARCHES_PER_HOUR` | `600` | Searches allowed in any rolling hour, 0 for unlimited. Every search is relayed to thousands of peers, and the server temporarily bans accounts that search in floods; past the budget a search is refused with when the next is free. |
 | `MAX_INBOUND_CONNECTIONS`, `MAX_INBOUND_PER_ADDRESS` | `512`, `32` | Connections other peers may hold open to the peer port, in total and from one address. Anyone can connect, so these bound what strangers can hold. Behind a proxy that hides peers' source addresses (Docker's userland proxy, Docker Desktop), every peer arrives from one address: raise the per-address limit to the total. |
 | `DESCRIPTION` | names the client as automated | The user info other peers see, until a description is saved from the Profile tab. The default says this is an automated client that shares back, so sharers can decide for themselves. |
 | `BEETS_CONFIG` | — | A beets `config.yaml` for the importer's template and replacements. |
@@ -322,7 +322,7 @@ the other, and nothing else to either.
 ## The web UI
 
 The UI reaches everything GraphQL and MCP do, so a phone is a full client:
-search, albums and uploads, then the wishlist, the library (one list of albums to
+search, downloads and uploads, then the wishlist, the library (one list of albums to
 re-file, credit, enrich, re-import, edit or bin), browsing a user's shares, profiles, rooms and private messages, bans,
 settings and triage. Each has its own address, and the server draws that
 page whole around a shared layout, so a link or a reload costs one request
@@ -333,11 +333,19 @@ server's answer, never a guess. Anything that changes the library or reaches
 other people (binning, re-filing, enriching, banning, sending a message) asks
 first; library changes show exactly what they will do before they do it.
 
-Search has its own address, holding the query, the lossless filter and how
-many results are shown (`/search?q=…&shown=200`), and shares
-the server's ten-minute reuse of identical searches with MCP: reloading it,
-coming back to it or showing more joins the search already running or
-answered rather than spending another from the hourly budget. Results are
+Each search opens a tab on the Search page, so a run of searches can be
+read one at a time without losing the earlier results. Tabs are kept in the
+database with the best 500 folders each search found, so they survive a
+reload or a restart; the address names the tab and how many results are
+shown (`/search?tab=12&shown=200`). `/search?q=…` opens a tab for each line
+of `q` and moves to the first, which is how "Search several at once" works:
+paste one album per line and every search is queued behind the pacing above.
+Searching words already open in a tab returns to it. After ten minutes, when
+the server's reuse of identical searches has lapsed, a tab's results are
+marked stale and offer to search again; until then reloading, reopening or
+showing more spends nothing from the hourly budget. Pinned tabs survive
+"Close unpinned", and the oldest unpinned tabs past a hundred are closed as
+new ones open. Results are
 regrouped at most once a second and drawn a hundred folders at a time, since
 a generic query draws thousands; links to a user's shares open in a new tab
 so the results stay put.

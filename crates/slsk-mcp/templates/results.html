@@ -1,5 +1,9 @@
 <div id="results">
-  <p class="text-meta text-muted">{% if searching %}Searching “{{ query }}”… {% endif %}{{ responses }} peers answered, {{ folders.len() + more }} folders.</p>
+  <p class="text-meta text-muted">
+    {% if let Some(e) = error %}<span class="text-bad">{{ e }}</span>{% else %}{% if searching %}Searching “{{ query }}”… {% endif %}{{ responses }} peers answered, {{ found }} folders.{% endif %}
+    {% if let Some(age) = age %}Searched {{ age }}, so these may be out of date.{% endif %}
+    {% if error.is_some() || age.is_some() %}<button class="ms-1 px-2 py-0.5" data-indicator="_again" data-attr:disabled="$_again" data-class:busy="$_again" data-on:click="@post('/search/tabs/{{ tab }}/again')">Search again</button>{% endif %}
+  </p>
   {% for f in folders %}
   <article id="r-{{ self.id(f) }}" class="card{% if f.lossless %} border-l-3 border-l-brand{% endif %}">
     <form id="dl-{{ loop.index }}"><input type="hidden" name="username" value="{{ f.username }}"><input type="hidden" name="key" value="{{ self.key(f) }}"><input type="hidden" name="title" value="{{ query }}">{% for x in f.files %}<input type="hidden" name="file" value="{{ self.file_key(x) }}">{% endfor %}</form>
@@ -20,5 +24,6 @@
     </details>
   </article>
   {% endfor %}
-  {% if more > 0 %}<button class="quiet" data-on:click="$_url = '{{ next }}'; document.getElementById('search-feed').dispatchEvent(new Event('more'))">Show more ({{ more }} hidden)</button>{% endif %}
+  {% if more > 0 %}<button class="quiet" data-on:click="$_url = '{{ next }}'; document.getElementById('search-feed').dispatchEvent(new Event('more'))">Show more ({{ more }} hidden)</button>
+  {% else if !searching && found > folders.len() %}<p class="text-meta text-muted">The best {{ self.kept() }} folders are kept.</p>{% endif %}
 </div>

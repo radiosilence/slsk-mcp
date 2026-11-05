@@ -1,0 +1,1 @@
+- **Search tabs.** Each search opens a tab that keeps its best results across reloads and restarts; results are marked stale after ten minutes with an option to search again, and tabs can be pinned and closed. "Search several at once" takes one search per line and opens a tab for each.
