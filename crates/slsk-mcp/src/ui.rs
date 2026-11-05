@@ -573,7 +573,6 @@ async fn render_page(
         "_libsince": filter.since,
         "_libfrom": filter.from,
         "_libshow": filter.show,
-        "_libalbum": filter.album,
     })
     .to_string();
     let (mut status, mut heading) = (StatusCode::OK, search_tab.as_ref().map(|t| t.query.clone()));
@@ -717,13 +716,10 @@ impl From<crate::db::Job> for Settled {
                 }
             }
         };
-        let href = j.library_path.as_ref().map(|path| {
-            library::Filter {
-                album: path.clone(),
-                ..Default::default()
-            }
-            .url()
-        });
+        let href = j
+            .library_path
+            .as_ref()
+            .map(|path| place_url("/library", &[("album", path)]));
         Self {
             id: j.id.to_string(),
             title,
@@ -785,13 +781,9 @@ struct CardView {
 impl CardView {
     /// The album's page in the library, once the job filed it.
     fn filed(&self, j: &Job) -> Option<String> {
-        j.library_path.as_ref().map(|path| {
-            library::Filter {
-                album: path.clone(),
-                ..Default::default()
-            }
-            .url()
-        })
+        j.library_path
+            .as_ref()
+            .map(|path| place_url("/library", &[("album", path)]))
     }
 
     fn verdict(&self, t: &crate::analysis::TrackAnalysis) -> &'static str {

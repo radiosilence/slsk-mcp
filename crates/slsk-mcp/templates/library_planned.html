@@ -1,4 +1,4 @@
-<li id="pv-{{ p.key }}" class="items-start">
+<li id="{{ slot }}-pv-{{ p.key }}" class="items-start">
   {% if p.applicable %}<input class="mx-0.5 mt-0.5 size-[18px] flex-none" type="checkbox" name="path" value="{{ p.path }}" aria-label="Apply to {{ p.title }}"{% if p.ticked %} checked{% endif %}>{% if let Some(w) = p.with %}<input type="hidden" name="with-{{ p.key }}" value="{{ w }}">{% endif %}{% endif %}
   <details class="min-w-0 flex-1{% if !p.applicable %} pl-6{% endif %}">
     <summary class="flex cursor-pointer list-none flex-wrap gap-x-2.5 gap-y-0.5 [&::-webkit-details-marker]:hidden">

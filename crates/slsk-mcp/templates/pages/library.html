@@ -18,7 +18,6 @@
     <button class="flex-auto" type="submit" data-attr:disabled="$_finding" data-class:busy="$_finding">Find</button>
   </form>
   {{ run|safe }}
-  <div id="lib-album"></div>
   <div id="lib-preview"></div>
   {# Reading the library takes a moment, so the list follows the page. #}
   <div id="library" data-init="@get(location.pathname + location.search)"><p class="text-meta text-muted">Reading the library…</p></div>

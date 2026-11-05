@@ -1,9 +1,11 @@
-<div id="lib-album" class="card">
+{# Opened in its row: the address lists every open album, so a reload or a shared link opens them again. #}
+<div id="{{ slot }}" class="basis-full empty:hidden">
+<div class="card mt-2" data-path="{{ row.album.path }}" data-init="$_url = (u => (u.searchParams.getAll('album').includes(el.dataset.path) || u.searchParams.append('album', el.dataset.path), u.pathname + u.search))(new URL(location))">
   <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
     <strong class="min-w-0 flex-auto wrap-anywhere">{{ self.title() }}</strong>
     {% if row.spare().is_some() %}<span class="pill spare">spare</span>{% endif %}
     {% if row.kept() %}<span class="pill keep">kept</span>{% endif %}
-    <button type="button" class="quiet" aria-label="Close" data-on:click="document.getElementById('lib-album').replaceChildren(); $_libalbum = ''; $_url = '{{ self.closed() }}'">Close</button>
+    <button type="button" class="quiet" aria-label="Close" data-close data-path="{{ row.album.path }}" data-on:click="$_url = (u => (u.searchParams.delete('album', el.dataset.path), u.pathname + u.search))(new URL(location)); document.getElementById('{{ slot }}').replaceChildren()">Close</button>
   </div>
   <p class="my-0.5 text-meta text-muted wrap-anywhere">{% if let Some(a) = row.album.album_artist %}{{ a }}{% endif %}{% if let Some(y) = row.album.year %} · {{ y }}{% endif %} · {% if row.album.format.is_empty() %}?{% else %}{{ row.album.format }}{% endif %} · {{ row.album.tracks }} track{% if row.album.tracks != 1 %}s{% endif %}</p>
   <p class="my-0.5 text-fine text-muted wrap-anywhere">{{ self.rel(row.album.path) }}</p>
@@ -19,33 +21,36 @@
       {% endif %}
     </div>
   </div>
-  <form id="lib-one">
+  <form id="{{ slot }}-one">
     <input type="hidden" name="path" value="{{ row.album.path }}">
+    <input type="hidden" name="slot" value="{{ slot }}">
     {% include "library_filter.html" %}
   </form>
   <div class="my-2.5 flex flex-wrap gap-2">
-    <button type="button" data-indicator="_al_retag" data-attr:disabled="$_al_retag" data-class:busy="$_al_retag" data-on:click="@get('/library/album/releases', {contentType: 'form', selector: '#lib-one'})">Re-tag from MusicBrainz</button>
-    <button type="button" data-indicator="_al_edit" data-attr:disabled="$_al_edit" data-class:busy="$_al_edit" data-on:click="@get('/library/album/edit', {contentType: 'form', selector: '#lib-one'})">Edit tags</button>
-    {% if row.refile().is_some() %}<button type="button" data-indicator="_al_refile" data-attr:disabled="$_al_refile" data-class:busy="$_al_refile" data-on:click="@post('/library/preview/refile', {contentType: 'form', selector: '#lib-one'})">Re-file</button>{% endif %}
-    <span class="flex items-center gap-1"><button type="button" data-indicator="_al_credit" data-attr:disabled="$_al_credit" data-class:busy="$_al_credit" data-on:click="@post('/library/preview/credit', {contentType: 'form', selector: '#lib-one'})">Credit artists</button><input class="w-24 px-2 py-1 text-meta" form="lib-one" name="split" placeholder="split on" aria-label="Separator to split artist credits on" title="Split each credit on this, as typed, for artists the library holds nothing else by" autocomplete="off"></span>
-    <button type="button" data-indicator="_al_enrich" data-attr:disabled="$_al_enrich" data-class:busy="$_al_enrich" data-on:click="@post('/library/preview/enrich', {contentType: 'form', selector: '#lib-one'})">Enrich</button>
-    <button type="button" data-indicator="_al_unart" data-attr:disabled="$_al_unart" data-class:busy="$_al_unart" data-on:click="@post('/library/preview/remove-art', {contentType: 'form', selector: '#lib-one'})">Remove embedded art</button>
-    <button type="button" data-on:click="$_al_artform = !$_al_artform">Set art</button>
-    <button type="button" data-indicator="_al_bin" data-attr:disabled="$_al_bin" data-class:busy="$_al_bin" data-on:click="@post('/library/preview/bin', {contentType: 'form', selector: '#lib-one'})">{% if row.spare().is_some() %}Bin this copy{% else %}Bin{% endif %}</button>
+    <button type="button" data-indicator="_{{ slot }}_retag" data-attr:disabled="$_{{ slot }}_retag" data-class:busy="$_{{ slot }}_retag" data-on:click="@get('/library/album/releases', {contentType: 'form', selector: '#{{ slot }}-one'})">Re-tag from MusicBrainz</button>
+    <button type="button" data-indicator="_{{ slot }}_edit" data-attr:disabled="$_{{ slot }}_edit" data-class:busy="$_{{ slot }}_edit" data-on:click="@get('/library/album/edit', {contentType: 'form', selector: '#{{ slot }}-one'})">Edit tags</button>
+    {% if row.refile().is_some() %}<button type="button" data-indicator="_{{ slot }}_refile" data-attr:disabled="$_{{ slot }}_refile" data-class:busy="$_{{ slot }}_refile" data-on:click="@post('/library/preview/refile', {contentType: 'form', selector: '#{{ slot }}-one'})">Re-file</button>{% endif %}
+    <span class="flex items-center gap-1"><button type="button" data-indicator="_{{ slot }}_credit" data-attr:disabled="$_{{ slot }}_credit" data-class:busy="$_{{ slot }}_credit" data-on:click="@post('/library/preview/credit', {contentType: 'form', selector: '#{{ slot }}-one'})">Credit artists</button><input class="w-24 px-2 py-1 text-meta" form="{{ slot }}-one" name="split" placeholder="split on" aria-label="Separator to split artist credits on" title="Split each credit on this, as typed, for artists the library holds nothing else by" autocomplete="off"></span>
+    <button type="button" data-indicator="_{{ slot }}_enrich" data-attr:disabled="$_{{ slot }}_enrich" data-class:busy="$_{{ slot }}_enrich" data-on:click="@post('/library/preview/enrich', {contentType: 'form', selector: '#{{ slot }}-one'})">Enrich</button>
+    <button type="button" data-indicator="_{{ slot }}_unart" data-attr:disabled="$_{{ slot }}_unart" data-class:busy="$_{{ slot }}_unart" data-on:click="@post('/library/preview/remove-art', {contentType: 'form', selector: '#{{ slot }}-one'})">Remove embedded art</button>
+    <button type="button" data-on:click="$_{{ slot }}_artform = !$_{{ slot }}_artform">Set art</button>
+    <button type="button" data-indicator="_{{ slot }}_bin" data-attr:disabled="$_{{ slot }}_bin" data-class:busy="$_{{ slot }}_bin" data-on:click="@post('/library/preview/bin', {contentType: 'form', selector: '#{{ slot }}-one'})">{% if row.spare().is_some() %}Bin this copy{% else %}Bin{% endif %}</button>
   </div>
-  <form id="lib-art" class="my-2.5 flex flex-col gap-2" enctype="multipart/form-data" data-signals="{_al_artform: false}" data-show="$_al_artform">
+  <form id="{{ slot }}-art" class="my-2.5 flex flex-col gap-2" enctype="multipart/form-data" data-signals="{_{{ slot }}_artform: false}" data-show="$_{{ slot }}_artform">
     <input type="hidden" name="path" value="{{ row.album.path }}">
+    <input type="hidden" name="slot" value="{{ slot }}">
     {% include "library_filter.html" %}
     <label class="flex flex-col gap-1 text-meta text-muted">Image URL<input type="url" name="url" placeholder="https://…" autocomplete="off"></label>
     <label class="flex flex-col gap-1 text-meta text-muted">or a JPEG or PNG file<input type="file" name="image" accept="image/jpeg,image/png"></label>
     <div class="flex flex-wrap items-center gap-x-4 gap-y-1">
       <label class="flex items-center gap-1.5 text-muted"><input type="checkbox" name="embed" value="1" checked> Embedded in the files</label>
       <label class="flex items-center gap-1.5 text-muted"><input type="checkbox" name="file" value="1"> Cover file</label>
-      <button type="button" data-indicator="_al_art" data-attr:disabled="$_al_art" data-class:busy="$_al_art" data-on:click="@post('/library/art/preview', {contentType: 'form', selector: '#lib-art'})">Preview</button>
+      <button type="button" data-indicator="_{{ slot }}_art" data-attr:disabled="$_{{ slot }}_art" data-class:busy="$_{{ slot }}_art" data-on:click="@post('/library/art/preview', {contentType: 'form', selector: '#{{ slot }}-art'})">Preview</button>
     </div>
   </form>
-  <div id="lib-retag"></div>
-  <div id="lib-edit"></div>
+  <div id="{{ slot }}-retag"></div>
+  <div id="{{ slot }}-edit"></div>
+  <div id="{{ slot }}-preview"></div>
   <ul class="rows tight mt-2">
   {% for t in tracks %}
     <li>
@@ -59,4 +64,5 @@
     </li>
   {% endfor %}
   </ul>
+</div>
 </div>
