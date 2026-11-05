@@ -251,6 +251,18 @@ impl TabsView {
     fn stale(&self, t: &SearchTab) -> bool {
         stale(t)
     }
+    /// A tab's click handler: its results replace the shown ones in place,
+    /// through the one feed, which drops the request it had open.
+    fn switch(&self, t: &SearchTab) -> String {
+        super::follow(
+            "",
+            format!(
+                "$_url = '/search?tab={}', document.title = el.textContent + ' · slsk', \
+                 document.getElementById('search-feed').dispatchEvent(new Event('more'))",
+                t.id
+            ),
+        )
+    }
     fn about(&self, t: &SearchTab) -> String {
         let quality = if t.lossless {
             "lossless"
