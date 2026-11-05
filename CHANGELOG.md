@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.13.1
+
+### Fixed
+
+- **Opening a library album no longer waits on the whole library.** While imports were running, opening an album could take several seconds: it waited for the duplicates and re-file plan of every album to be worked out again, scanned the whole index twice to find one folder, and read each file three times. It now reads its folder straight from the index, labels the album from the last plan while the next is worked out, reads the files' pictures in parallel, and shows the album before its art.
+
 ## 0.13.0
 
 ### Changed
