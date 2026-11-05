@@ -1,0 +1,1 @@
+- **The web UI uses the shared radiosilence theme.** Its palette, type scale and Geist Mono typeface now come from `@radiosilence/theme`, shared with koan, and it follows the device's light or dark preference instead of being dark only.
