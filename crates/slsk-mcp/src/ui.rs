@@ -133,7 +133,33 @@ pub fn router(app: Arc<App>) -> Router {
             get(|| async { png(include_bytes!("../assets/apple-touch-icon.png")) }),
         )
         .layer(axum::middleware::from_fn(security_headers))
+        .layer(
+            tower_http::compression::CompressionLayer::new().compress_when(Compressible::default()),
+        )
         .with_state(state)
+}
+
+/// Marks an event stream that sends everything at once and ends, so
+/// compressing it delays nothing.
+#[derive(Clone, Copy)]
+struct Finite;
+
+/// What tower-http compresses by default, which leaves out event streams
+/// because an encoder holds back what it has not filled a block with, and a
+/// live stream's updates would wait. A [`Finite`] one is compressed too.
+#[derive(Clone, Default)]
+struct Compressible(tower_http::compression::DefaultPredicate);
+
+impl tower_http::compression::Predicate for Compressible {
+    fn should_compress<B: axum::body::HttpBody>(&self, response: &http::Response<B>) -> bool {
+        self.0.should_compress(response) || response.extensions().get::<Finite>().is_some()
+    }
+}
+
+/// `response`, an event stream that ends once sent, marked to be compressed.
+fn finite(mut response: Response) -> Response {
+    response.extensions_mut().insert(Finite);
+    response
 }
 
 const APP_CSS: &str = include_str!("../assets/app.css");
@@ -227,7 +253,7 @@ fn sse(
 }
 
 fn one(html: String) -> Response {
-    sse(futures_util::stream::once(async move { Ok(patch(&html)) })).into_response()
+    finite(sse(futures_util::stream::once(async move { Ok(patch(&html)) })).into_response())
 }
 
 /// Elements added at the end of the one `selector` names: rows streamed
@@ -257,7 +283,7 @@ fn insert(selector: &str, mode: &str, html: &str) -> Event {
 
 /// Several events in one response: fragments, then signals to reset.
 fn many(events: Vec<Event>) -> Response {
-    sse(futures_util::stream::iter(events.into_iter().map(Ok))).into_response()
+    finite(sse(futures_util::stream::iter(events.into_iter().map(Ok))).into_response())
 }
 
 /// Set signals from the server, as JSON: how a form is cleared once what it
@@ -573,7 +599,7 @@ async fn render_page(
         }
         .render()
         .unwrap_or_default(),
-        "search" => search::page(&s.app, search_tab.as_ref()).await,
+        "search" => search::page(&s.app, search_tab.as_ref(), &query(uri)).await,
         "uploads" => uploads_html(&s.app, PAGE).await,
         "wishlist" => wishlist::page(&s.app).await,
         "library" => library::page(s, &filter),
@@ -1435,7 +1461,7 @@ async fn stream(
                         Err(_) => String::new(),
                     },
                     "uploads" => uploads_html(&app, shown.history).await,
-                    "search" => search::tabs_html(&app, shown.tab.parse().ok()).await,
+                    "search" => search::tabs_html(&app, Uuid::parse_str(&shown.tab).ok()).await,
                     _ => String::new(),
                 },
                 up_count_html(&app),
