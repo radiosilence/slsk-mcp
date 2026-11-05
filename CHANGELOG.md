@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.11.0
+
+### Added
+
+- **Search tabs.** Each search opens a tab that keeps its best results across reloads and restarts; results are marked stale after ten minutes with an option to search again, and tabs can be pinned and closed. "Search several at once" takes one search per line and opens a tab for each.
+
+### Changed
+
+- **The Albums page is called Downloads.** It lists downloads and imports in progress, which the old name did not say.
+- **Searches are paced faster.** After a burst of four, searches go out every three seconds instead of four, and `SEARCHES_PER_HOUR` defaults to 600 instead of 200, so a batch of searches finishes sooner while the first minute stays below the rate that drew a flood ban.
+
 ## 0.10.2
 
 ### Changed
