@@ -1,5 +1,5 @@
 <div id="job-page" class="grid min-w-0 gap-4">
-  <p class="m-0 text-meta"><a href="/">← Albums</a></p>
+  <p class="m-0 text-meta"><a href="/">← Downloads</a></p>
   {% match card %}{% when Some with (c) %}{{ c|safe }}{% when None %}<p class="m-0 text-meta text-muted">This job is no longer listed. What happened to it is kept below.</p>{% endmatch %}
   {{ sources|safe }}
   {% if let Some(log) = import_log %}

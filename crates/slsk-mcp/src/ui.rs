@@ -342,7 +342,7 @@ fn percent(done: u64, total: u64) -> u64 {
 /// The pages, in the order the nav lists them: name, address and label.
 const PAGES: &[(&str, &str, &str)] = &[
     ("search", "/search", "Search"),
-    ("albums", "/", "Albums"),
+    ("albums", "/", "Downloads"),
     ("uploads", "/uploads", "Uploads"),
     ("wishlist", "/wishlist", "Wishlist"),
     ("library", "/library", "Library"),

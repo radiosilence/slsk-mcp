@@ -139,7 +139,7 @@ impl Config {
             upload_slots: num("UPLOAD_SLOTS", 500)?,
             upload_limit: num("UPLOAD_LIMIT", 0)?,
             download_limit: num("DOWNLOAD_LIMIT", 0)?,
-            searches_per_hour: num("SEARCHES_PER_HOUR", 200)?,
+            searches_per_hour: num("SEARCHES_PER_HOUR", 600)?,
             max_inbound_connections: num("MAX_INBOUND_CONNECTIONS", 512)?,
             max_inbound_per_address: num("MAX_INBOUND_PER_ADDRESS", 32)?,
             internal_addr: or("INTERNAL_ADDR", "0.0.0.0:8081"),

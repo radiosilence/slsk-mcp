@@ -1,11 +1,22 @@
 <section class="min-w-0">
   {% let grab = "'/grab'" %}
   {% include "finder.html" %}
-  {% if q.is_empty() %}
-  <div id="results"><p class="text-meta text-muted">Search the network for an album: artist and title words work best. Results from the same words in the last ten minutes are reused, so reopening a search costs nothing.</p></div>
-  {% else %}
-  {# One request at a time draws the results for the address: showing more moves the address and reopens it, and the server answers from the search it already ran. #}
+  <details class="mt-2">
+    <summary class="text-meta text-muted">Search several at once</summary>
+    <form class="mt-2 grid gap-2" action="/search">
+      <textarea name="q" rows="6" placeholder="One search per line: artist album" aria-label="Searches, one per line" autocomplete="off" required></textarea>
+      <div class="flex flex-wrap items-center gap-2">
+        <label class="flex items-center gap-1.5 text-muted"><input type="checkbox" name="lossless" value="true"{% if lossless %} checked{% endif %}> lossless</label>
+        <button class="flex-auto" type="submit">Search all</button>
+      </div>
+    </form>
+  </details>
+  {{ tabs|safe }}
+  {% if let Some(tab) = tab %}
+  {# One request at a time draws the results for the address: showing more moves the address and reopens it, and the server answers from what the tab kept or the search still running. #}
   <div id="search-feed" hidden data-init="@get($_url, {openWhenHidden: true})" data-on:more="@get($_url, {openWhenHidden: true})"></div>
-  <div id="results"><p class="text-meta text-muted">Searching “{{ q }}”…</p></div>
+  <div id="results"><p class="text-meta text-muted">Loading “{{ tab.query }}”…</p></div>
+  {% else %}
+  <div id="results"><p class="text-meta text-muted">Search the network for an album: artist and title words work best. Each search opens a tab that keeps its results; after ten minutes they are marked stale and can be searched again. Pinned tabs stay when the others are closed.</p></div>
   {% endif %}
 </section>

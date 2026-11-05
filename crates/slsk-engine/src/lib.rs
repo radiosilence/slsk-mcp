@@ -94,7 +94,7 @@ impl EngineConfig {
             max_inbound_per_address: 32,
             max_queued_files_per_user: 2000,
             max_queued_bytes_per_user: 50 << 30,
-            searches_per_hour: 200,
+            searches_per_hour: 600,
             description: String::new(),
         }
     }
@@ -222,8 +222,8 @@ pub(crate) struct Inner {
 /// Spacing for searches: a short burst goes out quickly, then one every
 /// [`SEARCH_GAP`]. The server bans an account that searches in floods (two
 /// dozen grabs inside a minute did it), however many callers want one at
-/// the same moment; a full burst followed by the steady rate stays near
-/// twenty in the first minute.
+/// the same moment; a full burst followed by the steady rate stays at
+/// twenty-two in the first minute and twenty a minute after.
 #[derive(Debug)]
 struct SearchPace {
     /// When the steady rate would next allow a search with no burst left.
@@ -233,11 +233,11 @@ struct SearchPace {
 }
 
 /// The steady rate, once the burst is spent.
-const SEARCH_GAP: Duration = Duration::from_secs(4);
-/// The burst allowance, in steady-rate gaps. From idle, six searches go out
-/// at [`SEARCH_BURST_GAP`]: five from the allowance and one the steady rate
+const SEARCH_GAP: Duration = Duration::from_secs(3);
+/// The burst allowance, in steady-rate gaps. From idle, four searches go out
+/// at [`SEARCH_BURST_GAP`]: three from the allowance and one the steady rate
 /// has refilled by then.
-const SEARCH_BURST: u32 = 5;
+const SEARCH_BURST: u32 = 3;
 const SEARCH_BURST_GAP: Duration = Duration::from_secs(1);
 
 impl SearchPace {
@@ -746,13 +746,13 @@ mod tests {
         let slots: Vec<u64> = (0..8)
             .map(|_| (pace.reserve(start) - start).as_secs())
             .collect();
-        assert_eq!(slots, [0, 1, 2, 3, 4, 5, 8, 12]);
+        assert_eq!(slots, [0, 1, 2, 3, 6, 9, 12, 15]);
         let first_minute = (0..)
             .map(|_| pace.reserve(start) - start)
             .take_while(|d| *d < Duration::from_secs(60))
             .count()
             + 8;
-        assert_eq!(first_minute, 19);
+        assert_eq!(first_minute, 22);
     }
 
     #[tokio::test(start_paused = true)]
@@ -766,6 +766,6 @@ mod tests {
         let slots: Vec<u64> = (0..5)
             .map(|_| (pace.reserve(later) - later).as_secs())
             .collect();
-        assert_eq!(slots, [0, 1, 2, 3, 4]);
+        assert_eq!(slots, [0, 1, 2, 3, 6]);
     }
 }

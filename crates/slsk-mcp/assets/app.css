@@ -3,6 +3,7 @@
   @supports (((-webkit-hyphens: none)) and (not (margin-trim: inline))) or ((-moz-orient: inline) and (not (color: rgb(from red r g b)))) {
     *, :before, :after, ::backdrop {
       --tw-border-style: solid;
+      --tw-leading: initial;
       --tw-font-weight: initial;
       --tw-shadow: 0 0 #0000;
       --tw-shadow-color: initial;
@@ -668,6 +669,10 @@
     margin-block: calc(var(--spacing) * 2.5);
   }
 
+  .ms-1 {
+    margin-inline-start: var(--spacing);
+  }
+
   .mt-0\.5 {
     margin-top: calc(var(--spacing) * .5);
   }
@@ -686,6 +691,10 @@
 
   .mt-2\.5 {
     margin-top: calc(var(--spacing) * 2.5);
+  }
+
+  .mt-3 {
+    margin-top: calc(var(--spacing) * 3);
   }
 
   .mt-5 {
@@ -762,8 +771,16 @@
     width: 100%;
   }
 
+  .max-w-\[18em\] {
+    max-width: 18em;
+  }
+
   .max-w-\[1100px\] {
     max-width: 1100px;
+  }
+
+  .max-w-full {
+    max-width: 100%;
   }
 
   .min-w-0 {
@@ -960,6 +977,10 @@
     border-radius: var(--radius-lg);
   }
 
+  .rounded-md {
+    border-radius: var(--radius-md);
+  }
+
   .rounded-sm {
     border-radius: var(--radius-sm);
   }
@@ -967,6 +988,11 @@
   .border {
     border-style: var(--tw-border-style);
     border-width: 1px;
+  }
+
+  .border-0 {
+    border-style: var(--tw-border-style);
+    border-width: 0;
   }
 
   .border-b {
@@ -1065,6 +1091,10 @@
     padding: calc(var(--spacing) * 4);
   }
 
+  .px-1 {
+    padding-inline: var(--spacing);
+  }
+
   .px-1\.5 {
     padding-inline: calc(var(--spacing) * 1.5);
   }
@@ -1119,6 +1149,22 @@
 
   .py-px {
     padding-block: 1px;
+  }
+
+  .ps-1 {
+    padding-inline-start: var(--spacing);
+  }
+
+  .ps-2\.5 {
+    padding-inline-start: calc(var(--spacing) * 2.5);
+  }
+
+  .pe-1 {
+    padding-inline-end: var(--spacing);
+  }
+
+  .pe-2 {
+    padding-inline-end: calc(var(--spacing) * 2);
   }
 
   .pt-1 {
@@ -1179,6 +1225,11 @@
 
   .text-meta {
     font-size: var(--text-meta);
+  }
+
+  .leading-none {
+    --tw-leading: 1;
+    line-height: 1;
   }
 
   .font-normal {
@@ -1243,6 +1294,10 @@
     -webkit-text-decoration-color: var(--rule);
     -webkit-text-decoration-color: var(--rule);
     text-decoration-color: var(--rule);
+  }
+
+  .opacity-50 {
+    opacity: .5;
   }
 
   .shadow {
@@ -1329,6 +1384,10 @@
     .hover\:no-underline:hover {
       text-decoration-line: none;
     }
+
+    .hover\:opacity-100:hover {
+      opacity: 1;
+    }
   }
 
   :is(.\*\:nth-2\:w-\[4\.5em\] > *):nth-child(2) {
@@ -1411,6 +1470,11 @@
   syntax: "*";
   inherits: false;
   initial-value: solid;
+}
+
+@property --tw-leading {
+  syntax: "*";
+  inherits: false
 }
 
 @property --tw-font-weight {
