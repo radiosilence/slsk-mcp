@@ -594,7 +594,7 @@ impl ArtView {
     /// files carry it.
     fn embedded(&self) -> Vec<(String, usize)> {
         let mut out: Vec<(String, usize)> = Vec::new();
-        for f in self.art.iter().flat_map(|a| &a.files) {
+        for f in &self.art.files {
             for p in &f.pictures {
                 let desc = picture(p);
                 match out.iter_mut().find(|(d, _)| *d == desc) {
@@ -607,11 +607,7 @@ impl ArtView {
     }
     /// Files whose pictures could not be read.
     fn unreadable(&self) -> usize {
-        self.art
-            .iter()
-            .flat_map(|a| &a.files)
-            .filter(|f| f.error.is_some())
-            .count()
+        self.art.files.iter().filter(|f| f.error.is_some()).count()
     }
     fn cover_file(&self, c: &crate::art::CoverFile) -> String {
         let size = match (c.width, c.height) {
