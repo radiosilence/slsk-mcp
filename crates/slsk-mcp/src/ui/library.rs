@@ -2149,7 +2149,7 @@ async fn apply(State(s): State<UiState>, Path(action): Path<String>, body: Bytes
     if paths.is_empty() {
         return failed(&anyhow::anyhow!("nothing ticked"));
     }
-    let slot = slot_in(&form);
+    let from = slot_in(&form);
     let all = super::field(&form, "all").is_some();
     let ticked = paths.clone();
     // What the preview attached to each album, by its key.
@@ -2221,7 +2221,7 @@ async fn apply(State(s): State<UiState>, Path(action): Path<String>, body: Bytes
     });
     sse(async_stream::stream! {
         yield Ok(patch(&run_html(&s)));
-        yield Ok(patch(&format!(r#"<div id="{slot}-preview"></div>"#)));
+        yield Ok(patch(&format!(r#"<div id="{from}-preview"></div>"#)));
         let Ok((moved, done, failed)) = rx.await else {
             return;
         };
@@ -2233,7 +2233,7 @@ async fn apply(State(s): State<UiState>, Path(action): Path<String>, body: Bytes
             yield Ok(patch(&list_html(&s, &filter).await));
             yield Ok(unselected());
         } else {
-            for e in changed_rows(&s, &filter, &ticked, &moved, &slot).await {
+            for e in changed_rows(&s, &filter, &ticked, &moved, &from).await {
                 yield Ok(e);
             }
         }
