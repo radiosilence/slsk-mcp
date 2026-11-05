@@ -9,7 +9,9 @@
 @import "tailwindcss" source(none);
 @source "../templates";
 @source "../src";
-@import "./theme.css";
+@import "@radiosilence/theme";
+
+@custom-variant light (@media (prefers-color-scheme: light));
 
 @theme {
   --animate-busy: busy 0.7s linear infinite;
@@ -176,6 +178,6 @@
 
   /* Errors and confirmations float over the page, so one is seen wherever the tap was. */
   .toast {
-    @apply fixed inset-x-4 bottom-4 z-10 rounded-lg border bg-surface px-3.5 py-3 shadow-[0_6px_24px_rgba(0,0,0,.35)];
+    @apply fixed inset-x-4 bottom-4 z-10 rounded-lg border bg-surface px-3.5 py-3 shadow-[0_6px_24px_rgba(0,0,0,.35)] light:shadow-[0_6px_24px_rgba(0,0,0,.12)];
   }
 }

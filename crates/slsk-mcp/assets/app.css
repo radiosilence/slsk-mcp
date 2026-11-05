@@ -41,8 +41,6 @@
 
 @layer theme {
   :root, :host {
-    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", "Noto Sans", Arial,
-    sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
     --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
     monospace;
     --spacing: .25rem;
@@ -55,7 +53,6 @@
     --radius-lg: .5rem;
     --default-transition-duration: .15s;
     --default-transition-timing-function: cubic-bezier(.4, 0, .2, 1);
-    --default-font-family: var(--font-sans);
     --default-mono-font-family: var(--font-mono);
     --text-fine: 12px;
     --text-meta: 13px;
@@ -87,11 +84,11 @@
   html, :host {
     -webkit-text-size-adjust: 100%;
     tab-size: 4;
-    line-height: 1.5;
-    font-family: var(--default-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", "Noto Sans", Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji");
     font-feature-settings: var(--default-font-feature-settings, normal);
     font-variation-settings: var(--default-font-variation-settings, normal);
     -webkit-tap-highlight-color: transparent;
+    font-family: Geist Mono, ui-monospace, monospace;
+    line-height: 1.5;
   }
 
   hr {
@@ -597,6 +594,13 @@
     box-shadow: var(--tw-inset-shadow), var(--tw-inset-ring-shadow), var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow);
     border-width: 1px;
     position: fixed;
+  }
+
+  @media (prefers-color-scheme: light) {
+    .toast {
+      --tw-shadow: 0 6px 24px var(--tw-shadow-color, #0000001f);
+      box-shadow: var(--tw-inset-shadow), var(--tw-inset-ring-shadow), var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow);
+    }
   }
 }
 
@@ -1422,6 +1426,13 @@
     }
   }
 
+  @media (prefers-color-scheme: light) {
+    .light\:shadow-\[0_-6px_24px_rgba\(0\,0\,0\,\.1\)\] {
+      --tw-shadow: 0 -6px 24px var(--tw-shadow-color, #0000001a);
+      box-shadow: var(--tw-inset-shadow), var(--tw-inset-ring-shadow), var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow);
+    }
+  }
+
   .\[\&_input\:not\(\[type\=hidden\]\)\]\:w-full input:not([type="hidden"]) {
     width: 100%;
   }
@@ -1452,18 +1463,41 @@
   }
 }
 
+@font-face {
+  font-family: Geist Mono;
+  src: url("geist-mono.woff2") format("woff2-variations");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
-  color-scheme: dark;
-  --bg: #101214;
-  --surface: #181b1f;
-  --rule: #262a30;
-  --hover: #30353c;
-  --ink: #e6e6e6;
+  color-scheme: light dark;
+  --bg: #1e1e1e;
+  --surface: #2a2a2a;
+  --rule: #383838;
+  --hover: #4d4d4d;
+  --ink: #ccc;
   --strong: #fff;
-  --muted: #8b9099;
+  --muted: #919191;
   --brand: #7dd3a7;
   --bad: #ef6b73;
   --warn: #e6b450;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #fff;
+    --surface: #f2f2f2;
+    --rule: #e0e0e0;
+    --hover: #c4c4c4;
+    --ink: #333;
+    --strong: #111;
+    --muted: #666;
+    --brand: #1f7a50;
+    --bad: #c43f3f;
+    --warn: #8a6100;
+  }
 }
 
 @property --tw-border-style {

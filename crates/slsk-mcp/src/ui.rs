@@ -121,6 +121,10 @@ pub fn router(app: Arc<App>) -> Router {
             get(|q: RawQuery| async { asset(APP_CSS, "text/css; charset=utf-8", q) }),
         )
         .route(
+            "/assets/geist-mono.woff2",
+            get(|| async { font(GEIST_MONO) }),
+        )
+        .route(
             "/assets/icon-32.png",
             get(|| async { png(include_bytes!("../assets/icon-32.png")) }),
         )
@@ -164,6 +168,8 @@ fn finite(mut response: Response) -> Response {
 
 const APP_CSS: &str = include_str!("../assets/app.css");
 const DATASTAR_JS: &str = include_str!("../assets/datastar.js");
+/// The typeface @radiosilence/theme sets; app.css names it by a URL relative to itself.
+const GEIST_MONO: &[u8] = include_bytes!("../assets/geist-mono.woff2");
 
 /// `path` with a hash of `body`, the asset served there, so a page from a
 /// new build fetches its own stylesheet and script rather than a cached copy
@@ -197,6 +203,17 @@ fn asset(body: &'static str, kind: &'static str, query: RawQuery) -> Response {
         body,
     )
         .into_response()
+}
+
+/// Public like the stylesheet that names it, so the sign-in page has it too. Only a new build changes it.
+fn font(bytes: &'static [u8]) -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "font/woff2"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        bytes,
+    )
 }
 
 /// Public like the other assets: a browser asks for the icon before anyone signs in.

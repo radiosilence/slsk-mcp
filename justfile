@@ -20,14 +20,29 @@ fast:
     git diff --quiet Cargo.lock || { echo 'Cargo.lock has uncommitted changes'; exit 1; }
     cargo fmt --all -- --check
 
-# Fail when the committed stylesheet is not what its sources compile to.
-css-fresh:
+# Fail when the committed stylesheet or typeface is not what the sources and the installed theme give.
+css-fresh: theme
     #!/usr/bin/env bash
     set -euo pipefail
     css=$(mktemp)
     trap 'rm -f "$css"' EXIT
     tailwindcss --optimize --input crates/slsk-mcp/styles/app.css --output "$css"
     cmp -s "$css" crates/slsk-mcp/assets/app.css || { echo 'assets/app.css is stale: run `just css`'; exit 1; }
+    cmp -s node_modules/@radiosilence/theme/geist-mono.woff2 crates/slsk-mcp/assets/geist-mono.woff2 || { echo 'assets/geist-mono.woff2 is stale: run `just css`'; exit 1; }
+
+# Install the shared theme (@radiosilence/theme) the stylesheet imports, writing the registry token first if missing.
+theme:
+    @test -s .npmrc.auth || just auth
+    aube install --frozen-lockfile
+
+# Write the GitHub Packages token .npmrc reads: GH_TOKEN in CI, the gh login otherwise. A token in .npmrc itself would
+# be an ${ENV} aube refuses to expand in a project's auth settings.
+auth:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    token="${GH_TOKEN:-$(gh auth token 2>/dev/null || true)}"
+    [ -n "$token" ] || { echo "no GitHub token: run 'gh auth login', or set GH_TOKEN" >&2; exit 1; }
+    printf '//npm.pkg.github.com/:_authToken=%s\n' "$token" > .npmrc.auth
 
 # Fail unless the crate, the Pulumi package and the image it deploys share one version.
 versions:
@@ -41,10 +56,12 @@ versions:
         exit 1
     fi
 
-# Compile the web UI's stylesheet from crates/slsk-mcp/styles/. The output is committed because
-# the server embeds it; CI fails a build where it is stale.
-css:
+# Compile the web UI's stylesheet from crates/slsk-mcp/styles/ and copy the theme's typeface beside it, where the
+# stylesheet's relative font URL points. Both are committed because the server embeds them; CI fails a build where
+# either is stale.
+css: theme
     tailwindcss --optimize --input crates/slsk-mcp/styles/app.css --output crates/slsk-mcp/assets/app.css
+    cp node_modules/@radiosilence/theme/geist-mono.woff2 crates/slsk-mcp/assets/geist-mono.woff2
 
 # Format
 fmt:

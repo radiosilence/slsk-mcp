@@ -1,2 +1,5 @@
 /target
 .env
+/node_modules
+# Written by `just auth`; holds a GitHub Packages token.
+/.npmrc.auth

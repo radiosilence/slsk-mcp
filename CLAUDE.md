@@ -31,5 +31,6 @@ just check   # what CI checks bar the audit and release builds: Cargo.lock clean
              # the Pulumi package's typecheck, tests and build, a stale assets/app.css, changelog fragments, version agreement, actionlint
 just fast    # what the pre-push hook runs
 just fmt
-just css     # recompile assets/app.css after changing classes in templates or src, or styles/; CI fails if it is stale
+just css     # install @radiosilence/theme, recompile assets/app.css and copy its font after changing classes in templates or src,
+             # styles/ or the theme version; CI fails if either is stale
 ```
