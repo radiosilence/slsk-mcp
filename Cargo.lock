@@ -3105,6 +3105,7 @@ dependencies = [
  "axum",
  "axum-extra",
  "base64 0.23.1",
+ "brotli",
  "bytes",
  "chacha20poly1305",
  "chrono",
