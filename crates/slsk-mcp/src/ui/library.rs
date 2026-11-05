@@ -750,18 +750,17 @@ async fn art_html(s: &UiState, path: &str) -> String {
     }
 }
 
-/// One album opened in its row, then its art.
+/// One album opened in its row, then its art. Left uncompressed, since a
+/// compressed stream would hold the album back until its art is read.
 async fn album(
     State(s): State<UiState>,
     Query(AlbumQuery { filter, path }): Query<AlbumQuery>,
 ) -> Response {
-    super::finite(
-        sse(async_stream::stream! {
-            yield Ok(patch(&album_html(&s, &filter, &path).await));
-            yield Ok(patch(&art_html(&s, &path).await));
-        })
-        .into_response(),
-    )
+    sse(async_stream::stream! {
+        yield Ok(patch(&album_html(&s, &filter, &path).await));
+        yield Ok(patch(&art_html(&s, &path).await));
+    })
+    .into_response()
 }
 
 /// The address of the album's cover, when it has one, versioned by the
