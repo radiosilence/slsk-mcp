@@ -573,7 +573,6 @@ async fn render_page(
         "_libsince": filter.since,
         "_libfrom": filter.from,
         "_libshow": filter.show,
-        "_libalbum": filter.album,
     })
     .to_string();
     let (mut status, mut heading) = (StatusCode::OK, search_tab.as_ref().map(|t| t.query.clone()));

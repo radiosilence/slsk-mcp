@@ -150,9 +150,30 @@ pub(super) struct Filter {
     /// Empty for every album, `dups`, `formats` or `moves`.
     #[serde(deserialize_with = "trimmed")]
     pub(super) show: String,
-    /// The album open in detail, by path; it does not narrow the list.
-    #[serde(deserialize_with = "trimmed")]
-    pub(super) album: String,
+}
+
+/// The albums open in detail, by path, as the address lists them: each
+/// opens in its own row, so several can be worked on at once.
+pub(super) fn open_albums(uri: &http::Uri) -> Vec<String> {
+    url::form_urlencoded::parse(uri.query().unwrap_or_default().as_bytes())
+        .filter(|(k, v)| k == "album" && !v.is_empty())
+        .map(|(_, v)| v.into_owned())
+        .collect()
+}
+
+/// The element an album's detail opens into, in its row; everything the
+/// detail holds is named after it.
+pub(super) fn slot_of(path: &str) -> String {
+    format!("a{}", key(path))
+}
+
+/// The slot a form names, or `lib` (the preview above the list) when it
+/// names none or something that could not be one.
+fn slot_in(form: &[(String, String)]) -> String {
+    super::field(form, "slot")
+        .filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric()))
+        .unwrap_or("lib")
+        .to_string()
 }
 
 fn trimmed<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
@@ -223,7 +244,7 @@ impl Filter {
         super::place_url("/library", &self.params())
     }
 
-    /// The filter as address parameters, the open album included.
+    /// The filter as address parameters.
     fn params(&self) -> Vec<(&str, &str)> {
         let from = if self.since == "date" {
             self.from.as_str()
@@ -235,21 +256,7 @@ impl Filter {
             ("since", &self.since),
             ("from", from),
             ("show", &self.show),
-            ("album", &self.album),
         ]
-    }
-
-    /// The same list with `path` open in detail, and the address that
-    /// draws just that album.
-    fn opening(&self, path: &str) -> (String, String) {
-        let open = Self {
-            album: path.to_string(),
-            ..self.clone()
-        };
-        (
-            open.url(),
-            super::place_url("/library/album", &open.params()),
-        )
     }
 }
 
@@ -436,8 +443,19 @@ impl RowsView {
     fn imported(&self, a: &LibraryAlbum) -> String {
         imported(a.added)
     }
-    fn opening(&self, path: &str) -> (String, String) {
-        self.filter.opening(path)
+    fn slot(&self, path: &str) -> String {
+        slot_of(path)
+    }
+    /// The address that opens the album, which the click completes with
+    /// the list's own address.
+    fn opening(&self, path: &str) -> String {
+        super::place_url("/library/album", &[("path", path)])
+    }
+    /// The page with this album open, for a link opened in a new tab.
+    fn href(&self, path: &str) -> String {
+        let mut params = self.filter.params();
+        params.push(("album", path));
+        super::place_url("/library", &params)
     }
 }
 
@@ -495,12 +513,6 @@ fn unselected() -> axum::response::sse::Event {
     super::signals(r#"{"_sel": 0, "_spares": 0}"#)
 }
 
-/// Which album is open in detail, for every form that acts on the page to
-/// send: the list is not redrawn when one opens or closes.
-fn opened(path: &str) -> axum::response::sse::Event {
-    super::signals(&serde_json::json!({ "_libalbum": path }).to_string())
-}
-
 #[derive(Template)]
 #[template(path = "pages/library.html")]
 struct Page {
@@ -518,18 +530,27 @@ pub(super) fn page(s: &UiState, filter: &Filter) -> String {
     .unwrap_or_default()
 }
 
-/// The list the address describes.
+/// The list the address describes, with the albums it opens open in their
+/// rows (those on the first page; the rest wait until shown and clicked).
 async fn view(State(s): State<UiState>, uri: http::Uri) -> Response {
     let filter: Filter = super::query(&uri);
+    let open = open_albums(&uri);
     super::finite(sse(async_stream::stream! {
         yield Ok(patch(r#"<div id="library"><p class="text-meta text-muted">Reading the library…</p></div>"#));
         yield Ok(patch(&list_html(&s, &filter).await));
         yield Ok(unselected());
-        if !filter.album.is_empty() {
-            yield Ok(patch(&album_html(&s, &filter).await));
+        if !open.is_empty() {
+            let shown: HashSet<String> = listing(&s, &filter)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .take(SHOWN)
+                .map(|r| r.album.path)
+                .collect();
+            for path in open.iter().filter(|p| shown.contains(*p)) {
+                yield Ok(patch(&album_html(&s, &filter, path).await));
+            }
         }
-        yield Ok(opened(&filter.album));
-        yield Ok(super::place(&filter.url()));
     })
     .into_response())
 }
@@ -540,15 +561,7 @@ async fn find(State(s): State<UiState>, body: Bytes) -> Response {
         patch(&list_html(&s, &filter).await),
         unselected(),
         patch(r#"<div id="lib-preview"></div>"#),
-        patch(r#"<div id="lib-album"></div>"#),
-        opened(""),
-        super::place(
-            &Filter {
-                album: String::new(),
-                ..filter
-            }
-            .url(),
-        ),
+        super::place(&filter.url()),
     ])
 }
 
@@ -557,6 +570,8 @@ async fn find(State(s): State<UiState>, body: Bytes) -> Response {
 struct AlbumView<'a> {
     root: &'a str,
     filter: &'a Filter,
+    /// The element in its row it opens into.
+    slot: String,
     row: &'a Row,
     tracks: Vec<sift::meta::Track>,
     art: Option<AlbumArt>,
@@ -600,14 +615,6 @@ impl AlbumView<'_> {
     }
     fn title(&self) -> String {
         title_of(&self.row.album)
-    }
-    /// The address with no album open.
-    fn closed(&self) -> String {
-        Filter {
-            album: String::new(),
-            ..self.filter.clone()
-        }
-        .url()
     }
     fn file(&self, t: &sift::meta::Track) -> String {
         t.path
@@ -679,12 +686,13 @@ impl AlbumView<'_> {
     }
 }
 
-/// The album `filter.album` names, open: its files and their tags, where
+/// The album at `path`, open in its row: its files and their tags, where
 /// the rules file it, and what can be done to it.
-async fn album_html(s: &UiState, filter: &Filter) -> String {
+async fn album_html(s: &UiState, filter: &Filter, path: &str) -> String {
     let root = s.app.library.root().to_string_lossy().into_owned();
+    let slot = slot_of(path);
     let result = async {
-        let row = rows(s, &by_path([filter.album.as_str()]))
+        let row = rows(s, &by_path([path]))
             .await?
             .into_iter()
             .next()
@@ -697,6 +705,7 @@ async fn album_html(s: &UiState, filter: &Filter) -> String {
         Ok((row, tracks)) => AlbumView {
             root: &root,
             filter,
+            slot,
             row: &row,
             art: s.app.library.art(&row.album.path).await.ok(),
             cover: cover_url(&s.app.library, &row.album.path).await,
@@ -705,21 +714,18 @@ async fn album_html(s: &UiState, filter: &Filter) -> String {
         .render()
         .unwrap_or_default(),
         Err(e) => format!(
-            r#"<div id="lib-album" class="card"><p class="text-meta text-bad wrap-anywhere">{}</p></div>"#,
+            r#"<div id="{slot}" class="basis-full empty:hidden"><p class="mt-2 text-meta text-bad wrap-anywhere">{}</p></div>"#,
             escape(&format!("{e:#}"))
         ),
     }
 }
 
-/// One album open in detail, above the list.
-async fn album(State(s): State<UiState>, uri: http::Uri) -> Response {
-    let filter: Filter = super::query(&uri);
-    super::many(vec![
-        patch(&album_html(&s, &filter).await),
-        patch(r#"<div id="lib-preview"></div>"#),
-        opened(&filter.album),
-        super::place(&filter.url()),
-    ])
+/// One album opened in its row.
+async fn album(
+    State(s): State<UiState>,
+    Query(AlbumQuery { filter, path }): Query<AlbumQuery>,
+) -> Response {
+    super::one(album_html(&s, &filter, &path).await)
 }
 
 /// The address of the album's cover, when it has one, versioned by the
@@ -890,6 +896,7 @@ fn picture(p: &crate::art::Picture) -> String {
 #[template(path = "library_releases.html")]
 struct ReleasesView<'a> {
     path: &'a str,
+    slot: String,
     filter: &'a Filter,
     candidates: Vec<sift::Candidate>,
     review: Option<String>,
@@ -903,12 +910,13 @@ async fn releases(
     State(s): State<UiState>,
     Query(AlbumQuery { filter, path }): Query<AlbumQuery>,
 ) -> Response {
+    let slot = slot_of(&path);
     sse(async_stream::stream! {
-        yield Ok(patch(r#"<div id="lib-retag"><p class="text-meta text-muted">Asking for releases that fit these files…</p></div>"#));
+        yield Ok(patch(&format!(r#"<div id="{slot}-retag"><p class="text-meta text-muted">Asking for releases that fit these files…</p></div>"#)));
         let discogs = s.app.jobs.discogs();
         let view = match s.app.library.rematch(&path).await {
-            Ok(r) => ReleasesView { path: &path, filter: &filter, candidates: r.candidates, review: r.review, error: None, discogs },
-            Err(e) => ReleasesView { path: &path, filter: &filter, candidates: Vec::new(), review: None, error: Some(format!("{e:#}")), discogs },
+            Ok(r) => ReleasesView { path: &path, slot, filter: &filter, candidates: r.candidates, review: r.review, error: None, discogs },
+            Err(e) => ReleasesView { path: &path, slot, filter: &filter, candidates: Vec::new(), review: None, error: Some(format!("{e:#}")), discogs },
         };
         yield Ok(patch(&view.render().unwrap_or_default()));
     })
@@ -919,6 +927,7 @@ async fn releases(
 #[template(path = "library_edit.html")]
 struct EditView<'a> {
     path: &'a str,
+    slot: String,
     filter: &'a Filter,
     tracks: Vec<sift::meta::Track>,
 }
@@ -949,6 +958,7 @@ async fn edit_form(
     match s.app.library.tracks(&path).await {
         Ok(tracks) => super::one(
             EditView {
+                slot: slot_of(&path),
                 path: &path,
                 filter: &filter,
                 tracks,
@@ -1331,6 +1341,10 @@ impl Lyric {
 struct PlanView<'a> {
     action: Action,
     filter: &'a Filter,
+    /// Where it is drawn: `lib`, or an album's slot.
+    slot: &'a str,
+    /// Every album the filter admits was selected.
+    all: bool,
     selected: usize,
     shown: usize,
     /// The separator credits are split on, carried to applying.
@@ -1342,6 +1356,7 @@ struct PlanView<'a> {
 struct PlannedView<'a> {
     p: &'a Planned,
     root: &'a str,
+    slot: &'a str,
 }
 
 impl PlannedView<'_> {
@@ -1694,11 +1709,13 @@ async fn previewed(s: UiState, action: Action, form: Vec<(String, String)>) -> R
         Ok(a) => a,
         Err(e) => return failed(&e),
     };
+    let slot = slot_in(&form);
+    let all = super::field(&form, "all").is_some();
     sse(async_stream::stream! {
         let selected = rows.len();
         let shown = action.cap().map_or(selected, |c| selected.min(c));
         let split = super::field(&form, "split").unwrap_or_default().trim().to_string();
-        let shell = PlanView { action, filter: &filter, selected, shown, split: &split };
+        let shell = PlanView { action, filter: &filter, slot: &slot, all, selected, shown, split: &split };
         yield Ok(patch(&shell.render().unwrap_or_default()));
         let known = if matches!(action, Action::Credit | Action::Enrich) {
             match s.app.library.known_artists().await {
@@ -1717,7 +1734,7 @@ async fn previewed(s: UiState, action: Action, form: Vec<(String, String)>) -> R
         let mut filed: HashMap<String, String> = HashMap::new();
         for (i, row) in rows.iter().take(shown).enumerate() {
             yield Ok(patch(&format!(
-                r#"<p id="pv-progress" class="text-meta text-muted">Working out {} of {shown}: {}</p>"#,
+                r#"<p id="{slot}-pv-progress" class="text-meta text-muted">Working out {} of {shown}: {}</p>"#,
                 i + 1,
                 escape(&title_of(&row.album)),
             )));
@@ -1735,24 +1752,24 @@ async fn previewed(s: UiState, action: Action, form: Vec<(String, String)>) -> R
                 }
             }
             applicable += usize::from(p.applicable);
-            let html = PlannedView { p: &p, root: &root }.render().unwrap_or_default();
-            yield Ok(super::append("#pv-albums", &html));
+            let html = PlannedView { p: &p, root: &root, slot: &slot }.render().unwrap_or_default();
+            yield Ok(super::append(&format!("#{slot}-pv-albums"), &html));
         }
         yield Ok(patch(&format!(
-            r#"<p id="pv-progress" class="text-meta text-muted">{applicable} of {shown} would change.</p>"#
+            r#"<p id="{slot}-pv-progress" class="text-meta text-muted">{applicable} of {shown} would change.</p>"#
         )));
         let button = if applicable == 0 {
             String::new()
         } else {
             format!(
-                r#"<button type="button" class="primary" data-indicator="_applying" data-attr:disabled="$_apply == 0 || $_applying" data-class:busy="$_applying" data-text="'{verb} ' + $_apply + ($_apply == 1 ? ' album' : ' albums')" data-on:click="@post('/library/apply/{slug}', {{contentType: 'form', selector: '#lib-apply'}})">{name}</button>"#,
+                r#"<button type="button" class="primary" data-indicator="_applying_{slot}" data-attr:disabled="$_apply_{slot} == 0 || $_applying_{slot}" data-class:busy="$_applying_{slot}" data-text="'{verb} ' + $_apply_{slot} + ($_apply_{slot} == 1 ? ' album' : ' albums')" data-on:click="@post('/library/apply/{slug}', {{contentType: 'form', selector: '#{slot}-apply'}})">{name}</button>"#,
                 name = action.name(),
                 verb = action.verb(),
                 slug = action.slug(),
             )
         };
         yield Ok(patch(&format!(
-            r#"<div id="pv-apply" class="mt-2.5 flex flex-wrap items-center gap-2" data-init="$_apply = document.querySelectorAll('#lib-apply input[name=path]:checked').length">{button}<button type="button" class="quiet" data-on:click="document.getElementById('lib-preview').replaceChildren()">Cancel</button></div>"#
+            r#"<div id="{slot}-pv-apply" class="mt-2.5 flex flex-wrap items-center gap-2" data-init="$_apply_{slot} = document.querySelectorAll('#{slot}-apply input[name=path]:checked').length">{button}<button type="button" class="quiet" data-on:click="document.getElementById('{slot}-preview').replaceChildren()">Cancel</button></div>"#
         )));
     })
     .into_response()
@@ -2132,6 +2149,9 @@ async fn apply(State(s): State<UiState>, Path(action): Path<String>, body: Bytes
     if paths.is_empty() {
         return failed(&anyhow::anyhow!("nothing ticked"));
     }
+    let slot = slot_in(&form);
+    let all = super::field(&form, "all").is_some();
+    let ticked = paths.clone();
     // What the preview attached to each album, by its key.
     let with: HashMap<String, String> = form
         .iter()
@@ -2201,34 +2221,21 @@ async fn apply(State(s): State<UiState>, Path(action): Path<String>, body: Bytes
     });
     sse(async_stream::stream! {
         yield Ok(patch(&run_html(&s)));
-        yield Ok(patch(r#"<div id="lib-preview"></div>"#));
+        yield Ok(patch(&format!(r#"<div id="{slot}-preview"></div>"#)));
         let Ok((moved, done, failed)) = rx.await else {
             return;
         };
         yield Ok(patch(&run_html(&s)));
-        // The album open in detail is drawn again where it now is, or
-        // closed when it has left the library (binned).
-        let mut filter = filter;
-        let was_open = !filter.album.is_empty();
-        if was_open {
-            if let Some(to) = moved.get(&filter.album) {
-                filter.album = to.clone();
+        // Every album the filter admits may have changed, and most are not
+        // drawn: the list is drawn again. Otherwise only the rows applied
+        // to change, so what else is open or scrolled to stays.
+        if all {
+            yield Ok(patch(&list_html(&s, &filter).await));
+            yield Ok(unselected());
+        } else {
+            for e in changed_rows(&s, &filter, &ticked, &moved, &slot).await {
+                yield Ok(e);
             }
-            let gone = rows(&s, &by_path([filter.album.as_str()])).await.is_ok_and(|r| r.is_empty());
-            if gone {
-                filter.album.clear();
-            }
-        }
-        yield Ok(patch(&list_html(&s, &filter).await));
-        yield Ok(unselected());
-        if was_open {
-            yield Ok(patch(&if filter.album.is_empty() {
-                r#"<div id="lib-album"></div>"#.to_string()
-            } else {
-                album_html(&s, &filter).await
-            }));
-            yield Ok(opened(&filter.album));
-            yield Ok(super::place(&filter.url()));
         }
         let msg = format!(
             "{} {} albums{}",
@@ -2239,6 +2246,48 @@ async fn apply(State(s): State<UiState>, Path(action): Path<String>, body: Bytes
         yield Ok(patch(&flash_ok(&msg)));
     })
     .into_response()
+}
+
+/// The rows of `paths` drawn again after an action: under the path each
+/// album moved to, or removed when it left the library or the filter no
+/// longer admits it. The album the action was opened from is open again;
+/// a selection made in the list is cleared.
+async fn changed_rows(
+    s: &UiState,
+    filter: &Filter,
+    paths: &[String],
+    moved: &HashMap<String, String>,
+    slot: &str,
+) -> Vec<axum::response::sse::Event> {
+    let mut rows: HashMap<String, Row> = listing(s, filter)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|r| (r.album.path.clone(), r))
+        .collect();
+    let mut events = Vec::new();
+    for path in paths {
+        let now = moved.get(path).unwrap_or(path);
+        let target = format!("#row-{}", slot_of(path));
+        match rows.remove(now) {
+            Some(row) => {
+                let (html, _) = RowsView::render_page(s, filter, vec![row], 0, false);
+                events.push(super::insert(&target, "replace", &html));
+                if slot_of(path) == slot {
+                    events.push(patch(&album_html(s, filter, now).await));
+                }
+            }
+            None => events.push(super::insert(&target, "remove", "")),
+        }
+    }
+    if slot == "lib" {
+        events.push(super::append(
+            "#lib-sel",
+            r#"<div hidden data-init="el.closest('form').querySelectorAll('input[type=checkbox]').forEach(c => c.checked = false); el.remove()"></div>"#,
+        ));
+        events.push(unselected());
+    }
+    events
 }
 
 /// An album whose tags were written where it is.

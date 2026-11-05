@@ -8,8 +8,8 @@
     <label class="flex items-center gap-1.5 text-muted"><input type="checkbox" name="all" value="1"> Select all {{ total }}</label>
     <span class="text-meta text-muted">{{ total }} album{% if total != 1 %}s{% endif %}, newest import first</span>
   </div>
-  {# One handler opens any album the list shows, rows added later included. #}
-  <ul id="lib-rows" class="rows" data-on:click="evt.target.closest('a[data-album]') && !(evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey) && (evt.preventDefault(), @get(evt.target.closest('a[data-album]').dataset.album), document.getElementById('lib-album').scrollIntoView({block: 'start'}))">
+  {# One handler opens or closes any album the list shows, rows added later included, in its own row. #}
+  <ul id="lib-rows" class="rows" data-on:click="evt.target.closest('a[data-album]') && !(evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey) && (evt.preventDefault(), document.getElementById(evt.target.closest('a[data-album]').dataset.slot).firstElementChild ? document.getElementById(evt.target.closest('a[data-album]').dataset.slot).querySelector('[data-close]').click() : @get(evt.target.closest('a[data-album]').dataset.album + '&' + location.search.slice(1)))">
 {{ rows|safe }}
   </ul>
   {{ more|safe }}

@@ -1,5 +1,6 @@
-<form id="lib-edit" data-on:submit__prevent="@post('/library/preview/edit', {contentType: 'form', selector: '#lib-edit'})" class="my-2 border-l-2 border-rule px-3 py-2.5">
+<form id="{{ slot }}-edit" data-on:submit__prevent="@post('/library/preview/edit', {contentType: 'form', selector: '#{{ slot }}-edit'})" class="my-2 border-l-2 border-rule px-3 py-2.5">
   <input type="hidden" name="path" value="{{ path }}">
+  <input type="hidden" name="slot" value="{{ slot }}">
   {% include "library_filter.html" %}
   <p class="text-meta text-muted">Change what needs changing; the preview lists each field as it is and as it would be. A field the files disagree on is left alone unless typed. Changing an artist clears that file's list of artists and their MusicBrainz ids; Credit artists splits it again.</p>
   <div class="my-2 grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2">
@@ -19,7 +20,7 @@
   {% endfor %}
   </table>
   <div class="mt-2.5 flex flex-wrap items-center gap-2">
-    <button type="button" data-indicator="_pv_edit" data-attr:disabled="$_pv_edit" data-class:busy="$_pv_edit" data-on:click="@post('/library/preview/edit', {contentType: 'form', selector: '#lib-edit'})">Preview edit</button>
-    <button type="button" class="quiet" data-on:click="document.getElementById('lib-edit').replaceChildren()">Cancel</button>
+    <button type="button" data-indicator="_{{ slot }}_pv_edit" data-attr:disabled="$_{{ slot }}_pv_edit" data-class:busy="$_{{ slot }}_pv_edit" data-on:click="@post('/library/preview/edit', {contentType: 'form', selector: '#{{ slot }}-edit'})">Preview edit</button>
+    <button type="button" class="quiet" data-on:click="document.getElementById('{{ slot }}-edit').replaceChildren()">Cancel</button>
   </div>
 </form>

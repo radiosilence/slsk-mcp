@@ -269,7 +269,6 @@ mod library {
             since: "date".into(),
             from: "2026-09-01".into(),
             show: "dups".into(),
-            album: "/m/Burial/(2007) Untrue".into(),
         };
         let url = f.url();
         let Query(back) = Query::<Filter>::try_from_uri(&url.parse().unwrap()).unwrap();
@@ -286,7 +285,18 @@ mod library {
             .into();
         let f = Filter::from_fields(&form);
         assert_eq!(f.q, "burial");
-        assert_eq!(f.album, "");
+    }
+
+    #[test]
+    fn the_address_lists_every_open_album() {
+        let uri: http::Uri = "/library?q=x&album=%2Fm%2FA&album=&album=%2Fm%2FB%20%26%20C"
+            .parse()
+            .unwrap();
+        assert_eq!(open_albums(&uri), ["/m/A", "/m/B & C"]);
+        // An album's slot is named after its path, and only a plain name is
+        // taken from a form, since it is spliced into selectors.
+        let slot = slot_of("/m/A");
+        assert!(slot.starts_with('a') && slot.chars().all(|c| c.is_ascii_alphanumeric()));
     }
 
     #[test]

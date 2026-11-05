@@ -1,5 +1,6 @@
-<form id="lib-retag" data-on:submit__prevent="@post('/library/preview/reimport', {contentType: 'form', selector: '#lib-retag'})" class="my-2 border-l-2 border-rule px-3 py-2.5">
+<form id="{{ slot }}-retag" data-on:submit__prevent="@post('/library/preview/reimport', {contentType: 'form', selector: '#{{ slot }}-retag'})" class="my-2 border-l-2 border-rule px-3 py-2.5">
   <input type="hidden" name="path" value="{{ path }}">
+  <input type="hidden" name="slot" value="{{ slot }}">
   {% include "library_filter.html" %}
   {% if let Some(e) = error %}<p class="text-meta text-bad wrap-anywhere">{{ e }}</p>{% endif %}
   {% if candidates.is_empty() %}<p class="text-meta text-muted">{% if discogs %}Neither MusicBrainz nor Discogs has{% else %}MusicBrainz has{% endif %} nothing that fits these files. Paste a release from its page.</p>{% else %}
@@ -19,6 +20,6 @@
   {% endif %}
   <div class="flex flex-wrap items-center gap-2">
     <input class="basis-full" name="pasted" placeholder="{% if discogs %}Or paste a MusicBrainz or Discogs release id or link{% else %}Or paste a MusicBrainz release id or link{% endif %}" aria-label="MusicBrainz release id or link" autocomplete="off">
-    <button class="flex-auto" type="button" data-indicator="_pv_retag" data-attr:disabled="$_pv_retag" data-class:busy="$_pv_retag" data-on:click="@post('/library/preview/reimport', {contentType: 'form', selector: '#lib-retag'})">Preview re-tag</button>
+    <button class="flex-auto" type="button" data-indicator="_{{ slot }}_pv_retag" data-attr:disabled="$_{{ slot }}_pv_retag" data-class:busy="$_{{ slot }}_pv_retag" data-on:click="@post('/library/preview/reimport', {contentType: 'form', selector: '#{{ slot }}-retag'})">Preview re-tag</button>
   </div>
 </form>
