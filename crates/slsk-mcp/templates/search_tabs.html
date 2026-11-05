@@ -9,5 +9,5 @@
     <button class="quiet border-0 py-1 ps-1 pe-2 leading-none" aria-label="Close {{ t.query }}" data-on:click="@post('/search/tabs/{{ t.id }}/close')">×</button>
   </div>
 {% endfor %}
-{% if self.unpinned() > 1 %}<button class="quiet px-2 py-1 text-meta" data-on:click="@post('/search/tabs/close-unpinned')">Close unpinned</button>{% endif %}
+{% if self.unpinned() > 1 %}<button class="quiet px-2 py-1 text-meta" data-on:click="document.getElementById('close-unpinned').showModal()">Close unpinned</button>{% endif %}
 </nav>

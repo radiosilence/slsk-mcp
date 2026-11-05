@@ -12,8 +12,17 @@
     </form>
   </details>
   {{ tabs|safe }}
-  {# One request at a time draws the results: moving to another tab or showing more moves the address and reopens it, which cancels the last, and the server answers from what the tab kept or the search still running. #}
-  <div id="search-feed" hidden{% if tab.is_some() && results.is_none() %} data-init="@get($_url, {openWhenHidden: true})"{% endif %} data-on:more="@get($_url, {openWhenHidden: true})"></div>
+  {# Outside the strip, which is redrawn while searches run and would close it. #}
+  <dialog id="close-unpinned" class="m-auto max-w-sm rounded-lg border border-rule bg-surface p-4 text-ink backdrop:bg-black/60" aria-labelledby="close-unpinned-title">
+    <p id="close-unpinned-title" class="font-semibold">Close every unpinned search?</p>
+    <p class="mt-1 text-meta text-muted">Their results are forgotten. Pinned searches stay open.</p>
+    <form method="dialog" class="mt-4 flex justify-end gap-2">
+      <button class="quiet" value="cancel" autofocus>Cancel</button>
+      <button class="primary" type="button" data-on:click="@post('/search/tabs/close-unpinned'); el.closest('dialog').close()">Close them</button>
+    </form>
+  </dialog>
+  {# One request at a time draws the results: moving to another tab or showing more moves the address and reopens it, and the server answers from what the tab kept or the search still running. Datastar cancels a request only for another to the same address, so the feed aborts the last itself: a running search left behind would otherwise keep drawing over the tab moved to. #}
+  <div id="search-feed" hidden{% if tab.is_some() && results.is_none() %} data-init="el.feed = new AbortController(); @get($_url, {openWhenHidden: true, requestCancellation: el.feed})"{% endif %} data-on:more="el.feed?.abort(); el.feed = new AbortController(); @get($_url, {openWhenHidden: true, requestCancellation: el.feed})"></div>
   {% if let Some(html) = results %}{{ html|safe }}
   {% else if let Some(tab) = tab %}<div id="results"><p class="text-meta text-muted">Searching “{{ tab.query }}”…</p></div>
   {% else %}<div id="results"><p class="text-meta text-muted">Search the network for an album: artist and title words work best. Each search opens a tab that keeps its results; after ten minutes they are marked stale and can be searched again. Pinned tabs stay when the others are closed.</p></div>

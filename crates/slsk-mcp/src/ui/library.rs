@@ -535,7 +535,7 @@ pub(super) fn page(s: &UiState, filter: &Filter) -> String {
 async fn view(State(s): State<UiState>, uri: http::Uri) -> Response {
     let filter: Filter = super::query(&uri);
     let open = open_albums(&uri);
-    super::finite(sse(async_stream::stream! {
+    sse(async_stream::stream! {
         yield Ok(patch(r#"<div id="library"><p class="text-meta text-muted">Reading the library…</p></div>"#));
         yield Ok(patch(&list_html(&s, &filter).await));
         yield Ok(unselected());
@@ -553,7 +553,7 @@ async fn view(State(s): State<UiState>, uri: http::Uri) -> Response {
             }
         }
     })
-    .into_response())
+    .into_response()
 }
 
 async fn find(State(s): State<UiState>, body: Bytes) -> Response {
@@ -750,8 +750,7 @@ async fn art_html(s: &UiState, path: &str) -> String {
     }
 }
 
-/// One album opened in its row, then its art. Left uncompressed, since a
-/// compressed stream would hold the album back until its art is read.
+/// One album opened in its row, then its art.
 async fn album(
     State(s): State<UiState>,
     Query(AlbumQuery { filter, path }): Query<AlbumQuery>,

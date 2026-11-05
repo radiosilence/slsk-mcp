@@ -133,33 +133,62 @@ pub fn router(app: Arc<App>) -> Router {
             get(|| async { png(include_bytes!("../assets/apple-touch-icon.png")) }),
         )
         .layer(axum::middleware::from_fn(security_headers))
-        .layer(
-            tower_http::compression::CompressionLayer::new().compress_when(Compressible::default()),
-        )
+        .layer(axum::middleware::from_fn(compress_events))
+        .layer(tower_http::compression::CompressionLayer::new())
         .with_state(state)
 }
 
-/// Marks an event stream that sends everything at once and ends, so
-/// compressing it delays nothing.
-#[derive(Clone, Copy)]
-struct Finite;
-
-/// What tower-http compresses by default, which leaves out event streams
-/// because an encoder holds back what it has not filled a block with, and a
-/// live stream's updates would wait. A [`Finite`] one is compressed too.
-#[derive(Clone, Default)]
-struct Compressible(tower_http::compression::DefaultPredicate);
-
-impl tower_http::compression::Predicate for Compressible {
-    fn should_compress<B: axum::body::HttpBody>(&self, response: &http::Response<B>) -> bool {
-        self.0.should_compress(response) || response.extensions().get::<Finite>().is_some()
+/// Event streams compressed as they go: tower-http leaves them alone,
+/// since its encoders hold output back until a block fills and a live
+/// stream's updates would wait. Here brotli is flushed after every event,
+/// so each reaches the browser at once, and the window it keeps across the
+/// stream makes an update that mostly repeats the last one cheap: a search
+/// redrawn each second, or the downloads list.
+async fn compress_events(request: Request, next: Next) -> Response {
+    use std::io::Write as _;
+    let br = request
+        .headers()
+        .get(http::header::ACCEPT_ENCODING)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| {
+            v.split(',')
+                .any(|e| e.split(';').next().is_some_and(|e| e.trim() == "br"))
+        });
+    let response = next.run(request).await;
+    let events = response
+        .headers()
+        .get(http::header::CONTENT_TYPE)
+        .is_some_and(|v| v.as_bytes().starts_with(b"text/event-stream"));
+    if !br || !events {
+        return response;
     }
-}
-
-/// `response`, an event stream that ends once sent, marked to be compressed.
-fn finite(mut response: Response) -> Response {
-    response.extensions_mut().insert(Finite);
-    response
+    let (mut parts, body) = response.into_parts();
+    parts.headers.insert(
+        http::header::CONTENT_ENCODING,
+        http::HeaderValue::from_static("br"),
+    );
+    parts.headers.append(
+        http::header::VARY,
+        http::HeaderValue::from_static("accept-encoding"),
+    );
+    parts.headers.remove(http::header::CONTENT_LENGTH);
+    let mut data = body.into_data_stream();
+    let stream = async_stream::stream! {
+        // Quality 5 and a 4 MiB window: cheap enough for every event.
+        let mut encoder = brotli::CompressorWriter::new(Vec::new(), 4096, 5, 22);
+        while let Some(chunk) = futures_util::StreamExt::next(&mut data).await {
+            let Ok(chunk) = chunk else { break };
+            if encoder.write_all(&chunk).and_then(|()| encoder.flush()).is_err() {
+                break;
+            }
+            let out = std::mem::take(encoder.get_mut());
+            if !out.is_empty() {
+                yield Ok::<_, std::io::Error>(Bytes::from(out));
+            }
+        }
+        yield Ok(Bytes::from(encoder.into_inner()));
+    };
+    Response::from_parts(parts, axum::body::Body::from_stream(stream))
 }
 
 const APP_CSS: &str = include_str!("../assets/app.css");
@@ -253,7 +282,7 @@ fn sse(
 }
 
 fn one(html: String) -> Response {
-    finite(sse(futures_util::stream::once(async move { Ok(patch(&html)) })).into_response())
+    sse(futures_util::stream::once(async move { Ok(patch(&html)) })).into_response()
 }
 
 /// Elements added at the end of the one `selector` names: rows streamed
@@ -283,7 +312,7 @@ fn insert(selector: &str, mode: &str, html: &str) -> Event {
 
 /// Several events in one response: fragments, then signals to reset.
 fn many(events: Vec<Event>) -> Response {
-    finite(sse(futures_util::stream::iter(events.into_iter().map(Ok))).into_response())
+    sse(futures_util::stream::iter(events.into_iter().map(Ok))).into_response()
 }
 
 /// Set signals from the server, as JSON: how a form is cleared once what it
