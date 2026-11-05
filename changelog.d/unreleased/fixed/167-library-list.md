@@ -1,0 +1,1 @@
+- **The library list opens quickly on a large library.** It drew every album at once, around 10 MB of HTML for six thousand albums, which the browser took seconds to lay out. It now draws 200 at a time with "Show more", and the album list is read from the index once per change to the library rather than on every request.

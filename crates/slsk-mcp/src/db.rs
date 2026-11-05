@@ -100,6 +100,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0005_end_sessions.sql"),
     include_str!("../migrations/0006_waiting.sql"),
     include_str!("../migrations/0007_search_tabs.sql"),
+    include_str!("../migrations/0008_search_tab_ids.sql"),
 ];
 
 /// How many idle connections to keep. More than the concurrency the service
@@ -772,7 +773,7 @@ pub async fn set_ban(db: &Db, account: &str, username: &str, banned: bool) -> Re
 /// A search open as a tab on the Search page.
 #[derive(Debug, Clone)]
 pub struct SearchTab {
-    pub id: i64,
+    pub id: Uuid,
     pub query: String,
     pub lossless: bool,
     pub pinned: bool,
@@ -811,14 +812,14 @@ const UNPINNED_TABS: i64 = 100;
 /// Pinned first, then in the order they were opened.
 pub async fn search_tabs(db: &Db) -> Result<Vec<SearchTab>> {
     db.run(|c| {
-        c.prepare_cached(&format!("{SEARCH_TAB} ORDER BY pinned DESC, id"))?
+        c.prepare_cached(&format!("{SEARCH_TAB} ORDER BY pinned DESC, opened_at"))?
             .query_map([], SearchTab::from_row)?
             .collect()
     })
     .await
 }
 
-pub async fn search_tab(db: &Db, id: i64) -> Result<Option<SearchTab>> {
+pub async fn search_tab(db: &Db, id: Uuid) -> Result<Option<SearchTab>> {
     db.run(move |c| {
         c.prepare_cached(&format!("{SEARCH_TAB} WHERE id = ?1"))?
             .query_row(params![id], SearchTab::from_row)
@@ -832,7 +833,7 @@ pub async fn find_search_tab(db: &Db, query: &str, lossless: bool) -> Result<Opt
     let query = query.to_string();
     db.run(move |c| {
         c.prepare_cached(&format!(
-            "{SEARCH_TAB} WHERE lower(query) = lower(?1) AND lossless = ?2 ORDER BY id LIMIT 1"
+            "{SEARCH_TAB} WHERE lower(query) = lower(?1) AND lossless = ?2 ORDER BY opened_at LIMIT 1"
         ))?
         .query_row(params![query, lossless], SearchTab::from_row)
         .optional()
@@ -841,17 +842,17 @@ pub async fn find_search_tab(db: &Db, query: &str, lossless: bool) -> Result<Opt
 }
 
 /// A new tab, running; the oldest unpinned tabs past the limit are closed.
-pub async fn open_search_tab(db: &Db, query: &str, lossless: bool) -> Result<i64> {
+pub async fn open_search_tab(db: &Db, query: &str, lossless: bool) -> Result<Uuid> {
     let query = query.to_string();
+    let id = Uuid::new_v4();
     db.run(move |c| {
         c.execute(
-            "INSERT INTO search_tabs (query, lossless) VALUES (?1, ?2)",
-            params![query, lossless],
+            "INSERT INTO search_tabs (id, query, lossless, opened_at) VALUES (?1, ?2, ?3, ?4)",
+            params![id, query, lossless, ts(&chrono::Utc::now())],
         )?;
-        let id = c.last_insert_rowid();
         c.execute(
             "DELETE FROM search_tabs WHERE id IN (SELECT id FROM search_tabs WHERE NOT pinned \
-             ORDER BY id DESC LIMIT -1 OFFSET ?1)",
+             ORDER BY opened_at DESC LIMIT -1 OFFSET ?1)",
             params![UNPINNED_TABS],
         )?;
         Ok(id)
@@ -860,7 +861,7 @@ pub async fn open_search_tab(db: &Db, query: &str, lossless: bool) -> Result<i64
 }
 
 /// The best folders a finished tab kept.
-pub async fn search_tab_folders(db: &Db, id: i64) -> Result<Vec<crate::folders::Folder>> {
+pub async fn search_tab_folders(db: &Db, id: Uuid) -> Result<Vec<crate::folders::Folder>> {
     db.run(move |c| {
         let folders: Option<Json<Vec<crate::folders::Folder>>> = c
             .query_row(
@@ -876,7 +877,7 @@ pub async fn search_tab_folders(db: &Db, id: i64) -> Result<Vec<crate::folders::
 }
 
 /// Forget what the tab found, as it searches again.
-pub async fn rerun_search_tab(db: &Db, id: i64) -> Result<()> {
+pub async fn rerun_search_tab(db: &Db, id: Uuid) -> Result<()> {
     db.run(move |c| {
         c.execute(
             "UPDATE search_tabs SET searched_at = NULL, responses = 0, found = 0, folders = NULL, \
@@ -891,7 +892,7 @@ pub async fn rerun_search_tab(db: &Db, id: i64) -> Result<()> {
 /// What the tab's search found, or why it could not run.
 pub async fn finish_search_tab(
     db: &Db,
-    id: i64,
+    id: Uuid,
     responses: usize,
     found: usize,
     folders: Vec<crate::folders::Folder>,
@@ -916,7 +917,7 @@ pub async fn finish_search_tab(
     .await
 }
 
-pub async fn pin_search_tab(db: &Db, id: i64, pinned: bool) -> Result<()> {
+pub async fn pin_search_tab(db: &Db, id: Uuid, pinned: bool) -> Result<()> {
     db.run(move |c| {
         c.execute(
             "UPDATE search_tabs SET pinned = ?2 WHERE id = ?1",
@@ -928,7 +929,7 @@ pub async fn pin_search_tab(db: &Db, id: i64, pinned: bool) -> Result<()> {
 }
 
 /// Close one tab, or with no `id` every unpinned one.
-pub async fn close_search_tabs(db: &Db, id: Option<i64>) -> Result<()> {
+pub async fn close_search_tabs(db: &Db, id: Option<Uuid>) -> Result<()> {
     db.run(move |c| {
         match id {
             Some(id) => c.execute("DELETE FROM search_tabs WHERE id = ?1", params![id])?,
@@ -1798,7 +1799,7 @@ mod tests {
         let pinned = open_search_tab(&db, "pinned", true).await.unwrap();
         pin_search_tab(&db, pinned, true).await.unwrap();
         close_search_tabs(&db, None).await.unwrap();
-        let left: Vec<i64> = search_tabs(&db)
+        let left: Vec<Uuid> = search_tabs(&db)
             .await
             .unwrap()
             .iter()

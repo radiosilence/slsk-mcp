@@ -34,6 +34,10 @@ pub struct Library {
     /// seconds on a large library, and the answer changes only when the
     /// library does.
     overview: Mutex<Option<(u64, Arc<Overview>)>>,
+    /// Every album, and the generation it was read at. Reading and grouping
+    /// every track takes about half a second on a few thousand albums, so
+    /// listings filter and sort this in memory instead.
+    all: Mutex<Option<(u64, Arc<Vec<Album>>)>>,
     cfg: sift::Config,
     bin: PathBuf,
     tagger: std::sync::Arc<sift::Importer>,
@@ -354,6 +358,7 @@ impl Library {
             stale: tokio::sync::Notify::new(),
             generation: AtomicU64::new(0),
             overview: Mutex::new(None),
+            all: Mutex::new(None),
             cfg: tagger.cfg.clone(),
             bin,
             tagger,
@@ -427,7 +432,7 @@ impl Library {
         {
             return Ok(overview.clone());
         }
-        let albums = self.read(&[]).await?;
+        let albums = self.all().await?;
         let overview = Arc::new(tokio::task::block_in_place(|| Overview {
             duplicates: self.duplicates_of(&albums),
             plan: self.plan_of(&albums),
@@ -501,13 +506,36 @@ impl Library {
         Ok(tokio::task::block_in_place(|| index.albums(&query))?)
     }
 
+    /// Every album, read once per generation. Read before the albums, as in
+    /// [`Self::overview`], so a change landing meanwhile is read next time.
+    async fn all(&self) -> anyhow::Result<Arc<Vec<Album>>> {
+        let mut cached = self.all.lock().await;
+        let generation = self.generation.load(Ordering::SeqCst);
+        if let Some((at, all)) = cached.as_ref()
+            && *at == generation
+        {
+            return Ok(all.clone());
+        }
+        let all = Arc::new(self.read(&[]).await?);
+        *cached = Some((generation, all.clone()));
+        Ok(all)
+    }
+
+    /// Albums matching `query`, from the albums as last read. Changes made
+    /// through this service read the index directly, since a change made a
+    /// moment ago may not have moved the generation yet.
     pub async fn albums(&self, query: &[String]) -> anyhow::Result<Vec<LibraryAlbum>> {
-        Ok(self
-            .read(query)
-            .await?
-            .iter()
+        let query = Query::parse(query)?;
+        let all = self.all().await?;
+        Ok(tokio::task::block_in_place(|| {
+            sorted(
+                all.iter().filter(|a| query.matches_album(a)).collect(),
+                &query,
+            )
+            .into_iter()
             .map(LibraryAlbum::from)
-            .collect())
+            .collect()
+        }))
     }
 
     /// Albums held more than once. With `bin`, every spare copy is moved to
@@ -1434,5 +1462,115 @@ pub fn release_link(id: &str) -> (&'static str, String) {
             "MusicBrainz",
             format!("https://musicbrainz.org/release/{id}"),
         ),
+    }
+}
+
+/// `albums` in the order `query` sorts them, as sift's own queries order
+/// them: numbers by value, anything else as lowercase text, a missing value
+/// first.
+fn sorted<'a>(albums: Vec<&'a Album>, query: &Query) -> Vec<&'a Album> {
+    struct Key {
+        number: Option<f64>,
+        text: Option<String>,
+    }
+    fn key(v: Option<Value>) -> Key {
+        match v {
+            Some(Value::Number(n)) => Key {
+                number: Some(n),
+                text: Some(if n.fract() == 0.0 {
+                    format!("{n:.0}")
+                } else {
+                    n.to_string()
+                }),
+            },
+            Some(Value::Text(t)) => Key {
+                number: None,
+                text: Some(t.to_lowercase()),
+            },
+            None => Key {
+                number: None,
+                text: None,
+            },
+        }
+    }
+    fn cmp(a: &Key, b: &Key) -> std::cmp::Ordering {
+        match (a.number, b.number, &a.text, &b.text) {
+            (Some(x), Some(y), _, _) => x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal),
+            (_, _, Some(x), Some(y)) => x.cmp(y),
+            _ => a.text.is_some().cmp(&b.text.is_some()),
+        }
+    }
+    let keys: Vec<(String, bool)> = if query.sort.is_empty() {
+        ["albumartist", "album", "disc", "track"]
+            .map(|f| (f.to_string(), true))
+            .into()
+    } else {
+        query.sort.clone()
+    };
+    let mut keyed: Vec<(Vec<Key>, &Album)> = albums
+        .into_iter()
+        .map(|a| (keys.iter().map(|(f, _)| key(a.field(f))).collect(), a))
+        .collect();
+    keyed.sort_by(|(a, _), (b, _)| {
+        a.iter()
+            .zip(b)
+            .zip(&keys)
+            .map(|((a, b), (_, asc))| {
+                let o = cmp(a, b);
+                if *asc { o } else { o.reverse() }
+            })
+            .find(|o| o.is_ne())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    keyed.into_iter().map(|(_, a)| a).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn album(dir: &str, artist: Option<&str>, title: &str, added: i64) -> Album {
+        Album {
+            dir: PathBuf::from(dir),
+            items: vec![sift::library::Item {
+                track: sift::meta::Track {
+                    path: PathBuf::from(format!("{dir}/01.flac")),
+                    album: Some(title.into()),
+                    album_artist: artist.map(String::from),
+                    ..Default::default()
+                },
+                size: 1,
+                mtime: 0,
+                added,
+            }],
+        }
+    }
+
+    fn order(albums: &[Album], terms: &[&str]) -> Vec<String> {
+        let query = Query::parse(terms).unwrap();
+        sorted(
+            albums.iter().filter(|a| query.matches_album(a)).collect(),
+            &query,
+        )
+        .iter()
+        .map(|a| a.dir.to_string_lossy().into_owned())
+        .collect()
+    }
+
+    #[test]
+    fn listings_sort_as_sift_does() {
+        let albums = [
+            album("/m/b", Some("beta"), "One", 10),
+            album("/m/a", Some("Alpha"), "Two", 10),
+            album("/m/none", None, "Three", 10),
+            album("/m/new", Some("zeta"), "Four", 20),
+        ];
+        // Newest import first, then artist as lowercase text, missing first.
+        assert_eq!(
+            order(&albums, &["added-", "albumartist+", "album+"]),
+            ["/m/new", "/m/none", "/m/a", "/m/b"]
+        );
+        assert_eq!(order(&albums, &["alpha"]), ["/m/a"]);
+        assert_eq!(order(&albums, &[]), ["/m/none", "/m/a", "/m/b", "/m/new"]);
     }
 }

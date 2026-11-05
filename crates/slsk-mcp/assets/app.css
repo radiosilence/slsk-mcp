@@ -1278,6 +1278,10 @@
     color: var(--warn);
   }
 
+  .lowercase {
+    text-transform: lowercase;
+  }
+
   .italic {
     font-style: italic;
   }

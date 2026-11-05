@@ -41,7 +41,7 @@ symphonia = { version = "0.6.1", default-features = false, features = ["flac", "
 thiserror = "2.0.21"
 tokio = { version = "1.54.1", features = ["full"] }
 tokio-stream = "0.1.19"
-tower-http = { version = "0.7.1", features = ["trace"] }
+tower-http = { version = "0.7.1", features = ["trace", "compression-br", "compression-gzip", "compression-zstd"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 url = "2.5.8"

@@ -20,6 +20,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use slsk_engine::slsk_proto::RawStr;
 use slsk_engine::slsk_proto::peer::SearchResponse;
+use uuid::Uuid;
 
 use super::{UiState, browse, escape, failed, human, one, patch, place_url, shown_of, sse};
 use crate::App;
@@ -74,7 +75,7 @@ pub(super) async fn open(
     app: &Arc<App>,
     text: &str,
     lossless: bool,
-) -> anyhow::Result<Option<i64>> {
+) -> anyhow::Result<Option<Uuid>> {
     let mut first = None;
     let mut seen = HashSet::new();
     for words in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
@@ -116,8 +117,8 @@ fn ago(at: chrono::DateTime<chrono::Utc>) -> String {
 
 /// Search for the tab in the background and keep what it finds. A tab
 /// already searching is left to the search it has.
-fn run(app: Arc<App>, id: i64, query: String, lossless: bool) {
-    static RUNNING: LazyLock<parking_lot::Mutex<HashSet<i64>>> = LazyLock::new(Default::default);
+fn run(app: Arc<App>, id: Uuid, query: String, lossless: bool) {
+    static RUNNING: LazyLock<parking_lot::Mutex<HashSet<Uuid>>> = LazyLock::new(Default::default);
     if !RUNNING.lock().insert(id) {
         return;
     }
@@ -138,7 +139,7 @@ fn run(app: Arc<App>, id: i64, query: String, lossless: bool) {
             Err(e) => (0, 0, Vec::new(), Some(e)),
         };
         if let Err(e) = db::finish_search_tab(&app.db, id, responses, found, folders, error).await {
-            tracing::warn!(id, error = %e, "could not keep a search's results");
+            tracing::warn!(%id, error = %e, "could not keep a search's results");
         }
         RUNNING.lock().remove(&id);
     });
@@ -158,7 +159,7 @@ fn best(responses: &[Arc<SearchResponse>], query: &str, lossless: bool) -> Vec<F
 
 /// The tab an address names, if it is still open.
 pub(super) async fn active(app: &App, view: &SearchQuery) -> Option<SearchTab> {
-    let id = view.tab.parse().ok()?;
+    let id = Uuid::parse_str(&view.tab).ok()?;
     db::search_tab(&app.db, id).await.ok().flatten()
 }
 
@@ -170,14 +171,67 @@ struct SearchPage<'a> {
     lossless: bool,
     tab: Option<&'a SearchTab>,
     tabs: String,
+    /// The tab's results, when its search has finished; a running one is
+    /// fetched once the page is drawn.
+    results: Option<String>,
 }
 
-pub(super) async fn page(app: &App, tab: Option<&SearchTab>) -> String {
+pub(super) async fn page(app: &App, tab: Option<&SearchTab>, view: &SearchQuery) -> String {
+    let results = match tab {
+        Some(t) if t.searched_at.is_some() => Some(kept(app, t, shown(view)).await),
+        _ => None,
+    };
     SearchPage {
         q: "",
         lossless: tab.is_none_or(|t| t.lossless),
         tab,
         tabs: tabs_html(app, tab.map(|t| t.id)).await,
+        results,
+    }
+    .render()
+    .unwrap_or_default()
+}
+
+/// How many folders the address asks to show.
+fn shown(view: &SearchQuery) -> usize {
+    view.shown
+        .parse()
+        .map_or(FOUND, |n: usize| n.clamp(1, KEEP))
+}
+
+/// The address that shows `shown` more of the tab's folders.
+fn next(tab: &SearchTab, shown: usize) -> String {
+    place_url(
+        "/search",
+        &[
+            ("tab", &tab.id.to_string()),
+            ("shown", &(shown + FOUND).to_string()),
+        ],
+    )
+}
+
+/// A finished tab's results, from what it kept.
+async fn kept(app: &App, tab: &SearchTab, shown: usize) -> String {
+    let mut folders = match db::search_tab_folders(&app.db, tab.id).await {
+        Ok(f) => f,
+        Err(e) => {
+            tracing::warn!(id = %tab.id, error = %e, "could not read a search's results");
+            Vec::new()
+        }
+    };
+    let more = folders.len().saturating_sub(shown);
+    folders.truncate(shown);
+    ResultsView {
+        age: tab.searched_at.filter(|_| stale(tab)).map(ago),
+        tab: tab.id,
+        query: tab.query.clone(),
+        folders,
+        more,
+        next: next(tab, shown),
+        searching: false,
+        responses: tab.responses as usize,
+        found: tab.found as usize,
+        error: tab.error.clone(),
     }
     .render()
     .unwrap_or_default()
@@ -187,7 +241,7 @@ pub(super) async fn page(app: &App, tab: Option<&SearchTab>) -> String {
 #[template(path = "search_tabs.html")]
 struct TabsView {
     tabs: Vec<SearchTab>,
-    active: Option<i64>,
+    active: Option<Uuid>,
 }
 
 impl TabsView {
@@ -196,6 +250,18 @@ impl TabsView {
     }
     fn stale(&self, t: &SearchTab) -> bool {
         stale(t)
+    }
+    /// A tab's click handler: its results replace the shown ones in place,
+    /// through the one feed, which drops the request it had open.
+    fn switch(&self, t: &SearchTab) -> String {
+        super::follow(
+            "",
+            format!(
+                "$_url = '/search?tab={}', document.title = el.textContent + ' · slsk', \
+                 document.getElementById('search-feed').dispatchEvent(new Event('more'))",
+                t.id
+            ),
+        )
     }
     fn about(&self, t: &SearchTab) -> String {
         let quality = if t.lossless {
@@ -220,7 +286,7 @@ impl TabsView {
 }
 
 /// The tab strip, with `active` the tab the page shows.
-pub(super) async fn tabs_html(app: &App, active: Option<i64>) -> String {
+pub(super) async fn tabs_html(app: &App, active: Option<Uuid>) -> String {
     match db::search_tabs(&app.db).await {
         Ok(tabs) => TabsView { tabs, active }.render().unwrap_or_default(),
         Err(e) => {
@@ -233,7 +299,7 @@ pub(super) async fn tabs_html(app: &App, active: Option<i64>) -> String {
 #[derive(Template)]
 #[template(path = "results.html")]
 struct ResultsView {
-    tab: i64,
+    tab: Uuid,
     query: String,
     folders: Vec<Folder>,
     /// Folders kept beyond those shown.
@@ -298,44 +364,38 @@ impl ResultsView {
 /// The tab's results, the first `shown` of them: what it kept once its
 /// search finished, or the search as it runs, regrouped as peers answer at
 /// most once a second. A running search is joined rather than sent again,
-/// so reopening or reloading the page spends nothing.
+/// so reopening or reloading the page spends nothing. Moving to another tab
+/// comes here too, so the strip, the `tab` signal and the address follow.
 pub(super) async fn results(State(s): State<UiState>, Query(view): Query<SearchQuery>) -> Response {
     let Some(tab) = active(&s.app, &view).await else {
         return one(
             r#"<div id="results" class="text-meta text-muted">This search is closed.</div>"#.into(),
         );
     };
-    let shown = view
-        .shown
-        .parse()
-        .map_or(FOUND, |n: usize| n.clamp(1, KEEP));
-    let next = place_url(
+    let shown = shown(&view);
+    let url = place_url(
         "/search",
         &[
             ("tab", &tab.id.to_string()),
-            ("shown", &(shown + FOUND).to_string()),
+            (
+                "shown",
+                &if shown == FOUND {
+                    String::new()
+                } else {
+                    shown.to_string()
+                },
+            ),
         ],
     );
-    if let Some(at) = tab.searched_at {
-        let mut folders = match db::search_tab_folders(&s.app.db, tab.id).await {
-            Ok(f) => f,
-            Err(e) => return failed(&e.into()),
-        };
-        let more = folders.len().saturating_sub(shown);
-        folders.truncate(shown);
-        let view = ResultsView {
-            age: stale(&tab).then(|| ago(at)),
-            tab: tab.id,
-            query: tab.query,
-            folders,
-            more,
-            next,
-            searching: false,
-            responses: tab.responses as usize,
-            found: tab.found as usize,
-            error: tab.error,
-        };
-        return one(view.render().unwrap_or_default());
+    let around = vec![
+        patch(&tabs_html(&s.app, Some(tab.id)).await),
+        super::signals(&serde_json::json!({ "tab": tab.id.to_string() }).to_string()),
+        super::place(&url),
+    ];
+    if tab.searched_at.is_some() {
+        let mut events = vec![patch(&kept(&s.app, &tab, shown).await)];
+        events.extend(around);
+        return super::many(events);
     }
     let Some(engine) = s.app.session.engine().cloned() else {
         return one(
@@ -345,7 +405,11 @@ pub(super) async fn results(State(s): State<UiState>, Query(view): Query<SearchQ
     };
     // A search lost to a restart starts again here; one running is joined.
     run(s.app.clone(), tab.id, tab.query.clone(), tab.lossless);
+    let next = next(&tab, shown);
     let events = async_stream::stream! {
+        for e in around {
+            yield Ok(e);
+        }
         let mut heard = graphql::listen(&engine, &tab.query, LISTEN);
         loop {
             let graphql::Heard { responses, done, error } = heard.borrow_and_update().clone();
@@ -385,7 +449,7 @@ fn go(url: &str) -> Response {
 
 /// The strip redrawn, or the page moved when the tab it showed was closed.
 async fn redraw(app: &App, body: &Bytes) -> Response {
-    let active = shown_of(body).tab.parse::<i64>().ok();
+    let active = Uuid::parse_str(&shown_of(body).tab).ok();
     let tabs = db::search_tabs(&app.db).await.unwrap_or_default();
     match active {
         Some(id) if !tabs.iter().any(|t| t.id == id) => go(&match tabs.first() {
@@ -396,7 +460,7 @@ async fn redraw(app: &App, body: &Bytes) -> Response {
     }
 }
 
-async fn pin(State(s): State<UiState>, Path(id): Path<i64>, body: Bytes) -> Response {
+async fn pin(State(s): State<UiState>, Path(id): Path<Uuid>, body: Bytes) -> Response {
     let pinned = match db::search_tab(&s.app.db, id).await {
         Ok(Some(t)) => !t.pinned,
         Ok(None) => return redraw(&s.app, &body).await,
@@ -410,12 +474,12 @@ async fn pin(State(s): State<UiState>, Path(id): Path<i64>, body: Bytes) -> Resp
 
 /// Closing the tab the page shows moves to the one after it, or else the
 /// one before.
-async fn close(State(s): State<UiState>, Path(id): Path<i64>, body: Bytes) -> Response {
+async fn close(State(s): State<UiState>, Path(id): Path<Uuid>, body: Bytes) -> Response {
     let tabs = db::search_tabs(&s.app.db).await.unwrap_or_default();
     if let Err(e) = db::close_search_tabs(&s.app.db, Some(id)).await {
         return failed(&e.into());
     }
-    let active = shown_of(&body).tab.parse::<i64>().ok();
+    let active = Uuid::parse_str(&shown_of(&body).tab).ok();
     if active == Some(id)
         && let Some(i) = tabs.iter().position(|t| t.id == id)
     {
@@ -434,7 +498,7 @@ async fn close_unpinned(State(s): State<UiState>, body: Bytes) -> Response {
     redraw(&s.app, &body).await
 }
 
-async fn again(State(s): State<UiState>, Path(id): Path<i64>) -> Response {
+async fn again(State(s): State<UiState>, Path(id): Path<Uuid>) -> Response {
     let tab = match db::search_tab(&s.app.db, id).await {
         Ok(Some(t)) => t,
         Ok(None) => return go("/search"),

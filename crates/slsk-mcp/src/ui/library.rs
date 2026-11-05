@@ -28,6 +28,7 @@ pub(super) fn routes() -> Router<UiState> {
     Router::new()
         .route("/library", get(view))
         .route("/library/find", post(find))
+        .route("/library/more", post(more))
         .route("/library/album", get(album))
         .route("/library/album/releases", get(releases))
         .route("/library/album/edit", get(edit_form))
@@ -370,19 +371,65 @@ async fn rows(s: &UiState, terms: &[String]) -> anyhow::Result<Vec<Row>> {
         .collect())
 }
 
+/// Albums drawn at first, and added by each "Show more". Every row carries
+/// its checkbox and link, and a browser drawing a whole large library at
+/// once stalls for seconds.
+const SHOWN: usize = 200;
+
 #[derive(Template)]
 #[template(path = "library.html")]
 struct LibraryView {
-    root: String,
     filter: Filter,
-    rows: Vec<Row>,
+    /// The first page of rows, from `RowsView`.
+    rows: String,
+    /// The button that fetches the next page.
+    more: String,
     total: usize,
     /// Spare copies among everything the filter admits.
     spares: usize,
     error: Option<String>,
 }
 
-impl LibraryView {
+/// A page of the list's rows, then the button that fetches the page after.
+#[derive(Template)]
+#[template(path = "library_rows.html")]
+struct RowsView {
+    root: String,
+    filter: Filter,
+    rows: Vec<Row>,
+    /// Every album is selected, so the rows arrive ticked.
+    all: bool,
+    /// Where the next page starts, and how many albums are past this one.
+    next: Option<(usize, usize)>,
+}
+
+impl RowsView {
+    /// The page of `rows` starting at `from`, split into the rows and the
+    /// button.
+    fn render_page(
+        s: &UiState,
+        filter: &Filter,
+        rows: Vec<Row>,
+        from: usize,
+        all: bool,
+    ) -> (String, String) {
+        let total = rows.len();
+        let rows: Vec<Row> = rows.into_iter().skip(from).take(SHOWN).collect();
+        let end = from + rows.len();
+        let html = Self {
+            root: s.app.library.root().to_string_lossy().into_owned(),
+            filter: filter.clone(),
+            rows,
+            all,
+            next: (end < total).then_some((end, total - end)),
+        }
+        .render()
+        .unwrap_or_default();
+        match html.split_once("<!-- more -->") {
+            Some((rows, more)) => (rows.to_string(), more.to_string()),
+            None => (html, String::new()),
+        }
+    }
     fn rel<'a>(&self, p: &'a str) -> &'a str {
         rel(&self.root, p)
     }
@@ -395,7 +442,6 @@ impl LibraryView {
 }
 
 async fn list_html(s: &UiState, filter: &Filter) -> String {
-    let root = s.app.library.root().to_string_lossy().into_owned();
     let listed = if filter.since == "date" && filter.since_secs(chrono::Local::now()).is_none() {
         Err(anyhow::anyhow!("Pick the date to list imports since."))
     } else {
@@ -405,25 +451,42 @@ async fn list_html(s: &UiState, filter: &Filter) -> String {
         Ok(rows) => {
             let total = rows.len();
             let spares = rows.iter().filter(|r| r.spare().is_some()).count();
+            let (rows, more) = RowsView::render_page(s, filter, rows, 0, false);
             LibraryView {
-                rows,
                 filter: filter.clone(),
+                rows,
+                more,
                 total,
                 spares,
-                root,
                 error: None,
             }
         }
         Err(e) => LibraryView {
-            root,
             filter: filter.clone(),
-            rows: Vec::new(),
+            rows: String::new(),
+            more: String::new(),
             total: 0,
             spares: 0,
             error: Some(format!("{e:#}")),
         },
     };
     view.render().unwrap_or_default()
+}
+
+/// The next page of the list, appended below what it shows.
+async fn more(State(s): State<UiState>, body: Bytes) -> Response {
+    let form = fields(&body);
+    let filter = Filter::from_fields(&form);
+    let from = super::field(&form, "offset")
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(0);
+    let rows = match listing(&s, &filter).await {
+        Ok(rows) => rows,
+        Err(e) => return failed(&e),
+    };
+    let all = super::field(&form, "all").is_some();
+    let (rows, more) = RowsView::render_page(&s, &filter, rows, from, all);
+    super::many(vec![super::append("#lib-rows", &rows), patch(&more)])
 }
 
 /// The selection's counts, cleared with the list. A redrawn list keeps its
@@ -458,7 +521,7 @@ pub(super) fn page(s: &UiState, filter: &Filter) -> String {
 /// The list the address describes.
 async fn view(State(s): State<UiState>, uri: http::Uri) -> Response {
     let filter: Filter = super::query(&uri);
-    sse(async_stream::stream! {
+    super::finite(sse(async_stream::stream! {
         yield Ok(patch(r#"<div id="library"><p class="text-meta text-muted">Reading the library…</p></div>"#));
         yield Ok(patch(&list_html(&s, &filter).await));
         yield Ok(unselected());
@@ -468,7 +531,7 @@ async fn view(State(s): State<UiState>, uri: http::Uri) -> Response {
         yield Ok(opened(&filter.album));
         yield Ok(super::place(&filter.url()));
     })
-    .into_response()
+    .into_response())
 }
 
 async fn find(State(s): State<UiState>, body: Bytes) -> Response {
