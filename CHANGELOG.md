@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.13.0
+
+### Changed
+
+- **Library albums open in their own rows.** An album opened from the list unfolds beneath it rather than in one box above the list, so it no longer jumps away from a long scroll, and several can be open and previewed at once. The address lists every open album. Applying an action redraws only the rows it changed, so the scroll position and other open albums stay put.
+
 ## 0.12.0
 
 ### Changed
