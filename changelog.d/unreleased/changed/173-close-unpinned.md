@@ -1,0 +1,1 @@
+- **"Close unpinned" asks first.** Closing every unpinned search tab forgets their results, so a dialog confirms it.

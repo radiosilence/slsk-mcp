@@ -45,7 +45,9 @@
     sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
     --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
     monospace;
+    --color-black: #000;
     --spacing: .25rem;
+    --container-sm: 24rem;
     --font-weight-normal: 400;
     --font-weight-semibold: 600;
     --font-weight-bold: 700;
@@ -637,6 +639,10 @@
     margin: 0;
   }
 
+  .m-auto {
+    margin: auto;
+  }
+
   .mx-0\.5 {
     margin-inline: calc(var(--spacing) * .5);
   }
@@ -695,6 +701,10 @@
 
   .mt-3 {
     margin-top: calc(var(--spacing) * 3);
+  }
+
+  .mt-4 {
+    margin-top: calc(var(--spacing) * 4);
   }
 
   .mt-5 {
@@ -781,6 +791,10 @@
 
   .max-w-full {
     max-width: 100%;
+  }
+
+  .max-w-sm {
+    max-width: var(--container-sm);
   }
 
   .min-w-0 {
@@ -881,6 +895,10 @@
 
   .items-start {
     align-items: flex-start;
+  }
+
+  .justify-end {
+    justify-content: flex-end;
   }
 
   .gap-0\.5 {
@@ -1361,6 +1379,16 @@
 
   :is(.\*\:text-muted > *) {
     color: var(--muted);
+  }
+
+  .backdrop\:bg-black\/60::backdrop {
+    background-color: #0009;
+  }
+
+  @supports (color: color-mix(in lab, red, red)) {
+    .backdrop\:bg-black\/60::backdrop {
+      background-color: color-mix(in oklab, var(--color-black) 60%, transparent);
+    }
   }
 
   :is(.\*\:first\:w-\[4\.5em\] > *):first-child {
