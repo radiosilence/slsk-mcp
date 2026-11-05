@@ -1,0 +1,1 @@
+- **Searches are paced faster.** After a burst of four, searches go out every three seconds instead of four, and `SEARCHES_PER_HOUR` defaults to 600 instead of 200, so a batch of searches finishes sooner while the first minute stays below the rate that drew a flood ban.

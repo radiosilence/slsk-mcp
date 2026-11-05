@@ -1739,4 +1739,71 @@ mod tests {
                 .is_none()
         );
     }
+
+    #[tokio::test]
+    async fn search_tabs_keep_their_folders_and_find_the_same_words() {
+        use crate::folders::{File, Folder};
+        let db = Db::memory().await;
+        let id = open_search_tab(&db, "Artist Album", true).await.unwrap();
+        assert_eq!(
+            find_search_tab(&db, "artist album", true)
+                .await
+                .unwrap()
+                .map(|t| t.id),
+            Some(id)
+        );
+        assert!(
+            find_search_tab(&db, "artist album", false)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        // A Latin-1 path must come back byte for byte.
+        let raw = slsk_engine::slsk_proto::RawStr(b"@@m\\Caf\xe9".to_vec().into());
+        let folder = Folder {
+            username: "u".into(),
+            path: raw.to_string_lossy(),
+            remote_path: raw.clone(),
+            files: vec![File {
+                remote: raw.clone(),
+                name: "a.flac".into(),
+                size: 1,
+                extension: "flac".into(),
+                bitrate: None,
+                duration: None,
+                sample_rate: None,
+                bit_depth: None,
+            }],
+            audio_files: 1,
+            total_size: 1,
+            lossless: true,
+            bit_depth: None,
+            sample_rate: None,
+            bitrate: None,
+            free_slot: true,
+            speed: 0,
+            queue_length: 0,
+            score: 0.0,
+        };
+        finish_search_tab(&db, id, 3, 7, vec![folder], None)
+            .await
+            .unwrap();
+        let tab = search_tab(&db, id).await.unwrap().unwrap();
+        assert!(tab.searched_at.is_some());
+        assert_eq!((tab.responses, tab.found), (3, 7));
+        let kept = search_tab_folders(&db, id).await.unwrap();
+        assert_eq!(kept[0].remote_path, raw);
+        assert_eq!(kept[0].files[0].remote, raw);
+
+        let pinned = open_search_tab(&db, "pinned", true).await.unwrap();
+        pin_search_tab(&db, pinned, true).await.unwrap();
+        close_search_tabs(&db, None).await.unwrap();
+        let left: Vec<i64> = search_tabs(&db)
+            .await
+            .unwrap()
+            .iter()
+            .map(|t| t.id)
+            .collect();
+        assert_eq!(left, [pinned]);
+    }
 }

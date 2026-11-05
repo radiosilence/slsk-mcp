@@ -1,0 +1,1 @@
+- **The Albums page is called Downloads.** It lists downloads and imports in progress, which the old name did not say.

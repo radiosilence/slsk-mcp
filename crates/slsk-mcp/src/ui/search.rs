@@ -70,7 +70,11 @@ const STALE: Duration = Duration::from_secs(600);
 /// Open a tab for each line of `text`, or bring back the one already open for
 /// those words and filter, searching it again if it is stale or failed.
 /// Returns the first.
-pub(super) async fn open(app: &Arc<App>, text: &str, lossless: bool) -> anyhow::Result<Option<i64>> {
+pub(super) async fn open(
+    app: &Arc<App>,
+    text: &str,
+    lossless: bool,
+) -> anyhow::Result<Option<i64>> {
     let mut first = None;
     let mut seen = HashSet::new();
     for words in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
@@ -187,15 +191,27 @@ struct TabsView {
 }
 
 impl TabsView {
+    fn is_active(&self, t: &SearchTab) -> bool {
+        self.active == Some(t.id)
+    }
     fn stale(&self, t: &SearchTab) -> bool {
         stale(t)
     }
     fn about(&self, t: &SearchTab) -> String {
-        let quality = if t.lossless { "lossless" } else { "any quality" };
+        let quality = if t.lossless {
+            "lossless"
+        } else {
+            "any quality"
+        };
         match (t.searched_at, &t.error) {
             (None, _) => format!("{} · {quality} · searching", t.query),
             (Some(_), Some(e)) => format!("{} · {quality} · {e}", t.query),
-            (Some(at), None) => format!("{} · {quality} · {} folders, searched {}", t.query, t.found, ago(at)),
+            (Some(at), None) => format!(
+                "{} · {quality} · {} folders, searched {}",
+                t.query,
+                t.found,
+                ago(at)
+            ),
         }
     }
     fn unpinned(&self) -> usize {
@@ -285,12 +301,20 @@ impl ResultsView {
 /// so reopening or reloading the page spends nothing.
 pub(super) async fn results(State(s): State<UiState>, Query(view): Query<SearchQuery>) -> Response {
     let Some(tab) = active(&s.app, &view).await else {
-        return one(r#"<div id="results" class="text-meta text-muted">This search is closed.</div>"#.into());
+        return one(
+            r#"<div id="results" class="text-meta text-muted">This search is closed.</div>"#.into(),
+        );
     };
-    let shown = view.shown.parse().map_or(FOUND, |n: usize| n.clamp(1, KEEP));
+    let shown = view
+        .shown
+        .parse()
+        .map_or(FOUND, |n: usize| n.clamp(1, KEEP));
     let next = place_url(
         "/search",
-        &[("tab", &tab.id.to_string()), ("shown", &(shown + FOUND).to_string())],
+        &[
+            ("tab", &tab.id.to_string()),
+            ("shown", &(shown + FOUND).to_string()),
+        ],
     );
     if let Some(at) = tab.searched_at {
         let mut folders = match db::search_tab_folders(&s.app.db, tab.id).await {
@@ -314,7 +338,10 @@ pub(super) async fn results(State(s): State<UiState>, Query(view): Query<SearchQ
         return one(view.render().unwrap_or_default());
     }
     let Some(engine) = s.app.session.engine().cloned() else {
-        return one(r#"<div id="results" class="text-meta text-muted">Sign in to Soulseek first.</div>"#.into());
+        return one(
+            r#"<div id="results" class="text-meta text-muted">Sign in to Soulseek first.</div>"#
+                .into(),
+        );
     };
     // A search lost to a restart starts again here; one running is joined.
     run(s.app.clone(), tab.id, tab.query.clone(), tab.lossless);
@@ -392,7 +419,9 @@ async fn close(State(s): State<UiState>, Path(id): Path<i64>, body: Bytes) -> Re
     if active == Some(id)
         && let Some(i) = tabs.iter().position(|t| t.id == id)
     {
-        let neighbour = tabs.get(i + 1).or(i.checked_sub(1).and_then(|i| tabs.get(i)));
+        let neighbour = tabs
+            .get(i + 1)
+            .or(i.checked_sub(1).and_then(|i| tabs.get(i)));
         return go(&neighbour.map_or("/search".to_string(), |t| format!("/search?tab={}", t.id)));
     }
     redraw(&s.app, &body).await
