@@ -34,6 +34,9 @@ pub struct Library {
     /// seconds on a large library, and the answer changes only when the
     /// library does.
     overview: Mutex<Option<(u64, Arc<Overview>)>>,
+    /// The last overview worked out, for a page that would rather show it
+    /// than wait seconds while the next is worked out.
+    last_overview: parking_lot::Mutex<Option<Arc<Overview>>>,
     /// Every album, and the generation it was read at. Reading and grouping
     /// every track takes about half a second on a few thousand albums, so
     /// listings filter and sort this in memory instead.
@@ -358,6 +361,7 @@ impl Library {
             stale: tokio::sync::Notify::new(),
             generation: AtomicU64::new(0),
             overview: Mutex::new(None),
+            last_overview: parking_lot::Mutex::new(None),
             all: Mutex::new(None),
             cfg: tagger.cfg.clone(),
             bin,
@@ -433,12 +437,28 @@ impl Library {
             return Ok(overview.clone());
         }
         let albums = self.all().await?;
+        let started = std::time::Instant::now();
         let overview = Arc::new(tokio::task::block_in_place(|| Overview {
             duplicates: self.duplicates_of(&albums),
             plan: self.plan_of(&albums),
         }));
+        tracing::debug!(albums = albums.len(), took = ?started.elapsed(), "library overview worked out");
         *cached = Some((generation, overview.clone()));
+        *self.last_overview.lock() = Some(overview.clone());
         Ok(overview)
+    }
+
+    /// The overview, or while the next is being worked out (as it is after
+    /// every import), the last one: what only labels albums on a page.
+    pub async fn overview_soon(&self) -> anyhow::Result<Arc<Overview>> {
+        let last = self.last_overview.lock().clone();
+        match (self.overview.try_lock(), last) {
+            (Err(_), Some(last)) => Ok(last),
+            (guard, _) => {
+                drop(guard);
+                self.overview().await
+            }
+        }
     }
 
     fn duplicates_of(&self, albums: &[Album]) -> Vec<DuplicateSet> {
@@ -1134,8 +1154,8 @@ impl Library {
     /// written only for these, so a path from a request reaches nothing
     /// else.
     pub async fn album_at(&self, dir: &str) -> anyhow::Result<Album> {
-        self.read(&by_path([dir]))
-            .await?
+        let index = self.reader.lock().await;
+        tokio::task::block_in_place(|| index.albums_in([Path::new(dir)]))?
             .into_iter()
             .find(|a| a.dir == Path::new(dir))
             .ok_or_else(|| anyhow::anyhow!("{dir} is not an album in the library"))
@@ -1144,31 +1164,43 @@ impl Library {
     /// The pictures embedded in each file of the album at `dir`, and the
     /// cover images beside them.
     pub async fn art(&self, dir: &str) -> anyhow::Result<AlbumArt> {
-        self.album_at(dir).await?;
-        let tracks = self.tracks(dir).await?;
+        let album = self.album_at(dir).await?;
+        let paths: Vec<&Path> = album.items.iter().map(|i| i.track.path.as_path()).collect();
+        let read = |path: &Path| {
+            let (pictures, error) = if !art::inside(&self.cfg.directory, path) {
+                (
+                    Vec::new(),
+                    Some("links outside the library; not read".into()),
+                )
+            } else {
+                match sift::meta::pictures(path) {
+                    Ok(p) => (p.into_iter().map(Picture::from).collect(), None),
+                    Err(e) => (Vec::new(), Some(e.to_string())),
+                }
+            };
+            FileArt {
+                file: within(dir, path),
+                pictures,
+                error,
+            }
+        };
+        // Each read waits on the share more than the CPU, so several go at
+        // once, in order.
+        const AT_ONCE: usize = 8;
+        let per = paths.len().div_ceil(AT_ONCE).max(1);
         Ok(tokio::task::block_in_place(|| AlbumArt {
             path: dir.to_string(),
-            files: tracks
-                .iter()
-                .map(|t| {
-                    let (pictures, error) = if !art::inside(&self.cfg.directory, &t.path) {
-                        (
-                            Vec::new(),
-                            Some("links outside the library; not read".into()),
-                        )
-                    } else {
-                        match sift::meta::pictures(&t.path) {
-                            Ok(p) => (p.into_iter().map(Picture::from).collect(), None),
-                            Err(e) => (Vec::new(), Some(e.to_string())),
-                        }
-                    };
-                    FileArt {
-                        file: within(dir, &t.path),
-                        pictures,
-                        error,
-                    }
-                })
-                .collect(),
+            files: std::thread::scope(|scope| {
+                paths
+                    .chunks(per)
+                    .map(|chunk| {
+                        scope.spawn(move || chunk.iter().map(|p| read(p)).collect::<Vec<_>>())
+                    })
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .flat_map(|h| h.join().unwrap_or_default())
+                    .collect()
+            }),
             cover_files: art::cover_files(&self.cfg.directory, Path::new(dir))
                 .iter()
                 .map(|p| {

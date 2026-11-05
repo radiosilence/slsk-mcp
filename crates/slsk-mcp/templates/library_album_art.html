@@ -1,0 +1,9 @@
+<div id="{{ slot }}-artinfo" class="my-2.5 flex flex-wrap items-start gap-3">
+  {% if let Some(src) = cover %}<a href="{{ src }}" target="_blank" rel="noopener" class="flex-none"><img src="{{ src }}" alt="Cover of {{ title }}" class="size-32 rounded border border-rule object-cover"></a>{% endif %}
+  <div class="min-w-0 flex-1 text-meta text-muted wrap-anywhere">
+    {% for c in art.cover_files %}<p class="my-0.5">{% if loop.first %}Cover file{% else %}Also{% endif %}: {{ self.cover_file(c) }}</p>{% endfor %}
+    {% for (desc, n) in self.embedded() %}<p class="my-0.5">Embedded: {{ desc }}, in {{ n }} of {{ art.files.len() }} file{% if art.files.len() != 1 %}s{% endif %}</p>{% endfor %}
+    {% if art.cover_files.is_empty() && self.embedded().is_empty() %}<p class="my-0.5">No art: nothing embedded and no cover image.</p>{% endif %}
+    {% if self.unreadable() > 0 %}<p class="my-0.5 text-warn">{{ self.unreadable() }} file{% if self.unreadable() != 1 %}s{% endif %} could not be read for pictures.</p>{% endif %}
+  </div>
+</div>

@@ -367,7 +367,7 @@ pub(super) fn in_formats(albums: &[LibraryAlbum]) -> HashSet<String> {
 async fn rows(s: &UiState, terms: &[String]) -> anyhow::Result<Vec<Row>> {
     let library = &s.app.library;
     let albums = library.albums(terms).await?;
-    let overview = library.overview().await?;
+    let overview = library.overview_soon().await?;
     let marks = marks(&overview);
     Ok(albums
         .into_iter()
@@ -549,6 +549,7 @@ async fn view(State(s): State<UiState>, uri: http::Uri) -> Response {
                 .collect();
             for path in open.iter().filter(|p| shown.contains(*p)) {
                 yield Ok(patch(&album_html(&s, &filter, path).await));
+                yield Ok(patch(&art_html(&s, path).await));
             }
         }
     })
@@ -574,12 +575,21 @@ struct AlbumView<'a> {
     slot: String,
     row: &'a Row,
     tracks: Vec<sift::meta::Track>,
-    art: Option<AlbumArt>,
+}
+
+/// An album's art: the cover shown, the cover files beside it and the
+/// pictures embedded in its files.
+#[derive(Template)]
+#[template(path = "library_album_art.html")]
+struct ArtView {
+    slot: String,
+    title: String,
+    art: AlbumArt,
     /// Where its cover is drawn from, when it has one.
     cover: Option<String>,
 }
 
-impl AlbumView<'_> {
+impl ArtView {
     /// The pictures embedded in its files, each kind once, with how many
     /// files carry it.
     fn embedded(&self) -> Vec<(String, usize)> {
@@ -610,6 +620,9 @@ impl AlbumView<'_> {
         };
         format!("{}{size}, {}", c.name, super::human(c.bytes))
     }
+}
+
+impl AlbumView<'_> {
     fn rel<'b>(&self, p: &'b str) -> &'b str {
         rel(self.root, p)
     }
@@ -687,18 +700,19 @@ impl AlbumView<'_> {
 }
 
 /// The album at `path`, open in its row: its files and their tags, where
-/// the rules file it, and what can be done to it.
+/// the rules file it, and what can be done to it. Its art follows, from
+/// [`art_html`].
 async fn album_html(s: &UiState, filter: &Filter, path: &str) -> String {
     let root = s.app.library.root().to_string_lossy().into_owned();
     let slot = slot_of(path);
     let result = async {
-        let row = rows(s, &by_path([path]))
-            .await?
-            .into_iter()
-            .next()
-            .ok_or_else(|| anyhow::anyhow!("No longer in the library."))?;
-        let tracks = s.app.library.tracks(&row.album.path).await?;
-        anyhow::Ok((row, tracks))
+        let library = &s.app.library;
+        let album = LibraryAlbum::from(&library.album_at(path).await?);
+        // The labels only: the last overview rather than waiting for the
+        // next, which takes seconds and is worked out after every import.
+        let marks = marks(&*library.overview_soon().await?).remove(&album.path);
+        let tracks = library.tracks(path).await?;
+        anyhow::Ok((Row { album, marks }, tracks))
     }
     .await;
     match result {
@@ -707,8 +721,6 @@ async fn album_html(s: &UiState, filter: &Filter, path: &str) -> String {
             filter,
             slot,
             row: &row,
-            art: s.app.library.art(&row.album.path).await.ok(),
-            cover: cover_url(&s.app.library, &row.album.path).await,
             tracks,
         }
         .render()
@@ -720,19 +732,61 @@ async fn album_html(s: &UiState, filter: &Filter, path: &str) -> String {
     }
 }
 
-/// One album opened in its row.
+/// The art of the album at `path`, for its open detail.
+async fn art_html(s: &UiState, path: &str) -> String {
+    let slot = slot_of(path);
+    match s.app.library.art(path).await {
+        Ok(art) => ArtView {
+            cover: cover_url(&art),
+            title: std::path::Path::new(path)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            slot,
+            art,
+        }
+        .render()
+        .unwrap_or_default(),
+        Err(e) => format!(
+            r#"<div id="{slot}-artinfo" class="my-2.5 text-meta text-bad wrap-anywhere">{}</div>"#,
+            escape(&format!("{e:#}"))
+        ),
+    }
+}
+
+/// One album opened in its row, then its art.
 async fn album(
     State(s): State<UiState>,
     Query(AlbumQuery { filter, path }): Query<AlbumQuery>,
 ) -> Response {
-    super::one(album_html(&s, &filter, &path).await)
+    super::finite(
+        sse(async_stream::stream! {
+            yield Ok(patch(&album_html(&s, &filter, &path).await));
+            yield Ok(patch(&art_html(&s, &path).await));
+        })
+        .into_response(),
+    )
 }
 
 /// The address of the album's cover, when it has one, versioned by the
-/// file it comes from so a browser keeps it until the art changes.
-async fn cover_url(library: &crate::library::Library, path: &str) -> Option<String> {
-    let (_, source) = library.cover(path).await.ok()??;
-    let meta = tokio::fs::metadata(&source).await.ok()?;
+/// file it comes from so a browser keeps it until the art changes. The
+/// file is the one [`crate::library::Library::cover`] serves: the leading
+/// cover image, or else the first file with a picture embedded.
+fn cover_url(art: &AlbumArt) -> Option<String> {
+    let source = match art.cover_files.first() {
+        Some(c) => std::path::Path::new(&art.path).join(&c.name),
+        None => {
+            let mut with: Vec<&str> = art
+                .files
+                .iter()
+                .filter(|f| !f.pictures.is_empty())
+                .map(|f| f.file.as_str())
+                .collect();
+            with.sort();
+            std::path::Path::new(&art.path).join(with.first()?)
+        }
+    };
+    let meta = std::fs::metadata(&source).ok()?;
     let modified = meta
         .modified()
         .ok()?
@@ -742,7 +796,7 @@ async fn cover_url(library: &crate::library::Library, path: &str) -> Option<Stri
     let version = key(&format!("{}:{}:{modified}", source.display(), meta.len()));
     Some(super::place_url(
         "/library/album/cover",
-        &[("path", path), ("v", &version)],
+        &[("path", &art.path), ("v", &version)],
     ))
 }
 
@@ -2259,6 +2313,11 @@ async fn changed_rows(
     moved: &HashMap<String, String>,
     slot: &str,
 ) -> Vec<axum::response::sse::Event> {
+    // The labels of the rows just changed must be worked out afresh, not
+    // taken from before the change.
+    if let Err(e) = s.app.library.overview().await {
+        tracing::warn!(error = %e, "library overview failed");
+    }
     let mut rows: HashMap<String, Row> = listing(s, filter)
         .await
         .unwrap_or_default()
@@ -2275,6 +2334,7 @@ async fn changed_rows(
                 events.push(super::insert(&target, "replace", &html));
                 if slot_of(path) == slot {
                     events.push(patch(&album_html(s, filter, now).await));
+                    events.push(patch(&art_html(s, now).await));
                 }
             }
             None => events.push(super::insert(&target, "remove", "")),
