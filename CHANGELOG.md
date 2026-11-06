@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.13.3
+
+### Changed
+
+- **"Close unpinned" asks first.** Closing every unpinned search tab forgets their results, so a dialog confirms it.
+- **Live updates are compressed.** Event streams, including a running search redrawn each second and the downloads list, are now sent as brotli flushed after every event, so each update arrives at once while one that mostly repeats the last costs a few hundred bytes.
+- **The web UI uses the shared radiosilence theme.** Its palette, type scale and Geist Mono typeface now come from `@radiosilence/theme`, shared with koan, and it follows the device's light or dark preference instead of being dark only.
+
+### Fixed
+
+- **A search tab shows its own results after switching away from a running search.** Datastar cancels a request only for another to the same address, so the running search's stream kept drawing over the tab moved to. The page now aborts it.
+
 ## 0.13.2
 
 ### Changed
