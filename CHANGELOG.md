@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.13.4
+
+### Changed
+
+- **Long lists load their next page as you reach the end.** The Downloads list and upload history fetch the next hundred rows when their "Show more" button scrolls into view; it can still be clicked.
+
 ## 0.13.3
 
 ### Changed
