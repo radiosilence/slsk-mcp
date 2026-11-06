@@ -144,9 +144,11 @@ jobs:
             touches '^crates/|^Cargo\.(toml|lock)$|^\.cargo/|^rust-toolchain|^\.github/' || rust=false
             # The compiled stylesheet: its sources, everything Tailwind reads
             # class names from, the output itself, and the recipe and tool
-            # pin that build it. The justfile and mise.toml reach no other
-            # job: the Rust and Node jobs install their toolchains themselves.
-            touches '^crates/slsk-mcp/(styles|templates|src|assets)/|^justfile$|^mise\.toml$|^\.github/' || web=false
+            # pin that build it, and the manifest, lockfile and registry
+            # settings that install the shared theme. The justfile and
+            # mise.toml reach no other job: the Rust and Node jobs install
+            # their toolchains themselves.
+            touches '^crates/slsk-mcp/(styles|templates|src|assets)/|^justfile$|^mise\.toml$|^(package\.json|aube-lock\.yaml|\.npmrc)$|^\.github/' || web=false
             touches '^deploy/pulumi/|^\.github/' || package=false
             # The static binaries and the image that copies them in. The Rust
             # jobs already check the code, so a pull request builds these
@@ -368,22 +370,29 @@ jobs:
             python3 scripts/changelog.py --lint
           fi
 
-  # The web UI's stylesheet is compiled by Tailwind and committed, since the
-  # server embeds it. A source edited without a rebuild would ship the old CSS.
+  # The web UI's stylesheet is compiled by Tailwind and committed, with the
+  # shared theme's typeface beside it, since the server embeds both. A source
+  # or theme changed without a rebuild would ship the old ones.
   css:
     name: Stylesheet
     runs-on: ubuntu-latest
     needs: changes
     if: needs.changes.outputs.web == 'true'
     timeout-minutes: 10
+    permissions:
+      contents: read
+      # @radiosilence/theme is on GitHub Packages, which wants a token even to read.
+      packages: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
         with:
-          install_args: just github:tailwindlabs/tailwindcss
+          install_args: just node aube github:tailwindlabs/tailwindcss
       - run: just css
-      - name: Compiled stylesheet matches its sources
-        run: git diff --exit-code crates/slsk-mcp/assets/app.css
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Compiled stylesheet and typeface match their sources
+        run: git diff --exit-code crates/slsk-mcp/assets/app.css crates/slsk-mcp/assets/geist-mono.woff2
 
   # The crate, the Pulumi package and the image it deploys share one version
   # number: the package pins the image by `APP_VERSION`. Runs on pull requests

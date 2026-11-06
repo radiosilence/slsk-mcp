@@ -812,3 +812,10 @@ mod profile {
         assert!(cache.get(&format!("u{}", KEEP - 1)).is_some());
     }
 }
+
+#[test]
+fn the_typeface_is_served_as_woff2() {
+    let response = font(GEIST_MONO).into_response();
+    assert_eq!(response.headers()[header::CONTENT_TYPE], "font/woff2");
+    assert!(GEIST_MONO.starts_with(b"wOF2"));
+}
