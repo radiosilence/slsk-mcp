@@ -2375,8 +2375,9 @@ async fn run(
     if action == Action::Refile {
         // One pass under the index's writer, each album planned again as it
         // moves.
+        let dirs: Vec<&str> = paths.iter().map(String::as_str).collect();
         return library
-            .refile_each(&by_path(paths.iter().map(String::as_str)), |m| {
+            .refile_each(&by_path(dirs.iter().copied()), &dirs, |m| {
                 record(Outcome {
                     ok: m.to.is_some() || m.refused.is_none(),
                     detail: match (&m.to, &m.refused) {

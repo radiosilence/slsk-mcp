@@ -1,17 +1,4 @@
-<div id="jobs">
-{% if attention.is_empty() && underway.is_empty() && settled.is_empty() %}<p class="text-meta text-muted">Nothing yet. Search for something, or ask your assistant to grab it.</p>{% endif %}
-{% if !attention.is_empty() %}
-<section class="mt-5 min-w-0">
-  <h2 class="text-warn">Needs you <span class="text-ink">{{ attention.len() }}</span></h2>
-{% for c in attention %}{{ c|safe }}{% endfor %}
-</section>
-{% endif %}
-{% if !underway.is_empty() %}
-<section class="mt-5 min-w-0">
-  <h2>On the way <span class="text-ink">{{ underway.len() }}</span></h2>
-{% for c in underway %}{{ c|safe }}{% endfor %}
-</section>
-{% endif %}
+<div id="jobs-settled">
 {% if !settled.is_empty() %}
 <section class="mt-5 min-w-0">
   <h2>In your library</h2>

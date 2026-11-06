@@ -18,10 +18,13 @@ use tokio::sync::Mutex;
 use crate::art::{self, AlbumArt, ArtRemoved, ArtSet, CoverFile, FileArt, Image, Picture, Target};
 
 pub struct Library {
-    /// Answers queries, from the index as last refreshed. Its own
-    /// connection, so a read is never queued behind a scan: under SQLite's
-    /// WAL it sees the last committed state while the writer works.
-    reader: Mutex<sift::library::Library>,
+    /// Answer queries, from the index as last refreshed. Connections of
+    /// their own, so a read is never queued behind a scan (under SQLite's
+    /// WAL each sees the last committed state while the writer works), and
+    /// several, so a slow read does not hold up the others.
+    readers: Vec<Mutex<sift::library::Library>>,
+    /// The reader to wait on when all are busy.
+    next_reader: AtomicU64,
     /// Scans the files, and makes every change to them.
     writer: Mutex<sift::library::Library>,
     /// Wakes the refresh loop.
@@ -349,6 +352,9 @@ fn check_editable(edits: &TagEdits) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// How many reads of the index may run at once.
+const READERS: usize = 4;
+
 impl Library {
     pub fn open(
         index: &Path,
@@ -357,7 +363,10 @@ impl Library {
     ) -> anyhow::Result<Self> {
         Ok(Self {
             writer: Mutex::new(sift::library::Library::open(index)?.with_workers(2)),
-            reader: Mutex::new(sift::library::Library::open(index)?),
+            readers: (0..READERS)
+                .map(|_| Ok(Mutex::new(sift::library::Library::open(index)?)))
+                .collect::<anyhow::Result<_>>()?,
+            next_reader: AtomicU64::new(0),
             stale: tokio::sync::Notify::new(),
             generation: AtomicU64::new(0),
             overview: Mutex::new(None),
@@ -392,6 +401,39 @@ impl Library {
                 unreadable = report.failed.len(),
                 "library index updated"
             );
+        }
+        Ok(())
+    }
+
+    /// Bring the index up to date for the albums at `dirs` only, without
+    /// walking the rest of the library. An album no longer there is dropped
+    /// from the index. Empty `dirs` means the whole library.
+    fn refresh_in(&self, index: &mut sift::library::Library, dirs: &[&str]) -> anyhow::Result<()> {
+        if dirs.is_empty() {
+            return self.refresh(index);
+        }
+        let mut changes = 0;
+        for dir in dirs {
+            let dir = Path::new(dir);
+            if !dir.starts_with(&self.cfg.directory) {
+                return self.refresh(index);
+            }
+            changes += tokio::task::block_in_place(|| -> anyhow::Result<usize> {
+                if dir.is_dir() {
+                    let r = index.update(dir)?;
+                    return Ok(r.added + r.changed + r.removed);
+                }
+                let gone: Vec<PathBuf> = index
+                    .albums_in([dir])?
+                    .into_iter()
+                    .flat_map(|a| a.items.into_iter().map(|i| i.track.path))
+                    .collect();
+                index.forget_all(gone.iter().map(PathBuf::as_path))?;
+                Ok(gone.len())
+            })?;
+        }
+        if changes > 0 {
+            self.bump();
         }
         Ok(())
     }
@@ -511,18 +553,34 @@ impl Library {
         self.stale.notify_one();
     }
 
-    /// The writer, after bringing the index up to date: a change is made
-    /// only to what is there now.
-    async fn write(&self) -> anyhow::Result<tokio::sync::MutexGuard<'_, sift::library::Library>> {
+    /// The writer, after bringing the index up to date for the albums at
+    /// `dirs` (the whole library when empty): a change is made only to what
+    /// is there now. A change to named albums reads only those, so it does
+    /// not wait on a walk of the whole share.
+    async fn write(
+        &self,
+        dirs: &[&str],
+    ) -> anyhow::Result<tokio::sync::MutexGuard<'_, sift::library::Library>> {
         let mut index = self.writer.lock().await;
-        self.refresh(&mut index)?;
+        self.refresh_in(&mut index, dirs)?;
         Ok(index)
+    }
+
+    /// A reader: the first free, or when all are busy, the next in turn.
+    async fn reader(&self) -> tokio::sync::MutexGuard<'_, sift::library::Library> {
+        for r in &self.readers {
+            if let Ok(guard) = r.try_lock() {
+                return guard;
+            }
+        }
+        let n = self.next_reader.fetch_add(1, Ordering::Relaxed) as usize % self.readers.len();
+        self.readers[n].lock().await
     }
 
     /// Albums matching `query`, from the index as it stands.
     async fn read(&self, query: &[String]) -> anyhow::Result<Vec<Album>> {
         let query = Query::parse(query)?;
-        let index = self.reader.lock().await;
+        let index = self.reader().await;
         Ok(tokio::task::block_in_place(|| index.albums(&query))?)
     }
 
@@ -572,7 +630,7 @@ impl Library {
             let albums = self.read(query).await?;
             return Ok(tokio::task::block_in_place(|| self.duplicates_of(&albums)));
         }
-        let mut index = self.write().await?;
+        let mut index = self.write(&[]).await?;
         let albums = tokio::task::block_in_place(|| index.albums(&Query::parse(query)?))?;
         let mut out = Vec::new();
         for d in manage::duplicates(&self.cfg, &albums) {
@@ -638,7 +696,7 @@ impl Library {
     /// [`Self::bin_album`] for each of `dirs`, under one hold of the index:
     /// each album's outcome, in order.
     pub async fn bin_albums(&self, dirs: &[&str]) -> anyhow::Result<Vec<anyhow::Result<PathBuf>>> {
-        let mut index = self.write().await?;
+        let mut index = self.write(dirs).await?;
         let albums = tokio::task::block_in_place(|| {
             index.albums(&Query::parse(&by_path(dirs.iter().copied()))?)
         })?;
@@ -855,7 +913,8 @@ impl Library {
     pub async fn edit_many(&self, albums: &[AlbumEdit]) -> anyhow::Result<Vec<AlbumMove>> {
         check_batch(albums)?;
         {
-            let _index = self.write().await?;
+            let dirs: Vec<&str> = albums.iter().map(|a| a.dir.as_str()).collect();
+            let _index = self.write(&dirs).await?;
             // Each file to write: its changes, the fields as they read, and
             // whether writing them drops MusicBrainz artist ids an undo
             // cannot put back.
@@ -936,7 +995,7 @@ impl Library {
         let dirs: Vec<&str> = albums.iter().map(|a| a.dir.as_str()).collect();
         let mut moves = Vec::new();
         let refiled = self
-            .refile_each(&by_path(dirs.iter().copied()), |m| moves.push(m))
+            .refile_each(&by_path(dirs.iter().copied()), &dirs, |m| moves.push(m))
             .await;
         Ok(dirs
             .into_iter()
@@ -979,7 +1038,7 @@ impl Library {
         release_id: Option<&str>,
     ) -> anyhow::Result<ReimportedAlbum> {
         // Held so no other change moves files while this one does.
-        let mut index = self.write().await?;
+        let mut index = self.write(&[dir]).await?;
         let added = self
             .read(&[format!("path:={dir}")])
             .await?
@@ -1001,7 +1060,8 @@ impl Library {
                 tracing::info!(from = dir, to = %to.display(), "re-imported an album");
                 // Moved files are new to a scan; the album keeps the date it
                 // first arrived, so it does not jump to the top of the list.
-                self.refresh(&mut index)?;
+                let moved = to.to_string_lossy();
+                self.refresh_in(&mut index, &[dir, &moved])?;
                 if let Some(added) = added {
                     index.set_added(&to, added)?;
                 }
@@ -1037,7 +1097,7 @@ impl Library {
         if changes.is_empty() {
             anyhow::bail!("no changes given");
         }
-        let mut index = self.write().await?;
+        let mut index = self.write(&[]).await?;
         let report = manage::modify(
             &self.cfg,
             &mut index,
@@ -1077,7 +1137,7 @@ impl Library {
             return Ok(tokio::task::block_in_place(|| self.plan_of(&albums)));
         }
         let mut out = Vec::new();
-        self.refile_each(query, |m| {
+        self.refile_each(query, &[], |m| {
             if m.to.is_some() || m.refused.is_some() {
                 out.push(m);
             }
@@ -1094,9 +1154,10 @@ impl Library {
     pub async fn refile_each(
         &self,
         query: &[String],
+        dirs: &[&str],
         mut done: impl FnMut(AlbumMove),
     ) -> anyhow::Result<()> {
-        let mut index = self.write().await?;
+        let mut index = self.write(dirs).await?;
         let albums = tokio::task::block_in_place(|| index.albums(&Query::parse(query)?))?;
         for album in albums {
             let from = album.dir.to_string_lossy().into_owned();
@@ -1154,7 +1215,7 @@ impl Library {
     /// written only for these, so a path from a request reaches nothing
     /// else.
     pub async fn album_at(&self, dir: &str) -> anyhow::Result<Album> {
-        let index = self.reader.lock().await;
+        let index = self.reader().await;
         tokio::task::block_in_place(|| index.albums_in([Path::new(dir)]))?
             .into_iter()
             .find(|a| a.dir == Path::new(dir))
@@ -1258,7 +1319,8 @@ impl Library {
         apply: bool,
     ) -> anyhow::Result<Vec<ArtRemoved>> {
         let _index = if apply {
-            Some(self.write().await?)
+            let dirs: Vec<&str> = dirs.iter().map(String::as_str).collect();
+            Some(self.write(&dirs).await?)
         } else {
             None
         };
@@ -1334,7 +1396,7 @@ impl Library {
             anyhow::bail!("say where the art goes: embedded, a cover file, or both");
         }
         let _index = if apply {
-            Some(self.write().await?)
+            Some(self.write(&[dir]).await?)
         } else {
             None
         };

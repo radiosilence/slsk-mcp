@@ -10,9 +10,10 @@
     {% if let Some(href) = self.filed(j) %} · <a href="{{ href }}">in the library</a>{% endif %}
   </div>
   {% if j.status == "downloading" %}<progress max="100" value="{{ self.pct(j) }}">{{ self.pct(j) }}%</progress>{% endif %}
-  {% if (full || !warn) && !j.files.is_empty() %}{% let open = self.open_sig(j) %}
-  {% if !full %}<button type="button" class="quiet mt-1.5 px-2 py-0.5 text-meta" data-on:click="${{ open }} = !${{ open }}" data-text="(${{ open }} ? '▾ ' : '▸ ') + '{{ j.files.len() }} files'">▸ {{ j.files.len() }} files</button>{% endif %}
-  <ul class="mt-1 grid gap-1 text-meta"{% if !full %} data-show="${{ open }}"{% endif %}>
+  {% if (full || !warn) && !j.files.is_empty() %}{% let shown = self.is_open(j) %}
+  {% if !full %}<button type="button" class="quiet mt-1.5 px-2 py-0.5 text-meta" data-on:click="{{ self.toggle(j) }}" data-text="({{ shown }} ? '▾ ' : '▸ ') + '{{ j.files.len() }} files'">{% if open %}▾{% else %}▸{% endif %} {{ j.files.len() }} files</button>{% endif %}
+  {% if open %}
+  <ul class="mt-1 grid gap-1 text-meta"{% if !full %} data-show="{{ shown }}"{% endif %}>
     {% for f in j.files %}
     <li class="flex min-w-0 flex-wrap items-baseline gap-x-2">
       <span class="min-w-0 flex-[1_1_60%] wrap-anywhere{% if f.state == "completed" %} text-muted{% endif %}">{{ f.name }}</span>
@@ -20,6 +21,7 @@
     </li>
     {% endfor %}
   </ul>
+  {% endif %}
   {% endif %}
   {% match self.ask(j) %}{% when Some with (a) %}<p class="mt-2 mb-0.5">{{ a }}</p>{% when None %}{% endmatch %}
   {% match j.error %}{% when Some with (e) %}<p class="my-0.5 text-meta {% if j.status == "failed" %}text-bad{% else %}text-muted{% endif %} wrap-anywhere">{{ e }}</p>{% when None %}{% endmatch %}
@@ -68,6 +70,7 @@
   <form id="release-{{ j.id.as_str() }}" class="my-1.5 flex flex-wrap items-center gap-2" data-on:submit__prevent="@post('/jobs/{{ j.id.as_str() }}/release', {contentType: 'form', selector: '#release-{{ j.id.as_str() }}'})">
     <input type="hidden" name="jobs" value="{{ crate::ui::PAGE }}" data-attr:value="$jobs">
     <input type="hidden" name="job" data-attr:value="$job">
+    <input type="hidden" name="files" data-attr:value="$files">
     <input class="flex-[1_1_12em]" name="release" aria-label="Release id or link" placeholder="{% if discogs %}MusicBrainz or Discogs release id or link{% else %}MusicBrainz release id or link{% endif %}" autocomplete="off" required>
     <button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}">Use release</button>
   </form>

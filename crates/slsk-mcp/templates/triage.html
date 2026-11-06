@@ -11,6 +11,7 @@
     {% for e in c.examples %}
       <li><span class="min-w-0 flex-[1_1_60%] truncate">{{ e.title }}</span><span class="text-meta text-muted wrap-anywhere">{{ self.ago(e.at) }} · {{ e.outcome }} · {{ e.version }}{% match e.detail %}{% when Some with (d) %} · {{ d }}{% when None %}{% endmatch %}</span></li>
     {% endfor %}
+    {% if c.count > c.examples.len() %}<li class="text-meta text-muted">and {{ c.count - c.examples.len() }} earlier</li>{% endif %}
     </ul>
   </article>
   {% endfor %}

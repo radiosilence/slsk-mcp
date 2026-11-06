@@ -566,6 +566,7 @@ async fn render_page(
         "lossless": search_tab.as_ref().is_none_or(|t| t.lossless),
         "tab": search_tab.as_ref().map(|t| t.id.to_string()).unwrap_or_default(),
         "busy": false,
+        "files": "",
         "jobs": PAGE,
         "history": PAGE,
         "_url": url,
@@ -594,7 +595,7 @@ async fn render_page(
             }
         },
         "albums" => AlbumsPage {
-            jobs: jobs_html(&s.app, PAGE).await,
+            jobs: jobs_html(&s.app, &Shown::default()).await,
         }
         .render()
         .unwrap_or_default(),
@@ -675,7 +676,7 @@ async fn status_html(app: &App) -> String {
 /// Rows shown at first, and added by each "Show more", in the lists that
 /// grow without end: each kind of job, and upload history. A phone browser
 /// cannot hold many thousands of them.
-const PAGE: i64 = 500;
+const PAGE: i64 = 100;
 
 /// `PAGE`, for a form that does not say how many rows its page shows.
 fn page() -> i64 {
@@ -690,10 +691,11 @@ fn shown_field<'de, D: serde::Deserializer<'de>>(d: D) -> Result<i64, D::Error> 
         .unwrap_or(PAGE))
 }
 
-/// The most rows a page may ask for, whatever its signals say: ten pages.
+/// The most rows a page may ask for, whatever its signals say: fifty pages.
 const MOST: i64 = 5_000;
 
 /// A job that landed or was cancelled, as its one line.
+#[derive(PartialEq)]
 struct Settled {
     id: String,
     /// What landed, as filed ("Artist — (Year) Album"), which is the
@@ -704,8 +706,8 @@ struct Settled {
     cancelled: bool,
 }
 
-impl From<crate::db::Job> for Settled {
-    fn from(j: crate::db::Job) -> Self {
+impl From<crate::db::SettledJob> for Settled {
+    fn from(j: crate::db::SettledJob) -> Self {
         let title = match j.library_path.as_deref() {
             None => j.title,
             Some(path) => {
@@ -737,20 +739,30 @@ struct Advice {
     why: String,
 }
 
+/// The jobs in hand, redrawn every second while the list is open.
 #[derive(Template)]
-#[template(path = "jobs.html")]
-struct JobsView {
+#[template(path = "jobs_live.html")]
+struct LiveJobs {
     /// Waiting on a decision: review, suspect, failed.
     attention: Vec<CardView>,
     /// Downloading, importing, or waiting on a metadata service.
     underway: Vec<CardView>,
-    /// Imported, or cancelled by someone: the newest few hundred.
+    /// Nothing in hand and nothing settled either.
+    empty: bool,
+}
+
+/// The jobs done with, redrawn only when one settles or goes: it is the
+/// long part of the list, and none of it moves.
+#[derive(Template, PartialEq)]
+#[template(path = "jobs_settled.html")]
+struct SettledJobs {
+    /// Imported, or cancelled by someone: the newest `shown`.
     settled: Vec<Settled>,
     /// Older jobs exist beyond those shown.
     more: bool,
 }
 
-impl JobsView {
+impl SettledJobs {
     fn sig_of(&self, id: &str) -> String {
         busy_sig(id)
     }
@@ -776,6 +788,8 @@ struct CardView {
     place: Option<u32>,
     /// Whether a Discogs release can be applied as well as a MusicBrainz one.
     discogs: bool,
+    /// The list of files is open, so it is drawn.
+    open: bool,
 }
 
 impl CardView {
@@ -856,9 +870,18 @@ impl CardView {
         }
     }
 
-    /// The client-only signal that shows a job's files.
-    fn open_sig(&self, j: &Job) -> String {
-        format!("_files_{}", j.id.as_str().replace('-', ""))
+    /// The expression that is true while a job's files are open: the
+    /// `files` signal lists the open ones, so the stream draws only those.
+    fn is_open(&self, j: &Job) -> String {
+        format!("$files.includes('{},')", j.id.as_str())
+    }
+
+    /// The expression that opens or closes a job's files.
+    fn toggle(&self, j: &Job) -> String {
+        let id = j.id.as_str();
+        format!(
+            "$files = $files.includes('{id},') ? $files.replace('{id},', '') : $files + '{id},'"
+        )
     }
 
     fn file_progress(&self, f: &graphql::JobFile) -> String {
@@ -1017,7 +1040,7 @@ impl CardView {
     }
 }
 
-fn card(app: &App, j: Job, full: bool) -> CardView {
+fn card(app: &App, j: Job, full: bool, open: bool) -> CardView {
     let warn = matches!(j.status.as_str(), "review" | "suspect" | "failed");
     let place = Uuid::parse_str(j.id.as_str())
         .ok()
@@ -1028,34 +1051,48 @@ fn card(app: &App, j: Job, full: bool) -> CardView {
         full,
         place,
         discogs: app.jobs.discogs(),
+        open: full || open,
     }
 }
 
-/// The newest `shown` jobs in hand, and the newest `shown` of those done
-/// with.
-async fn jobs_html(app: &App, shown: i64) -> String {
+/// The newest `shown` jobs done with.
+async fn settled_jobs(app: &App, shown: i64) -> SettledJobs {
     let shown = shown.clamp(1, MOST);
-    let (mut active, mut done) = crate::db::job_board(&app.db, shown + 1)
+    let mut settled = crate::db::settled_jobs(&app.db, shown + 1)
+        .await
+        .inspect_err(|e| tracing::warn!(error = %e, "could not list settled jobs"))
+        .unwrap_or_default();
+    let more = shown < MOST && settled.len() as i64 > shown;
+    settled.truncate(shown as usize);
+    SettledJobs {
+        settled: settled.into_iter().map(Settled::from).collect(),
+        more,
+    }
+}
+
+/// The newest `shown` jobs in hand, with the files drawn of those the
+/// `files` signal names. `settled` is whether any job is done with, for
+/// the line an empty list shows.
+async fn live_jobs_html(app: &App, shown: &Shown, settled: bool) -> String {
+    let limit = shown.jobs.clamp(1, MOST);
+    let active = crate::db::active_jobs(&app.db, limit)
         .await
         .inspect_err(|e| tracing::warn!(error = %e, "could not list jobs"))
         .unwrap_or_default();
-    let more = shown < MOST && (active.len() as i64 > shown || done.len() as i64 > shown);
-    active.truncate(shown as usize);
-    done.truncate(shown as usize);
     let jobs = graphql::job_views(app, active, true)
         .await
         .unwrap_or_else(|e| {
             tracing::warn!(error = ?e, "could not show jobs");
             Vec::new()
         });
-    let mut view = JobsView {
+    let mut view = LiveJobs {
         attention: Vec::new(),
         underway: Vec::new(),
-        settled: done.into_iter().map(Settled::from).collect(),
-        more,
+        empty: jobs.is_empty() && !settled,
     };
     for j in jobs {
-        let card = card(app, j, false);
+        let open = shown.files.split(',').any(|f| f == j.id.as_str());
+        let card = card(app, j, false, open);
         if card.warn {
             view.attention.push(card);
         } else {
@@ -1063,6 +1100,16 @@ async fn jobs_html(app: &App, shown: i64) -> String {
         }
     }
     view.render().unwrap_or_default()
+}
+
+/// The whole job list, as the page first draws it.
+async fn jobs_html(app: &App, shown: &Shown) -> String {
+    let settled = settled_jobs(app, shown.jobs).await;
+    let live = live_jobs_html(app, shown, !settled.settled.is_empty()).await;
+    format!(
+        "<div id=\"jobs\">{live}{}</div>",
+        settled.render().unwrap_or_default()
+    )
 }
 
 /// Everything known of one job, for its own page: its card while it exists,
@@ -1187,7 +1234,7 @@ async fn job_page(app: &App, id: Uuid) -> anyhow::Result<Option<(String, String)
                 .await
                 .map_err(|e| anyhow::anyhow!("{}", e.message))?;
             let import_log = view.import_log.clone().filter(|l| !l.trim().is_empty());
-            let card = card(app, view, true);
+            let card = card(app, view, true, true);
             (card.heading(&card.j), Some(card), import_log)
         }
         None => (
@@ -1241,14 +1288,21 @@ async fn job_sources(State(s): State<UiState>, Path(id): Path<Uuid>) -> Response
     }
 }
 
+/// Who is taking what from us now, redrawn every second.
 #[derive(Template)]
-#[template(path = "uploads.html")]
-struct UploadsView {
+#[template(path = "uploads_peers.html")]
+struct UploadPeers {
     peers: Vec<Peer>,
     sending: usize,
     queued: usize,
     sent: usize,
     shared: usize,
+}
+
+/// What has been sent, redrawn when an upload finishes.
+#[derive(Template)]
+#[template(path = "uploads_history.html")]
+struct UploadHistory {
     history: Vec<crate::db::UploadRow>,
     /// Older history exists beyond that shown.
     more: bool,
@@ -1265,7 +1319,7 @@ struct Peer {
     speed: u64,
 }
 
-impl UploadsView {
+impl UploadHistory {
     fn bytes(&self, b: &i64) -> String {
         human((*b).max(0) as u64)
     }
@@ -1287,7 +1341,18 @@ impl UploadsView {
         ago(h.finished_at)
     }
     fn leaf<'a>(&self, name: &'a str) -> &'a str {
-        name.rsplit(['\\', '/']).next().unwrap_or(name)
+        leaf(name)
+    }
+}
+
+/// The last part of a peer's path.
+fn leaf(name: &str) -> &str {
+    name.rsplit(['\\', '/']).next().unwrap_or(name)
+}
+
+impl UploadPeers {
+    fn leaf<'a>(&self, name: &'a str) -> &'a str {
+        leaf(name)
     }
     fn pct(&self, t: &Transfer) -> u64 {
         percent(t.bytes, t.size)
@@ -1312,10 +1377,18 @@ fn up_count_html(app: &App) -> String {
     format!(r#"<span id="up-count" class="text-ink empty:hidden">{text}</span>"#)
 }
 
-/// Who is taking what from us, grouped by person: those receiving now
-/// first, then those waiting in the queue; then the newest `shown` of
-/// those finished.
+/// The Uploads page: who is taking what now, then what has been sent.
 async fn uploads_html(app: &App, shown: i64) -> String {
+    format!(
+        "<div id=\"uploads\">{}{}</div>",
+        upload_peers_html(app),
+        upload_history_html(app, shown).await
+    )
+}
+
+/// Who is taking what from us, grouped by person: those receiving now
+/// first, then those waiting in the queue.
+fn upload_peers_html(app: &App) -> String {
     let mut peers: Vec<Peer> = Vec::new();
     let (mut sending, mut queued, mut sent, mut shared) = (0, 0, 0, 0);
     if let Some(e) = app.session.engine() {
@@ -1351,6 +1424,19 @@ async fn uploads_html(app: &App, shown: i64) -> String {
             .collect();
         peers.sort_by_key(|p| std::cmp::Reverse(p.speed));
     }
+    UploadPeers {
+        peers,
+        sending,
+        queued,
+        sent,
+        shared,
+    }
+    .render()
+    .unwrap_or_default()
+}
+
+/// The newest `shown` uploads finished, and the day's and week's totals.
+async fn upload_history_html(app: &App, shown: i64) -> String {
     let now = chrono::Utc::now();
     let midnight = now
         .date_naive()
@@ -1364,18 +1450,11 @@ async fn uploads_html(app: &App, shown: i64) -> String {
         .unwrap_or_default();
     let more = shown < MOST && history.len() as i64 > shown;
     history.truncate(shown as usize);
-    let today = crate::db::upload_totals(&app.db, midnight)
-        .await
-        .unwrap_or_default();
-    let week = crate::db::upload_totals(&app.db, now - chrono::Duration::days(7))
-        .await
-        .unwrap_or_default();
-    UploadsView {
-        peers,
-        sending,
-        queued,
-        sent,
-        shared,
+    let (week, today) =
+        crate::db::upload_totals(&app.db, now - chrono::Duration::days(7), midnight)
+            .await
+            .unwrap_or_default();
+    UploadHistory {
         history,
         more,
         today,
@@ -1405,6 +1484,8 @@ struct Shown {
     job: String,
     /// The search tab the Search page shows; empty on every other page.
     tab: String,
+    /// The jobs whose files are open, each followed by a comma.
+    files: String,
 }
 
 impl Default for Shown {
@@ -1414,6 +1495,7 @@ impl Default for Shown {
             history: PAGE,
             job: String::new(),
             tab: String::new(),
+            files: String::new(),
         }
     }
 }
@@ -1422,6 +1504,11 @@ impl Default for Shown {
 /// each only when it changed: the status line and the nav's badges on every
 /// page, and the jobs, uploads or library run on their own. The page
 /// reopens the stream when the rows it shows change.
+///
+/// The long lists (jobs done with, upload history) are separate parts,
+/// read narrowly or not at all until something in them could have
+/// changed, so a page showing hundreds of rows does not redraw them every
+/// second while one download moves.
 ///
 /// The stream ends itself after a while and the page reopens it on an
 /// interval: a stream can die without either end noticing (a suspended
@@ -1438,12 +1525,35 @@ async fn stream(
         // its head and the albums done since: it lists every album, which
         // in a large run is long.
         let mut run_sent = library::RunSent::default();
-        let mut sent: [String; 4] = Default::default();
+        let mut sent: [String; 5] = Default::default();
+        let mut settled_sent: Option<SettledJobs> = None;
+        // The newest upload and the minute the history was drawn at: its
+        // times read "3 min ago", so it is drawn again each minute too.
+        let mut history_sent: Option<(Option<String>, i64)> = None;
         for _ in 0..20 {
+            // Jobs done with: read narrowly, drawn only when they differ.
+            let mut long = String::new();
+            let mut any_settled = false;
+            if page == "albums" {
+                let settled = settled_jobs(&app, shown.jobs).await;
+                any_settled = !settled.settled.is_empty();
+                if settled_sent.as_ref() != Some(&settled) {
+                    long = settled.render().unwrap_or_default();
+                    settled_sent = Some(settled);
+                }
+            }
+            if page == "uploads" {
+                let newest = crate::db::newest_upload(&app.db).await.ok().flatten();
+                let mark = (newest, chrono::Utc::now().timestamp() / 60);
+                if history_sent.as_ref() != Some(&mark) {
+                    long = upload_history_html(&app, shown.history).await;
+                    history_sent = Some(mark);
+                }
+            }
             let parts = [
                 status_html(&app).await,
                 match page.as_str() {
-                    "albums" => jobs_html(&app, shown.jobs).await,
+                    "albums" => live_jobs_html(&app, &shown, any_settled).await,
                     "job" => match Uuid::parse_str(&shown.job) {
                         // Empty, so nothing is sent; the next tick tries again.
                         Ok(id) => job_page_html(&app, id).await.unwrap_or_else(|e| {
@@ -1452,10 +1562,11 @@ async fn stream(
                         }),
                         Err(_) => String::new(),
                     },
-                    "uploads" => uploads_html(&app, shown.history).await,
+                    "uploads" => upload_peers_html(&app),
                     "search" => search::tabs_html(&app, Uuid::parse_str(&shown.tab).ok()).await,
                     _ => String::new(),
                 },
+                long,
                 up_count_html(&app),
                 chat::count_html(&app).await,
             ];
@@ -1483,10 +1594,13 @@ struct SearchForm {
     lossless: bool,
 }
 
-/// How many jobs the page shows, sent only by the page that lists them.
+/// How many jobs the page shows, and whose files are open, sent only by
+/// the page that lists them.
 #[derive(serde::Deserialize)]
 struct GrabQuery {
     jobs: Option<i64>,
+    #[serde(default)]
+    files: String,
 }
 
 async fn grab(
@@ -1501,7 +1615,14 @@ async fn grab(
     match graphql::grab(&s.app, form.q.trim(), search::LISTEN, filter, false).await {
         // Albums shows the new card; Search has no job list, so it says so.
         Ok(_) => match shown.jobs {
-            Some(shown) => done(&s.app, shown, "").await,
+            Some(jobs) => {
+                let shown = Shown {
+                    jobs,
+                    files: shown.files,
+                    ..Shown::default()
+                };
+                done(&s.app, &shown, false).await
+            }
             None => one(flash_ok(&format!("Grabbing {}", form.q.trim()))),
         },
         Err(e) => one(flash_err(&e.message)),
@@ -1513,11 +1634,20 @@ struct UrlForm {
     url: String,
     #[serde(default = "page", deserialize_with = "shown_field")]
     jobs: i64,
+    #[serde(default)]
+    files: String,
 }
 
 async fn import_url(State(s): State<UiState>, axum::Form(form): axum::Form<UrlForm>) -> Response {
     match s.app.jobs.from_url(&form.url).await {
-        Ok(_) => done(&s.app, form.jobs, "").await,
+        Ok(_) => {
+            let shown = Shown {
+                jobs: form.jobs,
+                files: form.files,
+                ..Shown::default()
+            };
+            done(&s.app, &shown, false).await
+        }
         Err(e) => failed(&e),
     }
 }
@@ -1586,25 +1716,21 @@ async fn job_action(
         "remove" => jobs.remove(id).await,
         "approve" => jobs.import_soon(id, true, None).await,
         "next" => jobs.next_source(id, crate::jobs::cause::REQUESTED).await,
-        // Waited for, since it is quick without MusicBrainz, so a refusal
-        // is reported to the person who asked rather than looking like a
-        // tap that did nothing.
-        "as-is" => match jobs.import_as_is(id, sift::Edits::default()).await {
-            Ok(()) => match crate::db::job(&s.app.db, id).await {
-                Ok(Some(j)) if j.status == "review" => Err(anyhow::anyhow!(
-                    "Couldn't import as-is: {}",
-                    j.error.unwrap_or_default()
-                )),
-                _ => Ok(()),
-            },
-            Err(e) => Err(e),
-        },
+        // Not waited for: filing waits behind any other import. The card
+        // shows it importing, then filed, or back in review with the reason
+        // it was refused.
+        "as-is" => jobs.import_as_is_soon(id, sift::Edits::default()).await,
         _ => return StatusCode::NOT_FOUND.into_response(),
     };
     match result {
+        // Only these can move a job into or out of the jobs done with.
         Ok(()) => {
-            let shown = shown_of(&body);
-            done(&s.app, shown.jobs, &shown.job).await
+            done(
+                &s.app,
+                &shown_of(&body),
+                matches!(action.as_str(), "retry" | "cancel" | "remove"),
+            )
+            .await
         }
         Err(e) => failed(&e),
     }
@@ -1613,14 +1739,23 @@ async fn job_action(
 /// The jobs as they now stand, and any earlier error cleared: the change on
 /// the card is the confirmation, and the button stays busy until it is
 /// drawn. On a job's page (`job` names it) that is the page; elsewhere the
-/// list, as many rows as the page shows.
-async fn done(app: &App, shown: i64, job: &str) -> Response {
-    let html = match Uuid::parse_str(job) {
+/// jobs in hand, and with `settled`, the jobs done with as well, since the
+/// change may have moved one into or out of them.
+async fn done(app: &App, shown: &Shown, settled: bool) -> Response {
+    let html = match Uuid::parse_str(&shown.job) {
         Ok(id) => match job_page_html(app, id).await {
             Ok(html) => html,
             Err(e) => return failed(&e.context("Done, but couldn't redraw the job")),
         },
-        Err(_) => jobs_html(app, shown).await,
+        Err(_) => {
+            let done_with = settled_jobs(app, shown.jobs).await;
+            let mut html = live_jobs_html(app, shown, !done_with.settled.is_empty()).await;
+            if settled {
+                html.push('\n');
+                html.push_str(&done_with.render().unwrap_or_default());
+            }
+            html
+        }
     };
     one(format!("{html}\n<div id=\"flash\"></div>"))
 }
@@ -1643,10 +1778,7 @@ async fn resolve(
         return StatusCode::BAD_REQUEST.into_response();
     };
     match s.app.jobs.import_soon(id, false, Some(release)).await {
-        Ok(()) => {
-            let shown = shown_of(&body);
-            done(&s.app, shown.jobs, &shown.job).await
-        }
+        Ok(()) => done(&s.app, &shown_of(&body), false).await,
         Err(e) => failed(&e),
     }
 }
@@ -1659,6 +1791,8 @@ struct ReleaseForm {
     /// The job a job's page shows, when it is posted from there.
     #[serde(default)]
     job: String,
+    #[serde(default)]
+    files: String,
 }
 
 /// A release named by hand, for when MusicBrainz or Discogs has it but the
@@ -1674,7 +1808,15 @@ async fn resolve_pasted(
         ));
     };
     match s.app.jobs.import_soon(id, false, Some(release)).await {
-        Ok(()) => done(&s.app, form.jobs, &form.job).await,
+        Ok(()) => {
+            let shown = Shown {
+                jobs: form.jobs,
+                job: form.job,
+                files: form.files,
+                ..Shown::default()
+            };
+            done(&s.app, &shown, false).await
+        }
         Err(e) => failed(&e),
     }
 }

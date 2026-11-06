@@ -328,9 +328,12 @@ async fn triage(State(s): State<UiState>, Query(q): Query<Days>) -> Response {
     ])
 }
 
+/// The newest events drawn for each cause; the count covers the rest.
+const EXAMPLES: usize = 20;
+
 async fn triage_html(app: &App, days: Option<i64>) -> String {
     let days = days.unwrap_or(7).clamp(1, 365);
-    let view = match crate::graphql::triage(app, days, usize::MAX).await {
+    let view = match crate::graphql::triage(app, days, EXAMPLES).await {
         Ok(causes) => TriageView {
             days,
             causes,
