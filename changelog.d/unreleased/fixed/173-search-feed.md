@@ -1,0 +1,1 @@
+- **A search tab shows its own results after switching away from a running search.** Datastar cancels a request only for another to the same address, so the running search's stream kept drawing over the tab moved to. The page now aborts it.

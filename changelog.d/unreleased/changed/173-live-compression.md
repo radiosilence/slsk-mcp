@@ -1,0 +1,1 @@
+- **Live updates are compressed.** Event streams, including a running search redrawn each second and the downloads list, are now sent as brotli flushed after every event, so each update arrives at once while one that mostly repeats the last costs a few hundred bytes.
