@@ -34,7 +34,8 @@ pub(crate) const UNREAD: &str =
     "SELECT count(*) FROM messages WHERE account = ?1 AND NOT read AND NOT outgoing";
 
 /// Whether anything from one peer is unread.
-pub(crate) const PEER_UNREAD: &str = "SELECT EXISTS(SELECT 1 FROM messages WHERE account = ?1 AND peer = ?2 AND NOT read AND NOT outgoing)";
+pub(crate) const PEER_UNREAD: &str =
+    "SELECT 1 FROM messages WHERE account = ?1 AND peer = ?2 AND NOT read AND NOT outgoing LIMIT 1";
 
 /// A conversation, newest first.
 pub(crate) const THREAD: &str = "SELECT body, outgoing, at FROM messages WHERE account = ?1 AND peer = ?2 ORDER BY at DESC LIMIT ?3";
@@ -640,10 +641,9 @@ impl Social {
         let changed = self
             .db
             .run(move |c| {
-                let unread: bool = c.prepare_cached(PEER_UNREAD)?.query_row(
-                    params![account, peer],
-                    |r| r.get(0),
-                )?;
+                let unread = c
+                    .prepare_cached(PEER_UNREAD)?
+                    .exists(params![account, peer])?;
                 if !unread {
                     return Ok(0);
                 }
