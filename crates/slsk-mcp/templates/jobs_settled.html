@@ -15,5 +15,5 @@
   </ul>
 </section>
 {% endif %}
-{% if more %}<button class="quiet" data-on:click="$jobs += {{ crate::ui::PAGE }}">Show more</button>{% endif %}
+{% if more %}<button class="quiet" data-on-intersect="$jobs += {{ crate::ui::PAGE }}" data-on:click="$jobs += {{ crate::ui::PAGE }}">Show more</button>{% endif %}
 </div>
