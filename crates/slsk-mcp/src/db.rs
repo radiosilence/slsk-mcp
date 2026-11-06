@@ -30,8 +30,13 @@ use uuid::Uuid;
 pub use rusqlite::Result;
 
 /// Completed uploads since a time.
-pub(crate) const UPLOAD_TOTALS: &str = "SELECT COUNT(*), COALESCE(SUM(bytes), 0) FROM uploads \
-         WHERE state = 'completed' AND finished_at >= ?1";
+/// Completed uploads since ?1, and of those, since ?2: counts and bytes.
+pub(crate) const UPLOAD_TOTALS: &str = "SELECT COUNT(*), COALESCE(SUM(bytes), 0), \
+         COALESCE(SUM(finished_at >= ?2), 0), COALESCE(SUM(CASE WHEN finished_at >= ?2 THEN bytes END), 0) \
+         FROM uploads WHERE state = 'completed' AND finished_at >= ?1";
+
+/// When the latest upload finished: the history changes only when it does.
+pub(crate) const NEWEST_UPLOAD: &str = "SELECT MAX(finished_at) FROM uploads";
 
 /// The latest finished uploads.
 pub(crate) const RECENT_UPLOADS: &str = "SELECT username, filename, size, bytes, state, seconds, finished_at FROM uploads \
@@ -81,7 +86,10 @@ pub(crate) const JOBS_OF_STATUS: &str =
 pub(crate) const ACTIVE_JOBS: &str = "SELECT * FROM jobs WHERE status NOT IN ('imported', 'cancelled') \
          ORDER BY created_at DESC LIMIT ?1";
 /// Jobs that landed or were cancelled, newest first.
-pub(crate) const SETTLED_JOBS: &str = "SELECT * FROM jobs WHERE status IN ('imported', 'cancelled') ORDER BY created_at DESC LIMIT ?1";
+/// Only what their one line shows: the list is read every second while it
+/// is open, and the JSON columns of a few hundred jobs are most of a row.
+pub(crate) const SETTLED_JOBS: &str = "SELECT id, title, status, library_path FROM jobs \
+         WHERE status IN ('imported', 'cancelled') ORDER BY created_at DESC LIMIT ?1";
 
 /// The current time as the schema stores it, for use inside SQL.
 macro_rules! now {
@@ -548,17 +556,38 @@ pub async fn jobs(db: &Db, status: Option<&str>, limit: i64) -> Result<Vec<Job>>
 
 /// The newest `limit` jobs still in hand, and the newest `limit` of those
 /// that landed or were cancelled.
-pub async fn job_board(db: &Db, limit: i64) -> Result<(Vec<Job>, Vec<Job>)> {
+/// The newest `limit` jobs still in hand.
+pub async fn active_jobs(db: &Db, limit: i64) -> Result<Vec<Job>> {
     db.run(move |c| {
-        let active = c
-            .prepare_cached(ACTIVE_JOBS)?
+        c.prepare_cached(ACTIVE_JOBS)?
             .query_map(params![limit], Job::from_row)?
-            .collect::<Result<_>>()?;
-        let settled = c
-            .prepare_cached(SETTLED_JOBS)?
-            .query_map(params![limit], Job::from_row)?
-            .collect::<Result<_>>()?;
-        Ok((active, settled))
+            .collect()
+    })
+    .await
+}
+
+/// A job that landed or was cancelled, as far as its line in the list goes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SettledJob {
+    pub id: Uuid,
+    pub title: String,
+    pub status: String,
+    pub library_path: Option<String>,
+}
+
+/// The newest `limit` jobs that landed or were cancelled.
+pub async fn settled_jobs(db: &Db, limit: i64) -> Result<Vec<SettledJob>> {
+    db.run(move |c| {
+        c.prepare_cached(SETTLED_JOBS)?
+            .query_map(params![limit], |r| {
+                Ok(SettledJob {
+                    id: r.get("id")?,
+                    title: r.get("title")?,
+                    status: r.get("status")?,
+                    library_path: r.get("library_path")?,
+                })
+            })?
+            .collect()
     })
     .await
 }
@@ -1305,14 +1334,27 @@ pub async fn recent_uploads(db: &Db, limit: i64) -> Result<Vec<UploadRow>> {
     .await
 }
 
-/// Completed uploads since `since`: how many, and how many bytes.
-pub async fn upload_totals(db: &Db, since: chrono::DateTime<chrono::Utc>) -> Result<(i64, i64)> {
-    let since = ts(&since);
+/// Completed uploads since `since`, and of those since `recent` (a later
+/// time): how many, and how many bytes, in one pass.
+pub async fn upload_totals(
+    db: &Db,
+    since: chrono::DateTime<chrono::Utc>,
+    recent: chrono::DateTime<chrono::Utc>,
+) -> Result<((i64, i64), (i64, i64))> {
+    let (since, recent) = (ts(&since), ts(&recent));
     db.run(move |c| {
         c.prepare_cached(UPLOAD_TOTALS)?
-            .query_row(params![since], |r| Ok((r.get(0)?, r.get(1)?)))
+            .query_row(params![since, recent], |r| {
+                Ok(((r.get(0)?, r.get(1)?), (r.get(2)?, r.get(3)?)))
+            })
     })
     .await
+}
+
+/// When the latest upload finished, as stored.
+pub async fn newest_upload(db: &Db) -> Result<Option<String>> {
+    db.run(|c| c.prepare_cached(NEWEST_UPLOAD)?.query_row([], |r| r.get(0)))
+        .await
 }
 
 /// History older than `days` goes; it is for looking back weeks, not years.
@@ -1384,10 +1426,12 @@ mod tests {
             STALLED_PEERS,
             RECENT_UPLOADS,
             UPLOAD_TOTALS,
+            NEWEST_UPLOAD,
             crate::social::CONVERSATIONS,
             crate::social::LATEST_PER_PEER,
             crate::social::THREAD,
             crate::social::UNREAD,
+            crate::social::PEER_UNREAD,
             crate::social::NEXT_WISH,
             crate::auth::session::SESSION,
         ];

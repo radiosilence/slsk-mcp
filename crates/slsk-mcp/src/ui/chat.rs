@@ -20,6 +20,7 @@ use crate::social::RoomLine;
 pub(super) fn routes() -> Router<UiState> {
     Router::new()
         .route("/chat", get(view))
+        .route("/chat/rooms", get(rooms))
         .route("/chat/open", post(open))
         .route("/chat/send", post(send))
         .route("/chat/join", post(join))
@@ -168,14 +169,45 @@ async fn side_html(app: &App) -> String {
 #[template(path = "chat_rooms.html")]
 struct RoomListView {
     rooms: Vec<(String, u32)>,
+    /// Rooms that match but are not drawn.
+    hidden: usize,
+    /// Whether the server has sent its list at all.
+    listed: bool,
 }
 
-fn room_list_html(app: &App) -> String {
+/// The most rooms drawn; the server lists thousands, and a name typed
+/// narrows them.
+const ROOMS: usize = 100;
+
+/// The most populated public rooms whose names hold `filter`.
+fn room_list_html(app: &App, filter: &str) -> String {
+    let all = app.social.room_list();
+    let listed = !all.is_empty();
+    let filter = filter.trim().to_lowercase();
+    let mut rooms: Vec<_> = all
+        .into_iter()
+        .filter(|(name, _)| filter.is_empty() || name.to_lowercase().contains(&filter))
+        .collect();
+    let hidden = rooms.len().saturating_sub(ROOMS);
+    rooms.truncate(ROOMS);
     RoomListView {
-        rooms: app.social.room_list(),
+        rooms,
+        hidden,
+        listed,
     }
     .render()
     .unwrap_or_default()
+}
+
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+struct RoomsQuery {
+    q: String,
+}
+
+/// The room list narrowed to names holding what was typed.
+async fn rooms(State(s): State<UiState>, Query(q): Query<RoomsQuery>) -> Response {
+    one(room_list_html(&s.app, &q.q))
 }
 
 struct Line {
@@ -314,7 +346,7 @@ pub(super) async fn page(app: &App, q: &Poll) -> String {
     Page {
         thread,
         side: side_html(app).await,
-        rooms: room_list_html(app),
+        rooms: room_list_html(app, ""),
     }
     .render()
     .unwrap_or_default()
@@ -353,7 +385,7 @@ async fn view(State(s): State<UiState>, Query(q): Query<Poll>) -> Response {
     html.push_str(&side_html(&s.app).await);
     if !q.poll {
         html.push('\n');
-        html.push_str(&room_list_html(&s.app));
+        html.push_str(&room_list_html(&s.app, ""));
         html.push_str("\n<div id=\"flash\"></div>");
     }
     html.push('\n');

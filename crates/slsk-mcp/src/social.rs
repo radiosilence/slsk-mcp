@@ -33,6 +33,10 @@ pub(crate) const NEXT_WISH: &str =
 pub(crate) const UNREAD: &str =
     "SELECT count(*) FROM messages WHERE account = ?1 AND NOT read AND NOT outgoing";
 
+/// Whether anything from one peer is unread.
+pub(crate) const PEER_UNREAD: &str =
+    "SELECT 1 FROM messages WHERE account = ?1 AND peer = ?2 AND NOT read AND NOT outgoing LIMIT 1";
+
 /// A conversation, newest first.
 pub(crate) const THREAD: &str = "SELECT body, outgoing, at FROM messages WHERE account = ?1 AND peer = ?2 ORDER BY at DESC LIMIT ?3";
 
@@ -77,6 +81,11 @@ pub struct Social {
     nonces: Nonces,
     /// When each peer's anti-bot challenge was last answered.
     answered: Mutex<HashMap<String, Instant>>,
+    /// The unread count as last read: the account, the change it was read
+    /// at, and the count.
+    unread: Mutex<Option<(String, u64, i64)>>,
+    /// Bumped when a message arrives or is read.
+    unread_changes: AtomicU64,
 }
 
 /// How long before the same peer's check is answered again.
@@ -123,6 +132,8 @@ impl Social {
             wishlist_interval: AtomicU64::new(720),
             nonces: Nonces::default(),
             answered: Mutex::new(HashMap::new()),
+            unread: Mutex::new(None),
+            unread_changes: AtomicU64::new(0),
         })
     }
 
@@ -227,6 +238,7 @@ impl Social {
                 {
                     tracing::warn!(peer = %username, error = %e, "could not keep a private message");
                 }
+                self.unread_changes.fetch_add(1, Ordering::SeqCst);
                 self.answer_challenge(engine, username, message).await;
             }
             FromServer::SayChatroom {
@@ -599,24 +611,51 @@ impl Social {
     }
 
     /// Private messages received and not yet read, across everyone.
+    /// Private messages not yet read. Counted once and kept until a
+    /// message arrives or one is read, since every open page asks every
+    /// second.
     pub async fn unread(&self) -> Result<i64> {
         let account = self.engine()?.username();
-        Ok(self
+        // Read before counting, so a change landing meanwhile is counted
+        // next time.
+        let at = self.unread_changes.load(Ordering::SeqCst);
+        if let Some((of, was, n)) = self.unread.lock().as_ref()
+            && *of == account
+            && *was == at
+        {
+            return Ok(*n);
+        }
+        let of = account.clone();
+        let n = self
             .db
-            .run(move |c| c.query_row(UNREAD, params![account], |r| r.get(0)))
-            .await?)
+            .run(move |c| c.query_row(UNREAD, params![of], |r| r.get(0)))
+            .await?;
+        *self.unread.lock() = Some((account, at, n));
+        Ok(n)
     }
 
+    /// Mark a conversation read. Looked up first, off the unread index, so
+    /// a conversation with nothing new costs no write.
     pub async fn mark_read(&self, peer: &str) -> Result<()> {
         let (account, peer) = (self.engine()?.username(), peer.to_string());
-        self.db
+        let changed = self
+            .db
             .run(move |c| {
+                let unread = c
+                    .prepare_cached(PEER_UNREAD)?
+                    .exists(params![account, peer])?;
+                if !unread {
+                    return Ok(0);
+                }
                 c.execute(
-                    "UPDATE messages SET read = TRUE WHERE account = ?1 AND peer = ?2 AND NOT read",
+                    "UPDATE messages SET read = TRUE WHERE account = ?1 AND peer = ?2 AND NOT read AND NOT outgoing",
                     params![account, peer],
                 )
             })
             .await?;
+        if changed > 0 {
+            self.unread_changes.fetch_add(1, Ordering::SeqCst);
+        }
         Ok(())
     }
 

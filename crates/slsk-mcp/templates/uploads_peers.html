@@ -1,4 +1,4 @@
-<div id="uploads">
+<div id="uploads-peers">
   <p class="text-meta text-muted">{{ sending }} sending · {{ queued }} queued · {{ sent }} sent recently · sharing {{ shared }} files</p>
   {% if peers.is_empty() %}<p class="text-meta text-muted">Nobody is taking anything from you right now.</p>{% endif %}
   {% for p in peers %}
@@ -25,16 +25,4 @@
     </div>
   </article>
   {% endfor %}
-  <h3>History</h3>
-  <p class="text-meta text-muted">Today {{ self.files(today.0) }} · {{ self.bytes(today.1) }} · this week {{ self.files(week.0) }} · {{ self.bytes(week.1) }}</p>
-  {% if history.is_empty() %}<p class="text-meta text-muted">Nothing uploaded yet.</p>{% endif %}
-  <ul class="mt-2">
-  {% for h in history %}
-    <li class="flex min-w-0 items-center gap-2 py-1">
-      <span class="min-w-0 flex-auto truncate" title="{{ h.filename }}">{{ self.leaf(h.filename) }}</span>
-      <span class="flex-none text-meta text-muted"><a href="{{ crate::ui::profile_href(h.username) }}">{{ h.username }}</a> · {% if h.state == "completed" %}{{ self.bytes(h.size) }}{% else %}{{ self.bytes(h.bytes) }} of {{ self.bytes(h.size) }}{% endif %}{% if !self.rate(h).is_empty() %} · {{ self.rate(h) }}{% endif %} · {{ self.ago(h) }}{% if h.state != "completed" %} · {{ h.state }}{% endif %}</span>
-    </li>
-  {% endfor %}
-  </ul>
-  {% if more %}<button class="quiet" data-on:click="$history += {{ crate::ui::PAGE }}">Show more</button>{% endif %}
 </div>

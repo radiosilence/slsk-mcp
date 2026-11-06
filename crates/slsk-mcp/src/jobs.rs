@@ -1365,6 +1365,16 @@ impl Jobs {
         self.run_import(id, how).await
     }
 
+    /// [`Self::import_as_is`] without waiting behind other imports: the job
+    /// is claimed now and filed in the background. A refusal returns it to
+    /// review with the reason, which its card then shows.
+    pub async fn import_as_is_soon(self: &Arc<Self>, id: Uuid, edits: sift::Edits) -> Result<()> {
+        let how = How::AsIs(edits);
+        self.claim(id, &how).await?;
+        self.import_in_background(id, how);
+        Ok(())
+    }
+
     /// Where a job's files are now: filed for a decision once they have
     /// all arrived, in staging while they are still coming.
     async fn files_dir(&self, id: Uuid) -> Result<PathBuf> {

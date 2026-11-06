@@ -10,7 +10,7 @@
   <details>
     <summary class="text-muted">Public rooms</summary>
     <form id="room-join" class="flex flex-wrap items-center gap-2" data-indicator="_joining" data-on:submit__prevent="@post('/chat/join', {contentType: 'form', selector: '#room-join'})">
-      <input class="basis-full" name="room" placeholder="Room name" aria-label="Room name" autocomplete="off" autocapitalize="off" required>
+      <input class="basis-full" name="room" placeholder="Room name" aria-label="Room name" autocomplete="off" autocapitalize="off" required data-on:input__debounce.250ms="@get('/chat/rooms?q=' + encodeURIComponent(el.value))">
       <button class="flex-auto" type="submit" data-attr:disabled="$_joining" data-class:busy="$_joining">Join</button>
     </form>
     {{ rooms|safe }}
