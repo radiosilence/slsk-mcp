@@ -1,0 +1,1 @@
+- **Search again at any time.** Every finished search tab offers to search again, which asks the network afresh even within the ten minutes its answers are otherwise reused, and says when it was last searched.

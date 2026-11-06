@@ -25,6 +25,6 @@
   <div id="search-feed" hidden{% if tab.is_some() && results.is_none() %} data-init="el.feed = new AbortController(); @get($_url, {openWhenHidden: true, requestCancellation: el.feed})"{% endif %} data-on:more="el.feed?.abort(); el.feed = new AbortController(); @get($_url, {openWhenHidden: true, requestCancellation: el.feed})"></div>
   {% if let Some(html) = results %}{{ html|safe }}
   {% else if let Some(tab) = tab %}<div id="results"><p class="text-meta text-muted">Searching “{{ tab.query }}”…</p></div>
-  {% else %}<div id="results"><p class="text-meta text-muted">Search the network for an album: artist and title words work best. Each search opens a tab that keeps its results; after ten minutes they are marked stale and can be searched again. Pinned tabs stay when the others are closed.</p></div>
+  {% else %}<div id="results"><p class="text-meta text-muted">Search the network for an album: artist and title words work best. Each search opens a tab that keeps its results; they can be searched again at any time, and after ten minutes are marked stale. Pinned tabs stay when the others are closed.</p></div>
   {% endif %}
 </section>
