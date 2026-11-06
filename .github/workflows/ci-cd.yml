@@ -267,7 +267,9 @@ jobs:
   # changes the code. Clippy there sees the code behind `cfg(windows)` and
   # misses the code behind `cfg(unix)`, which the Linux lint covers. Pull
   # requests only, so main's checks, and with them CD and releases, never wait
-  # on a Windows runner. It saves no cache: one saved per pull request could
+  # on a Windows runner. It is not one of `Checks`' needs either: its runners
+  # often queue for minutes, and its result shows on the pull request without
+  # holding up a merge. It saves no cache: one saved per pull request could
   # not be read by the next, and would evict main's caches, which the release
   # builds use.
   windows:
@@ -559,7 +561,7 @@ jobs:
     name: Checks
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: [changes, actionlint, make-room, test, lint, windows, format, audit, chart, changelog, css, version, linux-build, container]
+    needs: [changes, actionlint, make-room, test, lint, format, audit, chart, changelog, css, version, linux-build, container]
     if: always()
     steps:
       - env:

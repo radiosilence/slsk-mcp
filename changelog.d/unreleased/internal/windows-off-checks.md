@@ -1,0 +1,1 @@
+- **Windows no longer gates `Checks`.** The pull-request Windows build still runs and reports, but its runners often queue for minutes, so a merge no longer waits on it.
