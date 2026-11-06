@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.13.2
+
+### Changed
+
+- **The web UI does work in proportion to what it shows.** The Downloads and Uploads pages redrew and re-sent their whole lists every second while anything moved; they now stream the live part alone and redraw the long lists only when they change, draw a job's files only while they are open, and start at 100 rows. Library edits refresh the index for the albums they change instead of walking the whole share first, library reads no longer queue behind one another, and Import as-is no longer waits behind other imports. The room list shows the 100 busiest rooms with a filter, the unread badge is no longer counted every second, and triage lists 20 examples per cause.
+
 ## 0.13.1
 
 ### Fixed
