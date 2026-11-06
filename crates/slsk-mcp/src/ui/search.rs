@@ -6,7 +6,7 @@
 //! after. Results older than the network's ten-minute reuse are marked stale
 //! and can be searched again.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
@@ -14,12 +14,16 @@ use askama::Template;
 use axum::Router;
 use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::post;
+use axum::routing::{get, post};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use slsk_engine::Event;
 use slsk_engine::slsk_proto::RawStr;
 use slsk_engine::slsk_proto::peer::SearchResponse;
+use slsk_engine::slsk_proto::server::{FromServer, ToServer, UserStatus};
+use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use super::{UiState, browse, escape, failed, human, one, patch, place_url, shown_of, sse};
@@ -34,6 +38,7 @@ pub(super) fn routes() -> Router<UiState> {
         .route("/search/tabs/{id}/close", post(close))
         .route("/search/tabs/{id}/again", post(again))
         .route("/search/tabs/close-unpinned", post(close_unpinned))
+        .route("/search/tabs/{id}/peers", get(peers))
 }
 
 /// A search page's address: `tab` names the tab shown and `shown` how many
@@ -109,7 +114,8 @@ fn stale(tab: &SearchTab) -> bool {
 fn ago(at: chrono::DateTime<chrono::Utc>) -> String {
     let mins = (chrono::Utc::now() - at).num_minutes().max(0);
     match mins {
-        0..60 => format!("{mins} min ago"),
+        0 => "just now".to_string(),
+        1..60 => format!("{mins} min ago"),
         60..1440 => format!("{} h ago", mins / 60),
         _ => format!("{} days ago", mins / 1440),
     }
@@ -222,7 +228,8 @@ async fn kept(app: &App, tab: &SearchTab, shown: usize) -> String {
     let more = folders.len().saturating_sub(shown);
     folders.truncate(shown);
     ResultsView {
-        age: tab.searched_at.filter(|_| stale(tab)).map(ago),
+        age: tab.searched_at.map(ago),
+        stale: stale(tab),
         tab: tab.id,
         query: tab.query.clone(),
         folders,
@@ -311,13 +318,22 @@ struct ResultsView {
     /// Folders found, of which the best `KEEP` are kept.
     found: usize,
     error: Option<String>,
-    /// How long ago, once the results are stale.
+    /// How long ago the search finished.
     age: Option<String>,
+    stale: bool,
 }
 
 impl ResultsView {
     fn kept(&self) -> usize {
         KEEP
+    }
+    /// Where the peers' statuses are fetched once the results are drawn.
+    fn peers(&self) -> String {
+        format!(
+            "/search/tabs/{}/peers?shown={}",
+            self.tab,
+            self.folders.len()
+        )
     }
     fn key(&self, f: &Folder) -> String {
         URL_SAFE_NO_PAD.encode(f.remote_path.as_bytes())
@@ -328,10 +344,7 @@ impl ResultsView {
     }
     /// Stable across regroups, so an open preview stays with its folder.
     fn id(&self, f: &Folder) -> u64 {
-        use std::hash::{Hash, Hasher};
-        let mut h = std::hash::DefaultHasher::new();
-        (&f.username, f.remote_path.as_bytes()).hash(&mut h);
-        h.finish()
+        folder_id(f)
     }
     fn crumbs(&self, f: &Folder) -> Vec<browse::Child> {
         browse::crumbs(f.remote_path.as_bytes())
@@ -428,7 +441,8 @@ pub(super) async fn results(State(s): State<UiState>, Query(view): Query<SearchQ
                 responses: responses.len(),
                 found,
                 error: error.map(|e| e.to_string()),
-                age: None,
+                age: done.then(|| ago(chrono::Utc::now())),
+                stale: false,
             };
             yield Ok(patch(&view.render().unwrap_or_default()));
             if done || heard.changed().await.is_err() {
@@ -438,6 +452,79 @@ pub(super) async fn results(State(s): State<UiState>, Query(view): Query<SearchQ
     };
     sse(events).into_response()
 }
+
+/// Stable across regroups, so an open preview stays with its folder.
+fn folder_id(f: &Folder) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::hash::DefaultHasher::new();
+    (&f.username, f.remote_path.as_bytes()).hash(&mut h);
+    h.finish()
+}
+
+/// Whether the peers behind a tab's first `shown` folders are online, asked
+/// of the server once the results are drawn: kept results can be hours old.
+/// Each answer marks that peer's folders as it arrives.
+async fn peers(
+    State(s): State<UiState>,
+    Path(id): Path<Uuid>,
+    Query(view): Query<SearchQuery>,
+) -> Response {
+    let Some(engine) = s.app.session.engine().cloned() else {
+        return StatusCode::NO_CONTENT.into_response();
+    };
+    let mut folders = db::search_tab_folders(&s.app.db, id)
+        .await
+        .unwrap_or_default();
+    folders.truncate(shown(&view));
+    let mut by_user: HashMap<String, Vec<u64>> = HashMap::new();
+    for f in &folders {
+        by_user
+            .entry(f.username.clone())
+            .or_default()
+            .push(folder_id(f));
+    }
+    let mut events = engine.events();
+    for username in by_user.keys() {
+        if engine
+            .send(ToServer::GetUserStatus {
+                username: username.clone(),
+            })
+            .is_err()
+        {
+            return StatusCode::NO_CONTENT.into_response();
+        }
+    }
+    let stream = async_stream::stream! {
+        let deadline = tokio::time::Instant::now() + PEERS_WAIT;
+        while !by_user.is_empty() {
+            let msg = match tokio::time::timeout_at(deadline, events.recv()).await {
+                Ok(Ok(Event::Server(msg))) => msg,
+                Ok(Ok(_) | Err(broadcast::error::RecvError::Lagged(_))) => continue,
+                Ok(Err(_)) | Err(_) => break,
+            };
+            let FromServer::UserStatus { username, status, .. } = &*msg else {
+                continue;
+            };
+            let Some(ids) = by_user.remove(username) else {
+                continue;
+            };
+            let word = match status {
+                UserStatus::Online => "online",
+                UserStatus::Away => "away",
+                UserStatus::Offline => "offline",
+            };
+            for id in ids {
+                yield Ok(patch(&format!(
+                    r#"<span id="peer-{id}" class="pill {word}">{word}</span>"#
+                )));
+            }
+        }
+    };
+    sse(stream).into_response()
+}
+
+/// How long the server is given to say who is online.
+const PEERS_WAIT: Duration = Duration::from_secs(5);
 
 /// Send the browser to `url`, a page of the app's own.
 fn go(url: &str) -> Response {
@@ -507,6 +594,7 @@ async fn again(State(s): State<UiState>, Path(id): Path<Uuid>) -> Response {
     if let Err(e) = db::rerun_search_tab(&s.app.db, id).await {
         return failed(&e.into());
     }
+    graphql::forget_answers(&tab.query);
     run(s.app.clone(), id, tab.query, tab.lossless);
     go(&format!("/search?tab={id}"))
 }
