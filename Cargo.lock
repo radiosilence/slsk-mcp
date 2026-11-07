@@ -3179,9 +3179,9 @@ dependencies = [
 
 [[package]]
 name = "soulseek-rs-lib"
-version = "19.1.0"
+version = "20.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fe616956fd53a0e707357af3995902df20fda5af97ea7fba6aec0918a694120d"
+checksum = "41c58ac7d4e037bde148830123d7ad0e1fefa682d19d583b7c24f69c53c080ba"
 dependencies = [
  "libc",
 ]
@@ -4268,14 +4268,15 @@ dependencies = [
 
 [[package]]
 name = "zip"
-version = "9.2.1"
+version = "9.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "848dad21639597378c3be94c59fd4de683f0f6d8a5387575896e1245737d4f37"
+checksum = "eaeb7f16d2605b49aef586996ded29e65642fab7259a3077e537351df6d80426"
 dependencies = [
  "crc32fast",
  "flate2",
  "getrandom 0.4.3",
  "indexmap",
+ "libc",
  "memchr",
  "nix",
  "typed-path",
