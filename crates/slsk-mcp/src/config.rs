@@ -59,7 +59,14 @@ pub struct Config {
     pub discogs_token: Option<String>,
     pub acoustid_client: Option<String>,
     pub description: String,
+    /// Extensions of files a download asks for but does not wait on.
+    pub optional_extensions: Vec<String>,
 }
+
+/// Album cruft: release notes, checksums, playlists, rip logs and scans.
+/// Cue sheets are left out, since an album ripped to one file needs it.
+const OPTIONAL_EXTENSIONS: &str =
+    "nfo,txt,sfv,md5,ffp,st5,m3u,m3u8,pls,log,accurip,url,ini,db,jpg,jpeg,png,gif,bmp,pdf";
 
 fn var(key: &str) -> Result<String> {
     std::env::var(key).with_context(|| format!("{key} is required"))
@@ -152,6 +159,11 @@ impl Config {
             beets_config: opt("BEETS_CONFIG").map(PathBuf::from),
             discogs_token: opt("DISCOGS_TOKEN"),
             acoustid_client: opt("ACOUSTID_CLIENT"),
+            optional_extensions: or("OPTIONAL_EXTENSIONS", OPTIONAL_EXTENSIONS)
+                .split(',')
+                .map(|e| e.trim().trim_start_matches('.').to_lowercase())
+                .filter(|e| !e.is_empty())
+                .collect(),
             description: or(
                 "DESCRIPTION",
                 concat!(

@@ -90,6 +90,9 @@ const DEFER_TRIES: u32 = 24;
 /// How long a download may go without a single byte before another source
 /// is tried.
 const STALL: Duration = Duration::from_secs(20 * 60);
+/// How long an optional file part way through may go without a byte once
+/// the music has arrived, before the album is imported without it.
+const EXTRA_WAIT: Duration = Duration::from_secs(2 * 60);
 /// How long a search for another copy collects responses.
 const SEARCH_WAIT: Duration = Duration::from_secs(15);
 
@@ -154,25 +157,29 @@ pub struct Jobs {
     fetches: parking_lot::Mutex<HashMap<Uuid, (tokio::task::AbortHandle, Arc<Fetched>)>>,
     http: reqwest::Client,
     wake: Notify,
+    /// Extensions (lower case) of the files an album can do without: asked
+    /// for with the rest, but dropped rather than waited on once the music
+    /// has arrived. Sharers often leave an `.nfo` unshared or at the back
+    /// of a long queue, and it would otherwise hold the album forever.
+    optional: Vec<String>,
 }
 
 impl Jobs {
     pub fn new(
         db: crate::db::Db,
         session: Arc<Session>,
-        staging: PathBuf,
-        complete: PathBuf,
-        spectrograms: PathBuf,
+        cfg: &crate::config::Config,
         tagger: Arc<sift::Importer>,
         library: Arc<crate::library::Library>,
     ) -> Arc<Self> {
         Arc::new(Self {
+            optional: cfg.optional_extensions.clone(),
             library,
             db,
             session,
-            staging,
-            complete,
-            spectrograms,
+            staging: cfg.staging_dir.clone(),
+            complete: cfg.complete_dir.clone(),
+            spectrograms: cfg.state_dir.join("spectrograms"),
             tagger,
             import_lock: Mutex::new(()),
             resumed: Default::default(),
@@ -542,8 +549,70 @@ impl Jobs {
         path
     }
 
+    /// Whether the album can do without this file.
+    pub(crate) fn optional(&self, f: &JobFile) -> bool {
+        let base = f.remote.rsplit(|&b| b == b'\\').next().unwrap_or(&f.remote);
+        base.iter().rposition(|&b| b == b'.').is_some_and(|dot| {
+            let ext = &base[dot + 1..];
+            self.optional
+                .iter()
+                .any(|o| o.as_bytes().eq_ignore_ascii_case(ext))
+        })
+    }
+
+    /// Whether a file has arrived, by the engine where the database has yet
+    /// to hear.
+    fn arrived(&self, engine: Option<&Engine>, f: &JobFile) -> bool {
+        f.state == "completed"
+            || engine
+                .and_then(|e| e.download_view(&f.peer, &RawStr(f.remote.clone().into())))
+                .is_some_and(|v| v.state == "completed")
+    }
+
+    /// When bytes for the job last arrived, as of `received` in all.
+    fn progressed(
+        &self,
+        job: &Job,
+        received: u64,
+        now: tokio::time::Instant,
+    ) -> tokio::time::Instant {
+        let mut stalled = self.stalled.lock();
+        let entry = stalled.entry(job.id).or_insert_with(|| {
+            // From when this source was taken on, which the job row
+            // records, so a restart does not forgive a peer that has sent
+            // nothing.
+            let waited = (chrono::Utc::now() - job.updated_at)
+                .to_std()
+                .unwrap_or_default();
+            (now.checked_sub(waited).unwrap_or(now), received)
+        });
+        if received > entry.1 {
+            *entry = (now, received);
+        }
+        entry.0
+    }
+
+    /// Stop fetching a file and delete what arrived of it.
+    async fn drop_file(&self, engine: Option<&Engine>, f: &JobFile) {
+        if let Some(engine) = engine {
+            engine.remove_download(&f.peer, &RawStr(f.remote.clone().into()));
+        }
+        let dest = self.dest(f);
+        let mut part = dest.file_name().unwrap_or_default().to_os_string();
+        part.push(".part");
+        let _ = tokio::fs::remove_file(dest.with_file_name(part)).await;
+        let _ = tokio::fs::remove_file(&dest).await;
+    }
+
+    /// The optional files go first: they are small, and a peer that sends
+    /// in the order asked then has them done before the music is.
     fn start(&self, engine: &Engine, _id: Uuid, rows: &[JobFile]) {
-        for f in rows.iter().filter(|f| f.state != "completed") {
+        let mut rows: Vec<_> = rows
+            .iter()
+            .filter(|f| !matches!(f.state.as_str(), "completed" | "skipped"))
+            .collect();
+        rows.sort_by_cached_key(|f| !self.optional(f));
+        for f in rows {
             engine.download(
                 &f.peer,
                 RawStr(f.remote.clone().into()),
@@ -686,6 +755,7 @@ impl Jobs {
         job: &Job,
         rows: Vec<JobFile>,
     ) -> Result<()> {
+        let rows: Vec<JobFile> = rows.into_iter().filter(|f| f.state != "skipped").collect();
         if rows.is_empty() {
             db::move_status(
                 &self.db,
@@ -701,7 +771,14 @@ impl Jobs {
         let mut received = 0u64;
         let mut place: Option<u32> = None;
         let mut transferring = false;
+        // An album of nothing but optional files waits for all of them.
+        let music = rows.iter().any(|f| !self.optional(f));
+        // Optional files not yet arrived: never a reason to retry or change
+        // source, and dropped once the music is in.
+        let mut extras = Vec::new();
+        let mut extra_arriving = false;
         for f in &rows {
+            let optional = music && self.optional(f);
             let remote = RawStr(f.remote.clone().into());
             let (state, error) = match engine.download_view(&f.peer, &remote) {
                 Some(v) => {
@@ -716,6 +793,13 @@ impl Jobs {
                 // Not in the engine: completed before a restart, or lost.
                 None if f.state == "completed" => ("completed".to_string(), None),
                 None => {
+                    // Skipped by a person since the rows were read.
+                    if db::file_state(&self.db, job.id, &f.peer, &f.remote)
+                        .await?
+                        .is_none_or(|s| s == "skipped")
+                    {
+                        continue;
+                    }
                     engine.download(&f.peer, remote, f.size as u64, self.dest(f));
                     ("queued".to_string(), None)
                 }
@@ -731,6 +815,11 @@ impl Jobs {
                 )
                 .await?;
             }
+            if optional && state != "completed" {
+                extra_arriving |= state == "transferring";
+                extras.push(f);
+                continue;
+            }
             *states
                 .entry(match state.as_str() {
                     "completed" => "completed",
@@ -744,7 +833,14 @@ impl Jobs {
             states.get("failed"),
             states.get("active"),
         );
-        if active.is_some() {
+        let now = tokio::time::Instant::now();
+        if active.is_none() && failed.is_none() && done.is_some() && extra_arriving {
+            // The music is in and an optional file is part way: worth a
+            // short wait for, never another source.
+            if now.duration_since(self.progressed(job, received, now)) < EXTRA_WAIT {
+                return Ok(());
+            }
+        } else if active.is_some() {
             // A peer that queues every file and never sends one (no free
             // slot for strangers, or a queue it never works through)
             // would hold the album forever while other sources sit
@@ -756,23 +852,7 @@ impl Jobs {
                     None => places.remove(&job.id),
                 };
             }
-            let now = tokio::time::Instant::now();
-            let since = {
-                let mut stalled = self.stalled.lock();
-                let entry = stalled.entry(job.id).or_insert_with(|| {
-                    // From when this source was taken on, which the job
-                    // row records, so a restart does not forgive a peer
-                    // that has sent nothing.
-                    let waited = (chrono::Utc::now() - job.updated_at)
-                        .to_std()
-                        .unwrap_or_default();
-                    (now.checked_sub(waited).unwrap_or(now), received)
-                });
-                if received > entry.1 {
-                    *entry = (now, received);
-                }
-                entry.0
-            };
+            let since = self.progressed(job, received, now);
             let stalled = now.duration_since(self.started) >= STARTUP_GRACE
                 && now.duration_since(since) >= STALL;
             if stalled && job.alternates.0.is_empty() {
@@ -805,6 +885,12 @@ impl Jobs {
         self.places.lock().remove(&job.id);
         if failed.is_none() && done.is_some() {
             self.retried.lock().remove(&job.id);
+            // Before the claim, so a failure here leaves the job downloading
+            // for the next tick rather than claimed with no import running.
+            for f in extras {
+                self.drop_file(Some(engine), f).await;
+                db::set_file_skipped(&self.db, job.id, &f.peer, &f.remote, true).await?;
+            }
             // Cancelled or removed since this tick read it: left so.
             let how = How::Match(None);
             if db::claim_import(&self.db, job.id, &["downloading"], &how).await? {
@@ -1613,7 +1699,7 @@ impl Jobs {
 
     async fn redownload(&self, engine: &Engine, id: Uuid) -> Result<()> {
         let rows = db::job_files(&self.db, id).await?;
-        for f in &rows {
+        for f in rows.iter().filter(|f| f.state != "skipped") {
             let remote = RawStr(f.remote.clone().into());
             if !engine.retry_download(&f.peer, &remote) {
                 engine.download(&f.peer, remote, f.size as u64, self.dest(f));
@@ -1621,6 +1707,67 @@ impl Jobs {
         }
         self.wake.notify_one();
         Ok(())
+    }
+
+    /// Leave out the files at `skip` (paths in the album, as [`file_path`]
+    /// gives them), deleting what arrived of them, and fetch those at `fetch`
+    /// again. Only while the job downloads, and never down to no files.
+    pub async fn skip_files(
+        &self,
+        id: Uuid,
+        skip: &std::collections::HashSet<String>,
+        fetch: &std::collections::HashSet<String>,
+    ) -> Result<()> {
+        let job = db::job(&self.db, id).await?.context("no such job")?;
+        anyhow::ensure!(
+            job.status == "downloading" && !matches!(job.source.0, Source::Url { .. }),
+            "job is {}; files are chosen only while a download from a peer is under way",
+            job.status
+        );
+        let rows = db::job_files(&self.db, id).await?;
+        anyhow::ensure!(
+            rows.iter().any(|f| {
+                let path = file_path(f);
+                !skip.contains(&path) && (f.state != "skipped" || fetch.contains(&path))
+            }),
+            "that leaves nothing to download; remove the job instead"
+        );
+        let engine = self.session.engine();
+        for f in &rows {
+            let path = file_path(f);
+            let skipped = f.state == "skipped";
+            if skip.contains(&path) && !skipped {
+                db::set_file_skipped(&self.db, id, &f.peer, &f.remote, true).await?;
+                self.drop_file(engine, f).await;
+            } else if fetch.contains(&path) && !skip.contains(&path) && skipped {
+                db::set_file_skipped(&self.db, id, &f.peer, &f.remote, false).await?;
+                if let Some(engine) = engine {
+                    let remote = RawStr(f.remote.clone().into());
+                    engine.download(&f.peer, remote, f.size as u64, self.dest(f));
+                }
+            }
+        }
+        self.wake.notify_one();
+        Ok(())
+    }
+
+    /// Stop waiting for the files still to come and import what arrived:
+    /// for a peer that holds back a file it listed and never sends it.
+    pub async fn finish(&self, id: Uuid) -> Result<()> {
+        let rows = db::job_files(&self.db, id).await?;
+        let engine = self.session.engine();
+        let music = rows.iter().any(|f| !self.optional(f));
+        anyhow::ensure!(
+            rows.iter()
+                .any(|f| !(music && self.optional(f)) && self.arrived(engine, f)),
+            "no music has arrived yet to import"
+        );
+        let skip = rows
+            .iter()
+            .filter(|f| f.state != "skipped" && !self.arrived(engine, f))
+            .map(file_path)
+            .collect();
+        self.skip_files(id, &skip, &Default::default()).await
     }
 
     pub async fn remove(&self, id: Uuid) -> Result<()> {
@@ -1665,6 +1812,17 @@ impl Jobs {
             .await?;
         db::delete_job(&self.db, id).await?;
         Ok(())
+    }
+}
+
+/// A file's path within its album, as a person and the API name it.
+pub(crate) fn file_path(f: &JobFile) -> String {
+    let name = RawStr(f.remote.clone().into()).to_string_lossy();
+    let base = name.rsplit('\\').next().unwrap_or(&name);
+    if f.subdir.is_empty() {
+        base.to_string()
+    } else {
+        format!("{}/{base}", f.subdir)
     }
 }
 

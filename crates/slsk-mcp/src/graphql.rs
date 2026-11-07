@@ -95,6 +95,8 @@ impl From<TransferView> for Transfer {
 #[derive(SimpleObject)]
 pub(crate) struct JobFile {
     pub name: String,
+    /// The file's path within the album, which `skipJobFiles` takes.
+    pub path: String,
     pub size: u64,
     pub bytes: u64,
     pub state: String,
@@ -144,6 +146,9 @@ pub(crate) struct Job {
     pub alternates: usize,
     pub total_bytes: u64,
     pub downloaded_bytes: u64,
+    /// For a downloading job: some of its music has arrived, so
+    /// `finishDownload` would import it.
+    pub finishable: bool,
     pub files: Vec<JobFile>,
     /// For a job in review: releases to choose from. Resolve with
     /// `resolveJob(id, releaseId)`.
@@ -182,6 +187,8 @@ fn view_of(app: &App, job: db::Job, rows: Vec<db::JobFile>, with_files: bool) ->
     let engine = app.session.engine();
     let mut files = Vec::with_capacity(rows.len());
     let (mut total, mut done) = (0u64, 0u64);
+    let music = rows.iter().any(|f| !app.jobs.optional(f));
+    let mut finishable = false;
     for f in rows {
         let remote = RawStr(f.remote.clone().into());
         let live = engine.and_then(|e| e.download_view(&f.peer, &remote));
@@ -190,11 +197,17 @@ fn view_of(app: &App, job: db::Job, rows: Vec<db::JobFile>, with_files: bool) ->
             (None, "completed") => f.size as u64,
             _ => 0,
         };
-        total += f.size as u64;
-        done += bytes;
+        if f.state != "skipped" {
+            total += f.size as u64;
+            done += bytes;
+        }
+        finishable |= job.status == "downloading"
+            && !(music && app.jobs.optional(&f))
+            && live.as_ref().map_or(f.state.as_str(), |v| v.state) == "completed";
         if with_files {
             let name = remote.to_string_lossy();
             files.push(JobFile {
+                path: crate::jobs::file_path(&f),
                 name: name.rsplit('\\').next().unwrap_or(&name).to_string(),
                 size: f.size as u64,
                 bytes,
@@ -227,6 +240,7 @@ fn view_of(app: &App, job: db::Job, rows: Vec<db::JobFile>, with_files: bool) ->
         alternates: job.alternates.0.len(),
         total_bytes: total,
         downloaded_bytes: done,
+        finishable,
         files,
         candidates: job
             .candidates
@@ -1903,6 +1917,37 @@ impl Mutation {
             .jobs
             .next_source(parse_id(&id)?, crate::jobs::cause::REQUESTED)
             .await?;
+        Ok(true)
+    }
+
+    /// Leave out a downloading job's files at `paths` (each a file's
+    /// `path`), deleting what arrived of them; with `skip: false`, fetch
+    /// skipped ones again.
+    async fn skip_job_files(
+        &self,
+        ctx: &Context<'_>,
+        id: ID,
+        paths: Vec<String>,
+        #[graphql(default = true)] skip: bool,
+    ) -> Result<bool> {
+        let paths = paths.into_iter().collect();
+        let none = Default::default();
+        let (skip, fetch) = if skip {
+            (&paths, &none)
+        } else {
+            (&none, &paths)
+        };
+        app(ctx)
+            .jobs
+            .skip_files(parse_id(&id)?, skip, fetch)
+            .await?;
+        Ok(true)
+    }
+
+    /// Stop waiting for a downloading job's missing files and import what
+    /// arrived: for a peer that lists a file and never sends it.
+    async fn finish_download(&self, ctx: &Context<'_>, id: ID) -> Result<bool> {
+        app(ctx).jobs.finish(parse_id(&id)?).await?;
         Ok(true)
     }
 

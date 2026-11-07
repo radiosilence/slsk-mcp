@@ -71,7 +71,12 @@ tested for interoperability against the `soulseek-rs` client.
 2. The best folder's full listing is requested from the peer and each file is
    queued. Failed files are asked for again from the same peer twice, resuming
    from what arrived; after that, or after twenty minutes without a byte, the
-   next of four fallback folders is tried.
+   next of four fallback folders is tried. Cruft such as `.nfo`, `.sfv` and
+   cover scans (`OPTIONAL_EXTENSIONS`) is asked for first but never waited
+   on: sharers often list a file they will not send, and once the music has
+   arrived whatever of it is still queued is dropped. A person can also
+   untick files to skip on a downloading job, or mark it complete to import
+   what has arrived (`skipJobFiles`, `finishDownload`).
 3. Every lossless-labelled track is checked for a lossy or upsampled source
    (see below). An album where a quarter of the tracks confidently fail is
    held as `suspect` with per-track spectrograms, for a person or assistant to
@@ -300,6 +305,7 @@ startup.
 | `STATE_DIR` | `/data` | `slsk.db` (jobs, sealed credentials, bans, messages), the library index and the share-probe cache. On a local disk: SQLite over a network filesystem loses its locking. |
 | `LISTEN_PORT` | `2234` | The peer port. Must be reachable for peers behind NAT to connect. |
 | `UPLOAD_SLOTS`, `UPLOAD_LIMIT`, `DOWNLOAD_LIMIT` | `500`, `0`, `0` | Uploads at once, then limits in bytes per second (0 is unlimited). Each running upload holds a socket and a 256 KiB buffer; past what saturates the uplink, more slots split it more ways rather than send more. |
+| `OPTIONAL_EXTENSIONS` | `nfo,txt,sfv,md5,ffp,st5,m3u,m3u8,pls,log,accurip,url,ini,db,jpg,jpeg,png,gif,bmp,pdf` | Comma-separated. Files a download asks for first but does not wait on: once the music has arrived, any still queued or failed are dropped. Sharers often list an `.nfo` they never send, which would otherwise hold the album forever. |
 | `SEARCHES_PER_HOUR` | `600` | Searches allowed in any rolling hour, 0 for unlimited. Every search is relayed to thousands of peers, and the server temporarily bans accounts that search in floods; past the budget a search is refused with when the next is free. |
 | `MAX_INBOUND_CONNECTIONS`, `MAX_INBOUND_PER_ADDRESS` | `512`, `32` | Connections other peers may hold open to the peer port, in total and from one address. Anyone can connect, so these bound what strangers can hold. Behind a proxy that hides peers' source addresses (Docker's userland proxy, Docker Desktop), every peer arrives from one address: raise the per-address limit to the total. |
 | `DESCRIPTION` | names the client as automated | The user info other peers see, until a description is saved from the Profile tab. The default says this is an automated client that shares back, so sharers can decide for themselves. |

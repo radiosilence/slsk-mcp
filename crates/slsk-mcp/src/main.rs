@@ -146,15 +146,7 @@ async fn main() -> anyhow::Result<()> {
 
     let session = Session::new(cfg.clone(), db.clone());
     session.boot().await?;
-    let jobs = jobs::Jobs::new(
-        db.clone(),
-        session.clone(),
-        cfg.staging_dir.clone(),
-        cfg.complete_dir.clone(),
-        cfg.state_dir.join("spectrograms"),
-        importer,
-        library.clone(),
-    );
+    let jobs = jobs::Jobs::new(db.clone(), session.clone(), &cfg, importer, library.clone());
     let social = social::Social::new(db.clone(), session.clone(), jobs.clone());
     let app = Arc::new(App {
         cfg: cfg.clone(),

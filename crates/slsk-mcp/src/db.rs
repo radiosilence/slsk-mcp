@@ -710,17 +710,51 @@ pub async fn set_file_state(
             .prepare_cached(FILE_STATE)?
             .query_row(params![id, peer, remote], |r| Ok((r.get(0)?, r.get(1)?)))
             .optional()?;
-        tx.execute(
-            "UPDATE job_files SET state = ?4, error = ?5 WHERE job_id = ?1 AND peer = ?2 AND remote = ?3",
+        // A file a person skipped stays skipped whatever the engine last
+        // said of it: only `set_file_skipped` takes it back.
+        let changed = tx.execute(
+            "UPDATE job_files SET state = ?4, error = ?5 \
+             WHERE job_id = ?1 AND peer = ?2 AND remote = ?3 AND state <> 'skipped'",
             params![id, peer, remote, state, error],
         )?;
         if let Some((was, size)) = prev
+            && changed > 0
             && state == "completed"
             && was != "completed"
         {
             add_total(&tx, "downloaded_bytes", size)?;
         }
         tx.commit()
+    })
+    .await
+}
+
+/// A file's state, if the job still has it.
+pub async fn file_state(db: &Db, id: Uuid, peer: &str, remote: &[u8]) -> Result<Option<String>> {
+    let (peer, remote) = (peer.to_string(), remote.to_vec());
+    db.run(move |c| {
+        c.prepare_cached(FILE_STATE)?
+            .query_row(params![id, peer, remote], |r| r.get(0))
+            .optional()
+    })
+    .await
+}
+
+/// Skip a file, or queue a skipped one again.
+pub async fn set_file_skipped(
+    db: &Db,
+    id: Uuid,
+    peer: &str,
+    remote: &[u8],
+    skipped: bool,
+) -> Result<()> {
+    let (peer, remote) = (peer.to_string(), remote.to_vec());
+    db.run(move |c| {
+        c.execute(
+            "UPDATE job_files SET state = ?4, error = NULL WHERE job_id = ?1 AND peer = ?2 AND remote = ?3",
+            params![id, peer, remote, if skipped { "skipped" } else { "queued" }],
+        )?;
+        Ok(())
     })
     .await
 }
