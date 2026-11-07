@@ -1985,6 +1985,12 @@ struct JobPick {
     files: Vec<graphql::JobFile>,
 }
 
+impl JobPick {
+    fn size(&self, n: &u64) -> String {
+        human(*n)
+    }
+}
+
 async fn job_pick_html(app: &App, id: Uuid, error: Option<String>) -> String {
     let files = match crate::db::job(&app.db, id).await {
         Ok(Some(job)) => graphql::job_view(app, job, true)
