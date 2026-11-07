@@ -1063,7 +1063,7 @@ impl CardView {
             "retry" => matches!(j.status.as_str(), "failed" | "cancelled"),
             "match" => j.status == "review",
             "cancel" => matches!(j.status.as_str(), "downloading" | "waiting"),
-            "finish" => j.status == "downloading" && j.username.is_some() && j.downloaded_bytes > 0,
+            "finish" => j.finishable && j.username.is_some(),
             _ => false,
         };
         applies && self.advice(j).is_none_or(|a| a.action != action)
@@ -2009,21 +2009,18 @@ async fn job_pick(State(s): State<UiState>, Path(id): Path<Uuid>) -> Response {
 /// The ticked files are fetched and the rest skipped.
 async fn pick_files(State(s): State<UiState>, Path(id): Path<Uuid>, body: Bytes) -> Response {
     let fields = fields(&body);
-    let want: std::collections::HashSet<&str> = fields
-        .iter()
-        .filter(|(k, _)| k == "want")
-        .map(|(_, v)| v.as_str())
-        .collect();
-    let result = async {
-        let skip = crate::db::job_files(&s.app.db, id)
-            .await?
+    // Only the files the form showed: a source changed since it was drawn
+    // brings files nobody has chosen about.
+    let named = |name: &str| -> std::collections::HashSet<String> {
+        fields
             .iter()
-            .map(crate::jobs::file_path)
-            .filter(|p| !want.contains(p.as_str()))
-            .collect();
-        s.app.jobs.skip_files(id, &skip).await
-    }
-    .await;
+            .filter(|(k, _)| k == name)
+            .map(|(_, v)| v.clone())
+            .collect()
+    };
+    let want = named("want");
+    let skip = named("shown").difference(&want).cloned().collect();
+    let result = s.app.jobs.skip_files(id, &skip, &want).await;
     let error = result.as_ref().err().map(|e| format!("{e:#}"));
     let shown = Shown {
         jobs: field(&fields, "jobs")

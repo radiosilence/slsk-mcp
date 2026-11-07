@@ -4,7 +4,7 @@
   <input type="hidden" name="files" data-attr:value="$files">
   {% if let Some(e) = error %}<p class="my-0.5 text-bad wrap-anywhere">{{ e }}</p>{% endif %}
   {% for f in files %}
-  <label class="flex min-w-0 items-center gap-2"><input class="size-[18px] flex-none" type="checkbox" name="want" value="{{ f.path }}"{% if f.state != "skipped" %} checked{% endif %}><span class="min-w-0 flex-[1_1_60%] wrap-anywhere">{{ f.path }}</span><span class="text-muted">{{ self.size(f.size) }}</span></label>
+  <input type="hidden" name="shown" value="{{ f.path }}"><label class="flex min-w-0 items-center gap-2"><input class="size-[18px] flex-none" type="checkbox" name="want" value="{{ f.path }}"{% if f.state != "skipped" %} checked{% endif %}><span class="min-w-0 flex-[1_1_60%] wrap-anywhere">{{ f.path }}</span><span class="text-muted">{{ self.size(f.size) }}</span></label>
   {% endfor %}
   <div class="mt-1"><button>Update</button></div>
 </form>

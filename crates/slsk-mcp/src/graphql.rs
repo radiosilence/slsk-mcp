@@ -146,6 +146,9 @@ pub(crate) struct Job {
     pub alternates: usize,
     pub total_bytes: u64,
     pub downloaded_bytes: u64,
+    /// For a downloading job: some of its music has arrived, so
+    /// `finishDownload` would import it.
+    pub finishable: bool,
     pub files: Vec<JobFile>,
     /// For a job in review: releases to choose from. Resolve with
     /// `resolveJob(id, releaseId)`.
@@ -184,6 +187,8 @@ fn view_of(app: &App, job: db::Job, rows: Vec<db::JobFile>, with_files: bool) ->
     let engine = app.session.engine();
     let mut files = Vec::with_capacity(rows.len());
     let (mut total, mut done) = (0u64, 0u64);
+    let music = rows.iter().any(|f| !app.jobs.optional(f));
+    let mut finishable = false;
     for f in rows {
         let remote = RawStr(f.remote.clone().into());
         let live = engine.and_then(|e| e.download_view(&f.peer, &remote));
@@ -196,6 +201,9 @@ fn view_of(app: &App, job: db::Job, rows: Vec<db::JobFile>, with_files: bool) ->
             total += f.size as u64;
             done += bytes;
         }
+        finishable |= job.status == "downloading"
+            && !(music && app.jobs.optional(&f))
+            && live.as_ref().map_or(f.state.as_str(), |v| v.state) == "completed";
         if with_files {
             let name = remote.to_string_lossy();
             files.push(JobFile {
@@ -232,6 +240,7 @@ fn view_of(app: &App, job: db::Job, rows: Vec<db::JobFile>, with_files: bool) ->
         alternates: job.alternates.0.len(),
         total_bytes: total,
         downloaded_bytes: done,
+        finishable,
         files,
         candidates: job
             .candidates
@@ -1911,13 +1920,26 @@ impl Mutation {
         Ok(true)
     }
 
-    /// Choose a downloading job's files: those at `paths` (each a file's
-    /// `path`) are left out, and what arrived of them deleted; every other
-    /// file is fetched, including one skipped before.
-    async fn skip_job_files(&self, ctx: &Context<'_>, id: ID, paths: Vec<String>) -> Result<bool> {
+    /// Leave out a downloading job's files at `paths` (each a file's
+    /// `path`), deleting what arrived of them; with `skip: false`, fetch
+    /// skipped ones again.
+    async fn skip_job_files(
+        &self,
+        ctx: &Context<'_>,
+        id: ID,
+        paths: Vec<String>,
+        #[graphql(default = true)] skip: bool,
+    ) -> Result<bool> {
+        let paths = paths.into_iter().collect();
+        let none = Default::default();
+        let (skip, fetch) = if skip {
+            (&paths, &none)
+        } else {
+            (&none, &paths)
+        };
         app(ctx)
             .jobs
-            .skip_files(parse_id(&id)?, &paths.into_iter().collect())
+            .skip_files(parse_id(&id)?, skip, fetch)
             .await?;
         Ok(true)
     }
