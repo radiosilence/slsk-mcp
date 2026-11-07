@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.13.5
+
+### Added
+
+- **Downloads no longer wait on album cruft.** Files such as `.nfo`, `.sfv`, logs and scans (`OPTIONAL_EXTENSIONS`) are asked for first and dropped once the music has arrived, since sharers often list one they never send. A downloading job's files can be ticked off to skip them, and "Mark complete" (`finishDownload`) imports what has arrived; `skipJobFiles` does the same over GraphQL.
+
+### Internal
+
+- **Windows no longer gates `Checks`.** The pull-request Windows build still runs and reports, but its runners often queue for minutes, so a merge no longer waits on it.
+
 ## 0.13.4
 
 ### Changed
