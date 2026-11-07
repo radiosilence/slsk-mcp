@@ -89,6 +89,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/jobs/{id}/release", post(resolve_pasted))
         .route("/jobs/{id}/spectrogram/{n}", get(spectrogram))
         .route("/jobs/{id}/files", get(job_files))
+        .route("/jobs/{id}/pick", get(job_pick).post(pick_files))
         .route("/jobs/{id}/sources", get(job_sources))
         .route("/jobs/{id}/compare/{release}", get(job_compare))
         .route("/uploads/cancel", post(cancel_upload))
@@ -1062,6 +1063,7 @@ impl CardView {
             "retry" => matches!(j.status.as_str(), "failed" | "cancelled"),
             "match" => j.status == "review",
             "cancel" => matches!(j.status.as_str(), "downloading" | "waiting"),
+            "finish" => j.status == "downloading" && j.username.is_some() && j.downloaded_bytes > 0,
             _ => false,
         };
         applies && self.advice(j).is_none_or(|a| a.action != action)
@@ -1766,6 +1768,7 @@ async fn job_action(
         // shows it importing, then filed, or back in review with the reason
         // it was refused.
         "as-is" => jobs.import_as_is_soon(id, sift::Edits::default()).await,
+        "finish" => jobs.finish(id).await,
         _ => return StatusCode::NOT_FOUND.into_response(),
     };
     match result {
@@ -1788,6 +1791,11 @@ async fn job_action(
 /// jobs in hand, and with `settled`, the jobs done with as well, since the
 /// change may have moved one into or out of them.
 async fn done(app: &App, shown: &Shown, settled: bool) -> Response {
+    done_with(app, shown, settled, String::new()).await
+}
+
+/// [`done`], with `extra` elements patched as well.
+async fn done_with(app: &App, shown: &Shown, settled: bool, extra: String) -> Response {
     let html = match Uuid::parse_str(&shown.job) {
         Ok(id) => match job_page_html(app, id).await {
             Ok(html) => html,
@@ -1803,7 +1811,7 @@ async fn done(app: &App, shown: &Shown, settled: bool) -> Response {
             html
         }
     };
-    one(format!("{html}\n<div id=\"flash\"></div>"))
+    one(format!("{html}\n{extra}\n<div id=\"flash\"></div>"))
 }
 
 /// What the page shows, from the signals a JSON request carries.
@@ -1966,6 +1974,66 @@ async fn job_files(State(s): State<UiState>, Path(id): Path<Uuid>) -> Response {
     .render()
     .unwrap_or_default();
     many(vec![insert(&format!("#files-{id}"), "replace", &html)])
+}
+
+/// The files of a downloading job, each ticked to fetch or not.
+#[derive(Template)]
+#[template(path = "job_pick.html")]
+struct JobPick {
+    id: Uuid,
+    error: Option<String>,
+    files: Vec<graphql::JobFile>,
+}
+
+async fn job_pick_html(app: &App, id: Uuid, error: Option<String>) -> String {
+    let files = match crate::db::job(&app.db, id).await {
+        Ok(Some(job)) => graphql::job_view(app, job, true)
+            .await
+            .map(|j| j.files)
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    };
+    JobPick { id, error, files }.render().unwrap_or_default()
+}
+
+async fn job_pick(State(s): State<UiState>, Path(id): Path<Uuid>) -> Response {
+    one(job_pick_html(&s.app, id, None).await)
+}
+
+/// The ticked files are fetched and the rest skipped.
+async fn pick_files(State(s): State<UiState>, Path(id): Path<Uuid>, body: Bytes) -> Response {
+    let fields = fields(&body);
+    let want: std::collections::HashSet<&str> = fields
+        .iter()
+        .filter(|(k, _)| k == "want")
+        .map(|(_, v)| v.as_str())
+        .collect();
+    let result = async {
+        let skip = crate::db::job_files(&s.app.db, id)
+            .await?
+            .iter()
+            .map(crate::jobs::file_path)
+            .filter(|p| !want.contains(p.as_str()))
+            .collect();
+        s.app.jobs.skip_files(id, &skip).await
+    }
+    .await;
+    let error = result.as_ref().err().map(|e| format!("{e:#}"));
+    let shown = Shown {
+        jobs: field(&fields, "jobs")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(PAGE),
+        job: field(&fields, "job").unwrap_or_default().to_string(),
+        files: field(&fields, "files").unwrap_or_default().to_string(),
+        ..Shown::default()
+    };
+    done_with(
+        &s.app,
+        &shown,
+        false,
+        job_pick_html(&s.app, id, error).await,
+    )
+    .await
 }
 
 /// A job's files against one release, track by track, as beets shows a

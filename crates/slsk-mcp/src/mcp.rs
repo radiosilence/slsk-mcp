@@ -154,7 +154,9 @@ impl ServerHandler for SlskMcp {
                  best lossless copy from a peer with a free slot, keeps four fallbacks, downloads, tags it against \
                  MusicBrainz and files it into the library. It returns a job; poll `job(id)` until `status` is \
                  `imported`, `review` or `failed`. Downloads take minutes to hours depending on the peer, so report \
-                 progress rather than waiting in a loop.\n\n\
+                 progress rather than waiting in a loop. When every track has arrived and the job still waits on \
+                 a file the peer holds back (one that is not music), `finishDownload(id)` imports what arrived; \
+                 `skipJobFiles(id, paths)` leaves out the files at those paths (`files { path }`).\n\n\
                  For an album the user has bought, as on Bandcamp, `importUrl(url)` fetches its download link \
                  (a zip of the album, or one audio file) and imports it the same way, ending in the same \
                  statuses with the same review actions. It has no other copy to move to, so `nextSource` does \

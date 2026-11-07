@@ -154,6 +154,7 @@ async fn main() -> anyhow::Result<()> {
         cfg.state_dir.join("spectrograms"),
         importer,
         library.clone(),
+        cfg.optional_extensions.clone(),
     );
     let social = social::Social::new(db.clone(), session.clone(), jobs.clone());
     let app = Arc::new(App {

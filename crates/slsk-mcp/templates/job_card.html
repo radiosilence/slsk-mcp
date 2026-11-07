@@ -46,6 +46,12 @@
     <div id="sources-{{ j.id.as_str() }}" class="mt-1.5 text-meta text-muted">Reading history…</div>
   </details>
   {% endif %}
+  {% if j.status == "downloading" && j.username.is_some() %}
+  <details class="mt-2" data-ignore-morph data-on:toggle="el.open && @get('/jobs/{{ j.id.as_str() }}/pick')">
+    <summary class="text-muted">Choose files</summary>
+    <div id="pick-{{ j.id.as_str() }}" class="mt-1.5 text-meta text-muted">Reading files…</div>
+  </details>
+  {% endif %}
   {% if j.status == "review" || j.status == "suspect" %}
   <details class="mt-2" data-ignore-morph data-on:toggle="el.open && @get('/jobs/{{ j.id.as_str() }}/files')">
     <summary class="text-muted">Files and their tags</summary>
@@ -83,6 +89,7 @@
     {% if self.offer(j, "next") %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/next')">Try another copy</button>{% endif %}
     {% if self.offer(j, "as-is") %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/as-is')">Import as-is</button>{% endif %}
     {% if self.offer(j, "retry") %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/retry')">Retry</button>{% endif %}
+    {% if self.offer(j, "finish") %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/finish')" title="Stop waiting for the files still to come and import what has arrived">Mark complete</button>{% endif %}
     {% if self.offer(j, "cancel") %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/cancel')">Cancel</button>{% endif %}
     <span class="flex-1 max-sm:hidden"></span>
     {% if self.offer(j, "match") %}<button class="quiet" data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/retry')">Match again</button>{% endif %}

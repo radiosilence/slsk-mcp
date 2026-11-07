@@ -95,6 +95,8 @@ impl From<TransferView> for Transfer {
 #[derive(SimpleObject)]
 pub(crate) struct JobFile {
     pub name: String,
+    /// The file's path within the album, which `skipJobFiles` takes.
+    pub path: String,
     pub size: u64,
     pub bytes: u64,
     pub state: String,
@@ -190,11 +192,14 @@ fn view_of(app: &App, job: db::Job, rows: Vec<db::JobFile>, with_files: bool) ->
             (None, "completed") => f.size as u64,
             _ => 0,
         };
-        total += f.size as u64;
-        done += bytes;
+        if f.state != "skipped" {
+            total += f.size as u64;
+            done += bytes;
+        }
         if with_files {
             let name = remote.to_string_lossy();
             files.push(JobFile {
+                path: crate::jobs::file_path(&f),
                 name: name.rsplit('\\').next().unwrap_or(&name).to_string(),
                 size: f.size as u64,
                 bytes,
@@ -1903,6 +1908,24 @@ impl Mutation {
             .jobs
             .next_source(parse_id(&id)?, crate::jobs::cause::REQUESTED)
             .await?;
+        Ok(true)
+    }
+
+    /// Choose a downloading job's files: those at `paths` (each a file's
+    /// `path`) are left out, and what arrived of them deleted; every other
+    /// file is fetched, including one skipped before.
+    async fn skip_job_files(&self, ctx: &Context<'_>, id: ID, paths: Vec<String>) -> Result<bool> {
+        app(ctx)
+            .jobs
+            .skip_files(parse_id(&id)?, &paths.into_iter().collect())
+            .await?;
+        Ok(true)
+    }
+
+    /// Stop waiting for a downloading job's missing files and import what
+    /// arrived: for a peer that lists a file and never sends it.
+    async fn finish_download(&self, ctx: &Context<'_>, id: ID) -> Result<bool> {
+        app(ctx).jobs.finish(parse_id(&id)?).await?;
         Ok(true)
     }
 
