@@ -1,0 +1,1 @@
+- **Accept a folder whose listing repeats a file.** A peer's listing that named the same path twice failed the job on a database constraint; each path now becomes one download and the repeat is logged.

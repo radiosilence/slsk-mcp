@@ -271,7 +271,7 @@ impl Jobs {
             alternates,
         );
         let id = job.id;
-        let rows = self.rows(id, &folder.username, &files);
+        let rows = Self::rows(id, &folder.username, &files);
         db::insert_job(&self.db, &job, &rows).await?;
         self.start(&engine, id, &rows);
         self.wake.notify_one();
@@ -310,7 +310,7 @@ impl Jobs {
             Vec::new(),
         );
         let id = job.id;
-        let rows = self.rows(id, username, &listing);
+        let rows = Self::rows(id, username, &listing);
         db::insert_job(&self.db, &job, &rows).await?;
         self.start(&engine, id, &rows);
         self.wake.notify_one();
@@ -520,9 +520,19 @@ impl Jobs {
         }
     }
 
-    fn rows(&self, id: Uuid, username: &str, files: &[(RawStr, u64, String)]) -> Vec<JobFile> {
+    /// One row per remote path: a peer's listing can repeat a file, and a job
+    /// holds and downloads each path once.
+    fn rows(id: Uuid, username: &str, files: &[(RawStr, u64, String)]) -> Vec<JobFile> {
+        let mut seen = std::collections::HashSet::new();
         files
             .iter()
+            .filter(|(remote, ..)| {
+                let first = seen.insert(remote.as_bytes());
+                if !first {
+                    tracing::warn!(%username, remote = %remote.to_string_lossy(), "peer listed a file twice");
+                }
+                first
+            })
             .map(|(remote, size, sub)| JobFile {
                 job_id: id,
                 peer: username.to_string(),
@@ -989,7 +999,7 @@ impl Jobs {
                         folder: alt.folder.clone(),
                         folder_raw: alt.folder_raw.clone(),
                     };
-                    let rows = self.rows(job.id, &alt.username, &files);
+                    let rows = Self::rows(job.id, &alt.username, &files);
                     if !db::replace_files(&self.db, job.id, &source, &alternates, &rows).await? {
                         tracing::info!(job = %job.id, "moved on while another source was found; left as it is");
                         return Ok(());
@@ -2079,6 +2089,28 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::*;
+
+    #[test]
+    fn a_file_listed_twice_becomes_one_row() {
+        let file = |name: &str, size| (RawStr::from(name), size, "CD1".to_string());
+        let rows = Jobs::rows(
+            Uuid::new_v4(),
+            "peer",
+            &[
+                file("a\\CD1\\01.flac", 10),
+                file("a\\CD1\\02.flac", 20),
+                file("a\\CD1\\01.flac", 99),
+            ],
+        );
+        let kept: Vec<_> = rows.iter().map(|r| (r.remote.as_slice(), r.size)).collect();
+        assert_eq!(
+            kept,
+            [
+                (b"a\\CD1\\01.flac".as_slice(), 10),
+                (b"a\\CD1\\02.flac".as_slice(), 20),
+            ]
+        );
+    }
 
     #[test]
     fn path_parts_stay_inside_the_job_on_every_platform() {
