@@ -566,6 +566,43 @@ impl Library {
         Ok(index)
     }
 
+    /// Run `write` in a task of its own and wait for it. A caller that stops
+    /// waiting (a client that timed out, a dropped connection) cannot leave
+    /// it part done: it carries on to completion or to its own error, and
+    /// its outcome is logged either way, panics included.
+    pub async fn detached<T, F, Fut>(
+        self: &Arc<Self>,
+        what: &'static str,
+        write: F,
+    ) -> anyhow::Result<T>
+    where
+        F: FnOnce(Arc<Self>) -> Fut,
+        Fut: Future<Output = anyhow::Result<T>> + Send + 'static,
+        T: Send + 'static,
+    {
+        let write = write(self.clone());
+        let task = tokio::spawn(async move {
+            let started = std::time::Instant::now();
+            let outcome = write.await;
+            match &outcome {
+                Ok(_) => {
+                    tracing::info!(write = what, took = ?started.elapsed(), "library write finished")
+                }
+                Err(e) => tracing::warn!(
+                    write = what,
+                    took = ?started.elapsed(),
+                    error = format!("{e:#}"),
+                    "library write failed"
+                ),
+            }
+            outcome
+        });
+        task.await.unwrap_or_else(|e| {
+            tracing::error!(write = what, error = %e, "library write stopped");
+            Err(anyhow::anyhow!("{what} stopped: {e}"))
+        })
+    }
+
     /// A reader: the first free, or when all are busy, the next in turn.
     async fn reader(&self) -> tokio::sync::MutexGuard<'_, sift::library::Library> {
         for r in &self.readers {
@@ -1649,6 +1686,70 @@ mod tests {
         .iter()
         .map(|a| a.dir.to_string_lossy().into_owned())
         .collect()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_write_whose_request_is_dropped_still_finishes() {
+        let tmp = std::env::temp_dir().join(format!("slsk-detached-{}", uuid::Uuid::new_v4()));
+        let root = tmp.join("music");
+        let dir = root.join("Artist").join("Album");
+        std::fs::create_dir_all(&dir).unwrap();
+        let flac = include_bytes!("../tests/fixtures/silence.flac");
+        let files: Vec<PathBuf> = (1..=7).map(|n| dir.join(format!("{n:02}.flac"))).collect();
+        for f in &files {
+            std::fs::write(f, flac).unwrap();
+        }
+        let cfg = sift::Config {
+            directory: root.clone(),
+            ..Default::default()
+        };
+        let library = Arc::new(
+            Library::open(
+                &tmp.join("library.db"),
+                Arc::new(sift::Importer::new(cfg)),
+                tmp.join("music-bin"),
+            )
+            .unwrap(),
+        );
+        let image = library
+            .prepare_art(include_bytes!("../tests/fixtures/cover.png"))
+            .unwrap();
+        let dir = dir.to_string_lossy().into_owned();
+
+        // Held so the write is under way, waiting on the index, when its
+        // request goes away.
+        let held = library.writer.lock().await;
+        let request = library.detached("set album art", move |l| async move {
+            l.set_art(
+                &dir,
+                &image,
+                Target {
+                    embed: true,
+                    file: false,
+                },
+                true,
+            )
+            .await
+        });
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), request)
+                .await
+                .is_err(),
+            "the write finished while the index was held"
+        );
+        drop(held);
+        // The lock is fair: this waits until the write has had it and let go.
+        drop(library.writer.lock().await);
+
+        for f in &files {
+            assert_eq!(
+                sift::meta::pictures(f).unwrap().len(),
+                1,
+                "{} has no art",
+                f.display()
+            );
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]

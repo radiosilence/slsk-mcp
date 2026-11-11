@@ -1385,6 +1385,7 @@ impl Mutation {
     /// moves nothing and gives each spare's `binnedTo` as where it would go
     /// (absent, with the reason in `reason`, when it could not be binned):
     /// show the user that first.
+    /// A call that times out still finishes; `libraryAlbums` shows the result.
     async fn bin_duplicates(
         &self,
         ctx: &Context<'_>,
@@ -1398,7 +1399,11 @@ impl Mutation {
                     "give a query; without one this bins every spare in the library",
                 ));
             }
-            return Ok(library.duplicates(&query, true).await?);
+            return Ok(library
+                .detached("bin duplicates", move |l| async move {
+                    l.duplicates(&query, true).await
+                })
+                .await?);
         }
         let mut sets = library.duplicates(&query, false).await?;
         for spare in sets.iter_mut().flat_map(|d| d.spares.iter_mut()) {
@@ -1417,6 +1422,7 @@ impl Mutation {
     /// copy of stays, with the reason in `refused`. `preview: true` moves
     /// nothing and gives each album's `to` as where it would go: show the
     /// user that first, since the query may match more than was meant.
+    /// A call that times out still finishes; `libraryAlbums` shows the result.
     async fn bin_albums(
         &self,
         ctx: &Context<'_>,
@@ -1431,7 +1437,13 @@ impl Mutation {
                 .map(|d| library.bin_destination(d).map_err(anyhow::Error::msg))
                 .collect()
         } else {
-            library.bin_albums(&dirs).await?
+            let dirs: Vec<String> = dirs.iter().map(|d| d.to_string()).collect();
+            library
+                .detached("bin albums", move |l| async move {
+                    let dirs: Vec<&str> = dirs.iter().map(String::as_str).collect();
+                    l.bin_albums(&dirs).await
+                })
+                .await?
         };
         Ok(albums
             .iter()
@@ -1464,6 +1476,7 @@ impl Mutation {
     /// written and the release they come from (none for a split).
     /// `separator` splits each credit on it instead, for artists the
     /// library holds nothing else by ("A; B" with `";"`).
+    /// A call that times out still finishes; `libraryTracks` shows the result.
     async fn credit_artists(
         &self,
         ctx: &Context<'_>,
@@ -1479,7 +1492,11 @@ impl Mutation {
         if preview {
             return Ok(library.credit_plan(&query, &known).await?);
         }
-        Ok(library.credit_with(&query, &known).await?)
+        Ok(library
+            .detached("credit artists", move |l| async move {
+                l.credit_with(&query, &known).await
+            })
+            .await?)
     }
 
     /// Match albums already in the library against MusicBrainz again and
@@ -1491,6 +1508,7 @@ impl Mutation {
     /// given) and why it might stop; `compareRelease` is the track-by-track view for a job, and the
     /// web UI shows the same for a library album. One MusicBrainz search
     /// and several lookups per album.
+    /// A call that times out still finishes; `libraryTracks` shows the result.
     async fn reimport_albums(
         &self,
         ctx: &Context<'_>,
@@ -1515,6 +1533,24 @@ impl Mutation {
                 albums.len()
             )));
         }
+        if !preview {
+            return Ok(library
+                .detached("re-import albums", move |l| async move {
+                    let mut out = Vec::new();
+                    for a in albums {
+                        let result = l.reimport(&a.path, release_id.as_deref()).await;
+                        out.push(result.unwrap_or_else(|e| crate::library::ReimportedAlbum {
+                            path: a.path,
+                            release: None,
+                            review: None,
+                            to: None,
+                            problems: vec![format!("{e:#}")],
+                        }));
+                    }
+                    Ok(out)
+                })
+                .await?);
+        }
         let mut out = Vec::new();
         for a in albums {
             let result = if preview && let Some(id) = &release_id {
@@ -1528,7 +1564,7 @@ impl Mutation {
                         to: None,
                         problems: Vec::new(),
                     })
-            } else if preview {
+            } else {
                 library
                     .rematch(&a.path)
                     .await
@@ -1539,8 +1575,6 @@ impl Mutation {
                         to: None,
                         problems: Vec::new(),
                     })
-            } else {
-                library.reimport(&a.path, release_id.as_deref()).await
             };
             out.push(result.unwrap_or_else(|e| crate::library::ReimportedAlbum {
                 path: a.path,
@@ -1560,6 +1594,7 @@ impl Mutation {
     /// nothing: `genres` and `artists` are what would be added, `lyrics`
     /// how many tracks would get lyrics (`lyricFiles` names them), and
     /// `gainDb` is absent, since gain is measured only when it is written.
+    /// A call that times out still finishes; `libraryTracks` shows the result.
     async fn enrich_library(
         &self,
         ctx: &Context<'_>,
@@ -1571,7 +1606,12 @@ impl Mutation {
         }
         let library = &app(ctx).library;
         if !preview {
-            return Ok(library.enrich(&query).await?);
+            return Ok(library
+                .detached(
+                    "enrich library",
+                    move |l| async move { l.enrich(&query).await },
+                )
+                .await?);
         }
         let known = library.known_artists().await?;
         let mut out = Vec::new();
@@ -1597,6 +1637,7 @@ impl Mutation {
     /// re-filing the whole library is a decision for its owner, made
     /// deliberately with `query: [""]`. `preview: true` moves nothing and
     /// answers as `refilePlan(query)`.
+    /// A call that times out still finishes; `libraryAlbums` shows the result.
     async fn refile(
         &self,
         ctx: &Context<'_>,
@@ -1606,7 +1647,16 @@ impl Mutation {
         if query.is_empty() {
             return Err(Error::new("give a query; [\"\"] means the whole library"));
         }
-        Ok(app(ctx).library.refile(&query, !preview).await?)
+        let library = &app(ctx).library;
+        if preview {
+            return Ok(library.refile(&query, false).await?);
+        }
+        Ok(library
+            .detached(
+                "re-file",
+                move |l| async move { l.refile(&query, true).await },
+            )
+            .await?)
     }
 
     /// Correct tags on albums already in the library, then re-file any the
@@ -1616,6 +1666,7 @@ impl Mutation {
     /// file of each matching album is changed. `changes` are `field=value`,
     /// or `field!` to clear one. A move onto an existing album is refused,
     /// never merged, and reported with the reason.
+    /// A call that times out still finishes; `libraryTracks` shows the result.
     async fn modify_albums(
         &self,
         ctx: &Context<'_>,
@@ -1627,7 +1678,12 @@ impl Mutation {
                 "give a query; this changes every file it matches",
             ));
         }
-        let (_, moves) = app(ctx).library.modify(&query, &changes).await?;
+        let (_, moves) = app(ctx)
+            .library
+            .detached("modify albums", move |l| async move {
+                l.modify(&query, &changes).await
+            })
+            .await?;
         Ok(moves)
     }
 
@@ -1641,6 +1697,7 @@ impl Mutation {
     /// artists, which `creditArtists` can split again. `preview: true`
     /// writes nothing and lists every file's change and where each album
     /// would go: show the user that first.
+    /// A call that times out still finishes; `libraryTracks` shows the result.
     async fn edit_tracks(
         &self,
         ctx: &Context<'_>,
@@ -1704,7 +1761,12 @@ impl Mutation {
         if preview {
             return Ok(out);
         }
-        let moves = library.edit_many(&edits).await?;
+        let moves = library
+            .detached(
+                "edit tracks",
+                move |l| async move { l.edit_many(&edits).await },
+            )
+            .await?;
         for (album, m) in out.iter_mut().zip(moves) {
             album.to = m.to.filter(|to| *to != album.path);
             album.refused = m.refused;
@@ -1717,6 +1779,7 @@ impl Mutation {
     /// folders are left, and listed: players show those before embedded
     /// art. `preview: true` writes nothing and lists the files that carry
     /// pictures: show the user that first.
+    /// A call that times out still finishes; `albumArt` shows the result.
     async fn remove_album_art(
         &self,
         ctx: &Context<'_>,
@@ -1729,7 +1792,14 @@ impl Mutation {
             .into_iter()
             .map(|a| a.path)
             .collect();
-        Ok(library.remove_art(&dirs, !preview).await?)
+        if preview {
+            return Ok(library.remove_art(&dirs, false).await?);
+        }
+        Ok(library
+            .detached("remove album art", move |l| async move {
+                l.remove_art(&dirs, true).await
+            })
+            .await?)
     }
 
     /// Replace the art of the album at `path` (as `libraryAlbums` gives it)
@@ -1742,6 +1812,7 @@ impl Mutation {
     /// before embedded art. `preview: true` fetches and checks the image,
     /// writes nothing, and says what would be written: show the user that
     /// first.
+    /// A call that times out still finishes; `albumArt` shows the result.
     async fn set_album_art(
         &self,
         ctx: &Context<'_>,
@@ -1754,8 +1825,14 @@ impl Mutation {
         let library = &app(ctx).library;
         library.album_at(&path).await?;
         let image = library.fetch_art(&url).await?;
+        let target = crate::art::Target { embed, file };
+        if preview {
+            return Ok(library.set_art(&path, &image, target, false).await?);
+        }
         Ok(library
-            .set_art(&path, &image, crate::art::Target { embed, file }, !preview)
+            .detached("set album art", move |l| async move {
+                l.set_art(&path, &image, target, true).await
+            })
             .await?)
     }
 

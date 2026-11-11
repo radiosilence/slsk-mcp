@@ -212,7 +212,9 @@ impl ServerHandler for SlskMcp {
                  returns what it would do: the moves, each spare's bin destination, each file's artist \
                  credits and where they come from, every file's edited fields, the genres and lyrics enriching would add (gain is only \
                  measured when written), the release a re-import would apply, the art that would be written or removed. Preview first and show the user \
-                 before applying to more than one album.\n\n\
+                 before applying to more than one album. A write that times out still runs to the end on the \
+                 server: read `albumArt`, `libraryTracks` or `libraryAlbums` to see the result rather than \
+                 calling it again.\n\n\
                  The client is also a chat client: rooms, private messages (`conversations`, `messages`), \
                  buddies and interests. `sendMessage` and `say` reach real people, so they take two calls: \
                  PREVIEW returns a token and sends nothing; show the user the preview, and only after they agree \

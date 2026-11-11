@@ -388,7 +388,10 @@ on in the background, an album at a time, with progress and a result for
 each.
 
 The GraphQL mutations behind these take `preview: true` for the same answer
-without the change, so an assistant can show it first.
+without the change, so an assistant can show it first. Applied, each runs in
+a task of its own that the request only waits on: an assistant's call that
+times out, or a dropped connection, does not stop a write part way through
+an album, and the outcome is logged either way.
 
 Browsing shares, a peer's or this client's own (the library as peers see it,
 read from the share index rather than over the network), works like Finder's
