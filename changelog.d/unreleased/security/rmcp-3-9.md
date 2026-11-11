@@ -1,0 +1,1 @@
+- **rmcp 3.9.** Clears RUSTSEC-2026-0462, unbounded response buffering in rmcp's HTTP clients.
