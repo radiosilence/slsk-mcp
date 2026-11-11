@@ -477,47 +477,44 @@ impl Jobs {
         let root = folder.to_string_lossy();
         let from_dirs = |dirs: Vec<Directory>| -> Vec<(RawStr, u64, String)> {
             dirs.into_iter()
-                .flat_map(|d| {
+                .filter_map(|d| {
                     let dir = d.name.to_string_lossy();
-                    let sub = dir
-                        .strip_prefix(&root)
-                        .unwrap_or("")
-                        .trim_start_matches('\\')
-                        .replace('\\', "/");
+                    let Some(sub) = subdir(&dir, &root) else {
+                        tracing::debug!(%username, %dir, "peer listed a sibling folder; left out");
+                        return None;
+                    };
                     let prefix = d.name.clone();
-                    d.files.into_iter().map(move |f| {
+                    Some(d.files.into_iter().map(move |f| {
                         let mut full = prefix.as_bytes().to_vec();
                         full.push(b'\\');
                         full.extend_from_slice(f.name.as_bytes());
                         (RawStr(full.into()), f.size, sub.clone())
-                    })
+                    }))
                 })
+                .flatten()
                 .collect()
         };
-        match engine.folder_contents(username, folder).await {
-            Ok(dirs) if dirs.iter().any(|d| !d.files.is_empty()) => Ok(from_dirs(dirs)),
-            other => {
-                if let Err(e) = other {
-                    tracing::debug!(%username, error = %e, "folder listing failed; using search results");
-                }
-                anyhow::ensure!(!fallback.is_empty(), "the peer did not list the folder");
-                // Disc folders are grouped under their album, so each file's
-                // own directory still decides where it lands.
-                Ok(fallback
-                    .iter()
-                    .map(|(remote, size)| {
-                        let path = remote.to_string_lossy();
-                        let dir = path.rsplit_once('\\').map_or("", |(d, _)| d);
-                        let sub = dir
-                            .strip_prefix(&root)
-                            .unwrap_or("")
-                            .trim_start_matches('\\')
-                            .replace('\\', "/");
-                        (remote.clone(), *size, sub)
-                    })
-                    .collect())
+        let listed = match engine.folder_contents(username, folder).await {
+            Ok(dirs) => from_dirs(dirs),
+            Err(e) => {
+                tracing::debug!(%username, error = %e, "folder listing failed; using search results");
+                Vec::new()
             }
+        };
+        if !listed.is_empty() {
+            return Ok(listed);
         }
+        anyhow::ensure!(!fallback.is_empty(), "the peer did not list the folder");
+        // Disc folders are grouped under their album, so each file's own
+        // directory still decides where it lands.
+        Ok(fallback
+            .iter()
+            .filter_map(|(remote, size)| {
+                let path = remote.to_string_lossy();
+                let dir = path.rsplit_once('\\').map_or("", |(d, _)| d);
+                Some((remote.clone(), *size, subdir(dir, &root)?))
+            })
+            .collect())
     }
 
     /// One row per remote path: a peer's listing can repeat a file, and a job
@@ -1825,6 +1822,26 @@ impl Jobs {
     }
 }
 
+/// Where a directory from a peer's folder listing lands under the job:
+/// `root` itself is `""` and a subfolder its relative path. A sibling whose
+/// name only begins with `root` (`Iconic (2021)` beside `Iconic`) is `None`,
+/// since some peers answer a folder request with every folder sharing its
+/// prefix. Anything else keeps to the job's top level.
+fn subdir(dir: &str, root: &str) -> Option<String> {
+    let Some(rest) = dir
+        .get(..root.len())
+        .filter(|head| head.eq_ignore_ascii_case(root))
+        .map(|_| &dir[root.len()..])
+    else {
+        return Some(String::new());
+    };
+    match rest.strip_prefix('\\') {
+        Some(sub) => Some(sub.trim_start_matches('\\').replace('\\', "/")),
+        None if rest.is_empty() => Some(String::new()),
+        None => None,
+    }
+}
+
 /// A file's path within its album, as a person and the API name it.
 pub(crate) fn file_path(f: &JobFile) -> String {
     let name = RawStr(f.remote.clone().into()).to_string_lossy();
@@ -2089,6 +2106,25 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::*;
+
+    #[test]
+    fn sibling_folders_sharing_a_prefix_are_left_out() {
+        let root = "music\\The Skinner Brothers\\Iconic";
+        for (dir, want) in [
+            ("music\\The Skinner Brothers\\Iconic", Some("")),
+            ("MUSIC\\the skinner brothers\\iconic", Some("")),
+            ("music\\The Skinner Brothers\\Iconic\\CD1", Some("CD1")),
+            (
+                "music\\The Skinner Brothers\\Iconic\\CD1\\Art",
+                Some("CD1/Art"),
+            ),
+            ("music\\The Skinner Brothers\\Iconic (2021)", None),
+            ("music\\The Skinner Brothers\\Iconics", None),
+            ("elsewhere\\Iconic", Some("")),
+        ] {
+            assert_eq!(subdir(dir, root).as_deref(), want, "{dir}");
+        }
+    }
 
     #[test]
     fn a_file_listed_twice_becomes_one_row() {

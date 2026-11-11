@@ -1,1 +1,1 @@
-- **Accept a folder whose listing repeats a file.** A peer's listing that named the same path twice failed the job on a database constraint; each path now becomes one download and the repeat is logged.
+- **Accept a folder whose listing repeats a file or names its siblings.** A peer's listing that named the same path twice, or answered for `Iconic` with `Iconic (2021)` as well, failed the job on a database constraint. Each path now becomes one download, sibling folders that only share the name's prefix are left out, and both are logged.
