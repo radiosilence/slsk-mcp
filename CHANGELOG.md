@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.13.6
+
+### Fixed
+
+- **Library writes outlive their requests.** `setAlbumArt`, `removeAlbumArt`, `editTracks`, `modifyAlbums`, `enrichLibrary`, `creditArtists`, `reimportAlbums`, `refile`, `binAlbums` and `binDuplicates` run in a task of their own that the request waits on, so a client that times out or drops the connection cannot stop a write part way through an album. Each write's outcome, including a panic, is logged when it ends.
+
 ## 0.13.5
 
 ### Added
