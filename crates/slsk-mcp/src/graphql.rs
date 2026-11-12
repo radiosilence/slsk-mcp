@@ -1146,6 +1146,28 @@ pub(crate) async fn responses(
     }
 }
 
+/// A search: when it was asked for, how long it listens, and what it has
+/// heard.
+type Search = (
+    tokio::time::Instant,
+    u64,
+    tokio::sync::watch::Receiver<Heard>,
+);
+
+/// Searches by their words, lowercased.
+static SEARCHES: std::sync::LazyLock<
+    parking_lot::Mutex<std::collections::HashMap<String, Search>>,
+> = std::sync::LazyLock::new(Default::default);
+
+/// Drop the finished answers to `query`, so the next search of those words
+/// asks the network again rather than reusing them. One still listening is
+/// left to be joined.
+pub(crate) fn forget_answers(query: &str) {
+    SEARCHES
+        .lock()
+        .retain(|key, (_, _, heard)| key != &query.trim().to_lowercase() || !heard.borrow().done);
+}
+
 /// The answers to `query` as they arrive. A search of the same words from
 /// the last ten minutes, finished, still listening or still waiting its
 /// turn, is joined rather than sent again, so a page reopened mid-search
@@ -1175,11 +1197,6 @@ where
 {
     use tokio::sync::watch;
     use tokio::time::Instant;
-    // When it was asked for, how long it listens, and what it has heard.
-    type Search = (Instant, u64, watch::Receiver<Heard>);
-    static SEARCHES: std::sync::LazyLock<
-        parking_lot::Mutex<std::collections::HashMap<String, Search>>,
-    > = std::sync::LazyLock::new(Default::default);
     // Answers stand in for ten minutes from when the listening ended. A
     // search whose task ended without finishing, as a panic does, answers
     // nobody and is replaced.

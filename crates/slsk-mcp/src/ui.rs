@@ -902,19 +902,10 @@ impl CardView {
     /// What was fetched, as the peer named it: the folder and the one above,
     /// which is usually the artist. The query that found it otherwise.
     fn heading(&self, j: &Job) -> String {
-        let Some(folder) = j.folder.as_deref() else {
-            return j.title.clone();
-        };
-        let parts: Vec<_> = folder
-            .rsplit(['\\', '/'])
-            .filter(|p| !p.is_empty())
-            .take(2)
-            .collect();
-        match parts.as_slice() {
-            [album, parent] => format!("{parent} / {album}"),
-            [album] => album.to_string(),
-            _ => j.title.clone(),
-        }
+        j.folder
+            .as_deref()
+            .and_then(folder_heading)
+            .unwrap_or_else(|| j.title.clone())
     }
 
     /// The expression that is true while a job's files are open: the
@@ -1393,6 +1384,21 @@ impl UploadHistory {
     }
 }
 
+/// A peer's folder as a heading: its name and the one above, which is
+/// usually the artist.
+fn folder_heading(folder: &str) -> Option<String> {
+    let parts: Vec<_> = folder
+        .rsplit(['\\', '/'])
+        .filter(|p| !p.is_empty())
+        .take(2)
+        .collect();
+    match parts.as_slice() {
+        [album, parent] => Some(format!("{parent} / {album}")),
+        [album] => Some(album.to_string()),
+        _ => None,
+    }
+}
+
 /// The last part of a peer's path.
 fn leaf(name: &str) -> &str {
     name.rsplit(['\\', '/']).next().unwrap_or(name)
@@ -1747,7 +1753,10 @@ async fn download(State(s): State<UiState>, body: Bytes) -> Response {
     };
     let title = field(&fields, "title").map(str::to_string);
     match s.app.jobs.from_folder(&folder, title, Vec::new()).await {
-        Ok(job) => one(flash_ok(&format!("Downloading {}", job.title))),
+        Ok(_) => {
+            let name = folder_heading(&folder.path).unwrap_or(folder.path.clone());
+            one(flash_ok(&format!("Downloading {name} from {username}")))
+        }
         Err(e) => failed(&e),
     }
 }

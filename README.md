@@ -346,10 +346,12 @@ reload or a restart; the address names the tab and how many results are
 shown (`/search?tab=12&shown=200`). `/search?q=…` opens a tab for each line
 of `q` and moves to the first, which is how "Search several at once" works:
 paste one album per line and every search is queued behind the pacing above.
-Searching words already open in a tab returns to it. After ten minutes, when
-the server's reuse of identical searches has lapsed, a tab's results are
-marked stale and offer to search again; until then reloading, reopening or
-showing more spends nothing from the hourly budget. Pinned tabs survive
+Searching words already open in a tab returns to it. Results say when they
+were searched, and after ten minutes, when this service's reuse of identical
+searches has lapsed, they are marked stale; until then reloading, reopening
+or showing more spends nothing from the hourly budget. "Search again" asks
+the network afresh at any time, skipping that reuse. Kept results can be hours old, so once drawn the server is
+asked whether each peer is online, away or offline. Pinned tabs survive
 "Close unpinned", and the oldest unpinned tabs past a hundred are closed as
 new ones open. Results are
 regrouped at most once a second and drawn a hundred folders at a time, since
