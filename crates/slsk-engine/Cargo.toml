@@ -23,7 +23,7 @@ walkdir = "2.5.0"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
-soulseek-rs-lib = "19"
+soulseek-rs-lib = "20"
 tempfile = "3.27.0"
 slsk-testserver = { path = "../slsk-testserver" }
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
