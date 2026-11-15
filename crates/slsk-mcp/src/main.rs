@@ -184,9 +184,11 @@ async fn main() -> anyhow::Result<()> {
     // a drain that can take minutes, rather than going dark for it.
     let (stopped, _) = tokio::sync::watch::channel(false);
     let stop = stopped.clone();
+    let activity = app.activity.clone();
     tokio::spawn(async move {
         shutdown().await;
         tracing::info!("stopping; waiting for any import in progress");
+        activity.close().await;
         jobs.drain().await;
         let _ = stop.send(true);
     });

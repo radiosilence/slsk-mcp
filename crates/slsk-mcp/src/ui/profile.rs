@@ -155,8 +155,8 @@ async fn from_server(engine: &Engine, username: &str) -> Server {
                     } if u == username => out.interests = Some((likes.clone(), hates.clone())),
                     _ => {}
                 },
-                Ok(Event::Status(_) | Event::Activity(_))
-                | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                Ok(Event::Status(_)) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                }
                 Err(_) => return,
             }
         }

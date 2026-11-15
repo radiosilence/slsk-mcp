@@ -164,7 +164,6 @@ impl Social {
                     Ok(Event::Status(Status::LoggedIn { .. })) => me.on_login(&engine).await,
                     Ok(Event::Status(_)) => {}
                     Ok(Event::Server(msg)) => me.on_server(&engine, &msg).await,
-                    Ok(Event::Activity(_)) => {}
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                         tracing::warn!(n, "social events lagged")
                     }

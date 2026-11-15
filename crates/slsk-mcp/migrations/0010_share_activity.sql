@@ -12,7 +12,9 @@ CREATE TABLE share_events (
     -- The folder opened, or the search's words.
     detail   TEXT,
     -- Files a search matched.
-    results  INTEGER
+    results  INTEGER,
+    -- A search the distributed network relayed, rather than the server.
+    distributed INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX share_events_at ON share_events (at DESC);
 CREATE INDEX share_events_kind_at ON share_events (kind, at DESC);

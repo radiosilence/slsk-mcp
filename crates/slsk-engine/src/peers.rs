@@ -526,12 +526,15 @@ fn on_message(inner: &Arc<Inner>, username: &str, msg: PeerMessage, reply: &mpsc
             let dirs = if inner.is_banned(username) {
                 Vec::new()
             } else {
+                inner.shares.load().folder(&folder)
+            };
+            // Only a folder we hold: a peer can name anything.
+            if !dirs.is_empty() {
                 inner.activity(crate::Activity::Folder {
                     username: username.to_string(),
                     folder: folder.to_string_lossy(),
                 });
-                inner.shares.load().folder(&folder)
-            };
+            }
             respond(
                 PeerMessage::FolderContentsResponse {
                     token,

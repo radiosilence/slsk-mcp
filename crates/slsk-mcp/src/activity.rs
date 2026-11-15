@@ -14,7 +14,7 @@ use std::time::Duration;
 use anyhow::Result;
 use chrono::{DateTime, Timelike, Utc};
 use rusqlite::params;
-use slsk_engine::{Event, TransferView};
+use slsk_engine::TransferView;
 
 use crate::db::{Db, ts_from};
 use crate::live::Topic;
@@ -30,6 +30,8 @@ const MAX_TERMS: usize = 100_000;
 const KEEP_DAYS: i64 = 90;
 /// How often new rows are written, in one transaction.
 const FLUSH: Duration = Duration::from_secs(5);
+/// Rows kept per user a minute; the rest still show on the feed.
+const PER_USER_MINUTE: u32 = 30;
 
 /// One thing someone did with our shares.
 #[derive(Debug, Clone, PartialEq, async_graphql::SimpleObject)]
@@ -98,6 +100,9 @@ pub struct Trends {
 struct Hour {
     start: Option<DateTime<Utc>>,
     terms: HashMap<String, (u64, u64)>,
+    /// Full of terms searched more than once: new ones are not counted
+    /// until the next hour.
+    saturated: bool,
     searches: u64,
     matched: u64,
     distributed: u64,
@@ -109,6 +114,10 @@ pub struct Activity {
     hour: parking_lot::Mutex<Hour>,
     /// Rows not yet written.
     pending: parking_lot::Mutex<Vec<ShareEvent>>,
+    /// Hours ended and not yet written.
+    ended: parking_lot::Mutex<Vec<Hour>>,
+    /// Rows kept this minute per user: the minute, and how many.
+    kept: parking_lot::Mutex<HashMap<String, (i64, u32)>>,
 }
 
 /// A search's words as they are counted: lower case, letters and digits
@@ -150,6 +159,39 @@ fn folder_of(path: &str) -> &str {
     path.rsplit_once('\\').map_or(path, |(f, _)| f)
 }
 
+impl Hour {
+    /// What is written for the hour: its key, its totals, and its most
+    /// searched words.
+    fn top(&self) -> (String, (u64, u64, u64), Vec<(String, u64, u64)>) {
+        let key = self
+            .start
+            .map(|s| s.format("%Y-%m-%dT%H").to_string())
+            .unwrap_or_default();
+        (
+            key,
+            (self.searches, self.matched, self.distributed),
+            self.most(KEEP_TERMS),
+        )
+    }
+
+    /// The `n` most searched words, copying no others.
+    fn most(&self, n: usize) -> Vec<(String, u64, u64)> {
+        let mut terms: Vec<(&String, &(u64, u64))> = self.terms.iter().collect();
+        let by = |a: &(&String, &(u64, u64)), b: &(&String, &(u64, u64))| {
+            b.1.0.cmp(&a.1.0).then_with(|| a.0.cmp(b.0))
+        };
+        if terms.len() > n {
+            terms.select_nth_unstable_by(n, by);
+            terms.truncate(n);
+        }
+        terms.sort_by(by);
+        terms
+            .into_iter()
+            .map(|(t, (s, m))| (t.clone(), *s, *m))
+            .collect()
+    }
+}
+
 impl Activity {
     pub fn new(db: Db) -> Arc<Self> {
         Arc::new(Self {
@@ -157,6 +199,8 @@ impl Activity {
             feed: Default::default(),
             hour: Default::default(),
             pending: Default::default(),
+            ended: Default::default(),
+            kept: Default::default(),
         })
     }
 
@@ -174,21 +218,20 @@ impl Activity {
                     return;
                 }
             };
-            let mut events = engine.events();
+            let mut events = engine.activity();
             let mut flush = tokio::time::interval(FLUSH);
             loop {
                 tokio::select! {
                     e = events.recv() => match e {
-                        Ok(Event::Activity(a)) => me.on(&a, Utc::now()),
-                        Ok(_) => {}
+                        Ok(a) => me.on(&a, Utc::now()),
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                             tracing::debug!(n, "share activity lagged; those searches are not counted")
                         }
                         Err(_) => return,
                     },
                     _ = flush.tick() => {
-                        if let Err(e) = me.flush(Utc::now()).await {
-                            tracing::warn!(error = %e, "could not record share activity");
+                        if let Err(e) = me.flush(Utc::now(), false).await {
+                            tracing::warn!(error = %e, "could not record share activity; trying again");
                         }
                     }
                 }
@@ -235,8 +278,26 @@ impl Activity {
                 }
             }
         };
-        self.pending.lock().push(event.clone());
+        if self.keep(&event.username, at) {
+            self.pending.lock().push(event.clone());
+        }
         self.show(event);
+    }
+
+    /// Whether a row from `username` is kept: at most [`PER_USER_MINUTE`]
+    /// a minute, so one peer cannot fill the log.
+    fn keep(&self, username: &str, at: DateTime<Utc>) -> bool {
+        let minute = at.timestamp() / 60;
+        let mut kept = self.kept.lock();
+        if kept.len() > 10_000 {
+            kept.retain(|_, (m, _)| *m == minute);
+        }
+        let entry = kept.entry(username.to_string()).or_insert((minute, 0));
+        if entry.0 != minute {
+            *entry = (minute, 0);
+        }
+        entry.1 += 1;
+        entry.1 <= PER_USER_MINUTE
     }
 
     /// An upload starting, or ending as completed, failed or cancelled.
@@ -269,8 +330,14 @@ impl Activity {
     fn count(&self, query: &str, matched: bool, distributed: bool, at: DateTime<Utc>) {
         let mut hour = self.hour.lock();
         let start = hour_of(at);
-        if hour.start.is_none() {
-            hour.start = Some(start);
+        match hour.start {
+            None => hour.start = Some(start),
+            Some(s) if start > s => {
+                let ended = std::mem::take(&mut *hour);
+                self.ended.lock().push(ended);
+                hour.start = Some(start);
+            }
+            _ => {}
         }
         hour.searches += 1;
         hour.matched += u64::from(matched);
@@ -280,8 +347,12 @@ impl Activity {
             return;
         }
         if hour.terms.len() >= MAX_TERMS && !hour.terms.contains_key(&term) {
+            if hour.saturated {
+                return;
+            }
             hour.terms.retain(|_, (n, _)| *n > 1);
             if hour.terms.len() >= MAX_TERMS {
+                hour.saturated = true;
                 return;
             }
         }
@@ -301,64 +372,87 @@ impl Activity {
         (hour.searches, hour.matched, hour.distributed)
     }
 
-    /// Write what is pending; once the hour has turned, its counts too, and
-    /// prune what is past keeping.
-    async fn flush(&self, now: DateTime<Utc>) -> Result<()> {
+    /// Write what is pending and any hour that has ended, pruning what is
+    /// past keeping; with `all`, the hour in hand too, as on shutdown. What
+    /// fails to be written is kept for the next try.
+    async fn flush(&self, now: DateTime<Utc>, all: bool) -> Result<()> {
         let rows = std::mem::take(&mut *self.pending.lock());
-        let ended = {
+        let mut hours = std::mem::take(&mut *self.ended.lock());
+        {
             let mut hour = self.hour.lock();
-            match hour.start {
-                Some(start) if hour_of(now) > start => Some(std::mem::take(&mut *hour)),
-                _ => None,
+            let turned = hour.start.is_some_and(|start| hour_of(now) > start);
+            if turned || (all && hour.start.is_some()) {
+                hours.push(std::mem::take(&mut *hour));
             }
-        };
-        if rows.is_empty() && ended.is_none() {
+        }
+        if rows.is_empty() && hours.is_empty() {
             return Ok(());
         }
-        self.db
-            .run(move |c| {
-                let tx = c.transaction()?;
-                {
-                    let mut insert = tx.prepare_cached(
-                        "INSERT INTO share_events (at, kind, username, detail, results) VALUES (?1, ?2, ?3, ?4, ?5)",
-                    )?;
-                    for e in &rows {
-                        insert.execute(params![stamp(e.at), e.kind, e.username, e.detail, e.results])?;
+        let written = {
+            let rows = rows.clone();
+            let tops: Vec<_> = hours.iter().map(Hour::top).collect();
+            self.db
+                .run(move |c| {
+                    let tx = c.transaction()?;
+                    {
+                        let mut insert = tx.prepare_cached(
+                            "INSERT INTO share_events (at, kind, username, detail, results, distributed) \
+                             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                        )?;
+                        for e in &rows {
+                            insert.execute(params![
+                                stamp(e.at),
+                                e.kind,
+                                e.username,
+                                e.detail,
+                                e.results,
+                                e.distributed
+                            ])?;
+                        }
                     }
-                }
-                if let Some(hour) = ended
-                    && let Some(start) = hour.start
-                {
-                    let key = start.format("%Y-%m-%dT%H").to_string();
-                    tx.execute(
-                        "INSERT INTO search_hours (hour, searches, matched, distributed) VALUES (?1, ?2, ?3, ?4) \
-                         ON CONFLICT (hour) DO UPDATE SET searches = searches + excluded.searches, \
-                         matched = matched + excluded.matched, distributed = distributed + excluded.distributed",
-                        params![key, hour.searches as i64, hour.matched as i64, hour.distributed as i64],
-                    )?;
-                    let mut terms: Vec<_> = hour.terms.into_iter().collect();
-                    terms.sort_by(|a, b| b.1.0.cmp(&a.1.0).then_with(|| a.0.cmp(&b.0)));
-                    terms.truncate(KEEP_TERMS);
-                    let mut insert = tx.prepare_cached(
-                        "INSERT INTO search_terms (hour, term, searches, matched) VALUES (?1, ?2, ?3, ?4) \
-                         ON CONFLICT (hour, term) DO UPDATE SET searches = searches + excluded.searches, \
-                         matched = matched + excluded.matched",
-                    )?;
-                    for (term, (searches, matched)) in terms {
-                        insert.execute(params![key, term, searches as i64, matched as i64])?;
+                    for (key, totals, terms) in &tops {
+                        tx.execute(
+                            "INSERT INTO search_hours (hour, searches, matched, distributed) VALUES (?1, ?2, ?3, ?4) \
+                             ON CONFLICT (hour) DO UPDATE SET searches = searches + excluded.searches, \
+                             matched = matched + excluded.matched, distributed = distributed + excluded.distributed",
+                            params![key, totals.0 as i64, totals.1 as i64, totals.2 as i64],
+                        )?;
+                        let mut insert = tx.prepare_cached(
+                            "INSERT INTO search_terms (hour, term, searches, matched) VALUES (?1, ?2, ?3, ?4) \
+                             ON CONFLICT (hour, term) DO UPDATE SET searches = searches + excluded.searches, \
+                             matched = matched + excluded.matched",
+                        )?;
+                        for (term, searches, matched) in terms {
+                            insert.execute(params![key, term, *searches as i64, *matched as i64])?;
+                        }
                     }
-                    drop(insert);
-                    let cutoff = now - chrono::Duration::days(KEEP_DAYS);
-                    tx.execute("DELETE FROM share_events WHERE at < ?1", [stamp(cutoff)])?;
-                    let hour_cutoff = cutoff.format("%Y-%m-%dT%H").to_string();
-                    tx.execute("DELETE FROM search_terms WHERE hour < ?1", [&hour_cutoff])?;
-                    tx.execute("DELETE FROM search_hours WHERE hour < ?1", [&hour_cutoff])?;
-                }
-                tx.commit()?;
-                Ok(())
-            })
-            .await?;
+                    if !tops.is_empty() {
+                        let cutoff = now - chrono::Duration::days(KEEP_DAYS);
+                        tx.execute("DELETE FROM share_events WHERE at < ?1", [stamp(cutoff)])?;
+                        let hour_cutoff = cutoff.format("%Y-%m-%dT%H").to_string();
+                        tx.execute("DELETE FROM search_terms WHERE hour < ?1", [&hour_cutoff])?;
+                        tx.execute("DELETE FROM search_hours WHERE hour < ?1", [&hour_cutoff])?;
+                    }
+                    tx.commit()?;
+                    Ok(())
+                })
+                .await
+        };
+        if let Err(e) = written {
+            let mut pending = self.pending.lock();
+            let newer = std::mem::replace(&mut *pending, rows);
+            pending.extend(newer);
+            self.ended.lock().splice(0..0, hours);
+            return Err(e.into());
+        }
         Ok(())
+    }
+
+    /// Write everything held, the hour in hand included: on shutdown.
+    pub async fn close(&self) {
+        if let Err(e) = self.flush(Utc::now(), true).await {
+            tracing::warn!(error = %e, "could not record share activity on the way out");
+        }
     }
 
     /// Kept events, newest first, of one kind or all.
@@ -373,11 +467,11 @@ impl Activity {
                         username: r.get(2)?,
                         detail: r.get(3)?,
                         results: r.get(4)?,
-                        distributed: false,
+                        distributed: r.get(5)?,
                     })
                 };
                 const COLUMNS: &str =
-                    "SELECT at, kind, username, detail, results FROM share_events";
+                    "SELECT at, kind, username, detail, results, distributed FROM share_events";
                 match kind {
                     Some(k) => c
                         .prepare_cached(&format!(
@@ -397,7 +491,8 @@ impl Activity {
     /// What people have been after over the last `days`, the hour in hand
     /// included.
     pub async fn trends(&self, days: u32) -> Result<Trends> {
-        let since = Utc::now() - chrono::Duration::days(i64::from(days.clamp(1, KEEP_DAYS as u32)));
+        let days = days.clamp(1, KEEP_DAYS as u32);
+        let since = Utc::now() - chrono::Duration::days(i64::from(days));
         let (since_at, since_hour) = (stamp(since), since.format("%Y-%m-%dT%H").to_string());
         let (mut totals, mut terms, folders, visitors) = self
             .db
@@ -437,10 +532,10 @@ impl Activity {
                 }
                 let visitors: Vec<Visitor> = c
                     .prepare_cached(
-                        "SELECT username, COUNT(DISTINCT substr(at, 1, 10)) AS days, COUNT(*), MAX(at) FROM ( \
-                           SELECT lower(username) AS username, at FROM share_events WHERE at >= ?1 \
-                           UNION ALL SELECT lower(username), finished_at FROM uploads WHERE finished_at >= ?1 \
-                         ) GROUP BY username HAVING days > 1 ORDER BY days DESC, COUNT(*) DESC LIMIT 20",
+                        "SELECT MAX(username), COUNT(DISTINCT substr(at, 1, 10)) AS days, COUNT(*), MAX(at) FROM ( \
+                           SELECT username, at FROM share_events WHERE at >= ?1 \
+                           UNION ALL SELECT username, finished_at FROM uploads WHERE finished_at >= ?1 \
+                         ) GROUP BY lower(username) HAVING days > 1 ORDER BY days DESC, COUNT(*) DESC LIMIT 20",
                     )?
                     .query_map([&since_at], |r| {
                         Ok(Visitor {
@@ -454,13 +549,23 @@ impl Activity {
                 Ok((totals, terms, folders, visitors))
             })
             .await?;
-        {
+        // The hour in hand, and any ended and not yet written, by their
+        // most searched words: copying every word held would hold the lock
+        // the engine's events wait on.
+        let held: Vec<_> = {
             let hour = self.hour.lock();
-            totals.0 += hour.searches;
-            totals.1 += hour.matched;
-            totals.2 += hour.distributed;
-            for (term, (n, m)) in &hour.terms {
-                let e = terms.entry(term.clone()).or_default();
+            let ended = self.ended.lock();
+            std::iter::once(&*hour)
+                .chain(ended.iter())
+                .map(|h| ((h.searches, h.matched, h.distributed), h.most(2000)))
+                .collect()
+        };
+        for ((searches, matched, distributed), top) in held {
+            totals.0 += searches;
+            totals.1 += matched;
+            totals.2 += distributed;
+            for (term, n, m) in top {
+                let e = terms.entry(term).or_default();
                 e.0 += n;
                 e.1 += m;
             }
@@ -549,7 +654,7 @@ mod tests {
             t,
         );
         assert_eq!(a.feed(10).len(), 2, "the matched search and the folder");
-        a.flush(Utc::now()).await.unwrap();
+        a.flush(Utc::now(), false).await.unwrap();
         let trends = a.trends(1).await.unwrap();
         assert_eq!(
             (trends.searches, trends.matched, trends.distributed),
@@ -565,7 +670,9 @@ mod tests {
             }]
         );
         assert_eq!(trends.folders[0].folder, "Music\\BoC\\Geogaddi");
-        assert_eq!(a.log(Some("search".into()), 10).await.unwrap().len(), 1);
+        let kept = a.log(Some("search".into()), 10).await.unwrap();
+        assert_eq!(kept.len(), 1);
+        assert!(kept[0].distributed, "kept with the route it came by");
     }
 
     #[test]

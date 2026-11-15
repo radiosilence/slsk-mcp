@@ -108,7 +108,6 @@ pub fn of_table(table: &str) -> Option<Topic> {
         "uploads" => Topic::Uploads,
         "messages" | "wishes" => Topic::Social,
         "search_tabs" => Topic::Search,
-        "share_events" => Topic::Activity,
         _ => return None,
     })
 }

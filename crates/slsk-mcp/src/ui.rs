@@ -1709,7 +1709,6 @@ async fn stream(
         // Everything is drawn the first time.
         let (mut topics, mut moved, mut connection, mut minute) =
             ([true; crate::live::TOPICS], true, true, true);
-        let mut first = true;
         loop {
             let jobs = topics[Topic::Jobs as usize];
             let mut parts: [Option<String>; 5] = Default::default();
@@ -1792,7 +1791,7 @@ async fn stream(
                     if topics[Topic::Activity as usize] || minute {
                         parts[1] = Some(activity::feed_html(&app));
                     }
-                    if minute || first {
+                    if minute {
                         parts[2] = Some(activity::trends_html(&app).await);
                     }
                 }
@@ -1818,7 +1817,7 @@ async fn stream(
             tokio::time::sleep(THROTTLE).await;
             let next_minute = tokio::time::Instant::now()
                 + Duration::from_secs(60 - (chrono::Utc::now().timestamp() % 60) as u64);
-            (moved, connection, minute, first) = (false, false, false, false);
+            (moved, connection, minute) = (false, false, false);
             tokio::select! {
                 r = changes.changed() => if r.is_err() { break },
                 r = transfers.changed() => match r {
