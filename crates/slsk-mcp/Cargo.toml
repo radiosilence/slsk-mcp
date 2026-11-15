@@ -1,6 +1,6 @@
 [package]
 name = "slsk-mcp"
-version = "0.13.6"
+version = "0.14.0"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -26,7 +26,7 @@ percent-encoding = "2.3.2"
 png = "0.18.1"
 rand = "0.10.3"
 reqwest = { version = "0.13", default-features = false, features = ["json", "form", "rustls", "stream"] }
-rmcp = { version = "3", features = ["server", "transport-io", "transport-streamable-http-server"] }
+rmcp = { version = "3.10", features = ["server", "transport-io", "transport-streamable-http-server"] }
 rusqlite = { version = "0.41", features = ["bundled", "hooks", "uuid"] }
 rustfft = "6.4.1"
 same-file = "1.0.6"
