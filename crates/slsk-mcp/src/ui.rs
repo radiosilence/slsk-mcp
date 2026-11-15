@@ -36,6 +36,8 @@ use crate::graphql::{self, Job, Transfer};
 mod admin;
 mod browse;
 mod chat;
+#[cfg(test)]
+mod cost;
 mod library;
 mod profile;
 mod search;
@@ -1460,6 +1462,9 @@ async fn job_sources(State(s): State<UiState>, Path(id): Path<Uuid>) -> Response
 #[template(path = "uploads_peers.html")]
 struct UploadPeers {
     peers: Vec<Peer>,
+    /// When the transfers were read, for `live.js` to draw from (ms since
+    /// the epoch).
+    at: i64,
     sending: usize,
     queued: usize,
     sent: usize,
@@ -1593,6 +1598,7 @@ fn upload_peers_html(app: &App) -> String {
     }
     UploadPeers {
         peers,
+        at: chrono::Utc::now().timestamp_millis(),
         sending,
         queued,
         sent,
@@ -1774,6 +1780,9 @@ async fn stream(
                             history_sent = Some(newest);
                         }
                     }
+                }
+                "wishlist" if topics[Topic::Social as usize] || jobs || minute => {
+                    parts[1] = Some(wishlist::html(&app).await);
                 }
                 "search" if topics[Topic::Search as usize] || minute => {
                     parts[1] = Some(search::tabs_html(&app, Uuid::parse_str(&shown.tab).ok()).await);
