@@ -133,6 +133,27 @@ pub enum Event {
     /// rooms, private messages, user status and the rest from here.
     Server(Arc<FromServer>),
     Status(Status),
+    /// Someone using our shares.
+    Activity(Arc<Activity>),
+}
+
+/// What another user did with our shares.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Activity {
+    /// Asked for our whole share list.
+    Browse { username: String },
+    /// Opened one of our folders.
+    Folder { username: String, folder: String },
+    /// A search reached us, from the server or the distributed network, and
+    /// was looked up in our shares: `results` files matched (0 for none).
+    /// Searches not looked up (our own, a banned user's, too short, or shed
+    /// under load) are not reported.
+    Search {
+        username: String,
+        query: String,
+        distributed: bool,
+        results: usize,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -300,6 +321,12 @@ impl Inner {
 
     fn is_banned(&self, username: &str) -> bool {
         self.banned.read().contains(&username.to_lowercase())
+    }
+
+    /// Tell subscribers what someone did with our shares. Nobody listening
+    /// is fine: the event is dropped.
+    fn activity(&self, activity: Activity) {
+        let _ = self.events.send(Event::Activity(Arc::new(activity)));
     }
 
     fn set_status(&self, status: Status) {

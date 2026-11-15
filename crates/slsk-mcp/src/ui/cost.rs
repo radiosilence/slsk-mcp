@@ -173,6 +173,7 @@ async fn app(server: &TestServer, root: &Path) -> Arc<crate::App> {
     .unwrap();
     let jobs = crate::jobs::Jobs::new(db.clone(), session.clone(), &cfg, importer, library.clone());
     let social = crate::social::Social::new(db.clone(), session.clone(), jobs.clone());
+    let db_for_activity = db.clone();
     jobs.spawn();
     Arc::new(crate::App {
         cfg,
@@ -181,6 +182,7 @@ async fn app(server: &TestServer, root: &Path) -> Arc<crate::App> {
         jobs,
         social,
         library,
+        activity: crate::activity::Activity::new(db_for_activity),
     })
 }
 

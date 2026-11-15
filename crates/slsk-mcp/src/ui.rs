@@ -33,6 +33,7 @@ use crate::config::Config;
 use crate::folders::{Filter, Folder};
 use crate::graphql::{self, Job, Transfer};
 
+mod activity;
 mod admin;
 mod browse;
 mod chat;
@@ -83,6 +84,7 @@ pub fn router(app: Arc<App>) -> Router {
         // Drawn whole by `pages`; nothing fetches a fragment of them.
         .route("/", get(StatusCode::NOT_FOUND))
         .route("/uploads", get(StatusCode::NOT_FOUND))
+        .route("/activity", get(StatusCode::NOT_FOUND))
         .route("/jobs/{id}", get(StatusCode::NOT_FOUND))
         .route("/stream", get(stream))
         .route("/search", get(search::results))
@@ -430,6 +432,7 @@ const PAGES: &[(&str, &str, &str)] = &[
     ("search", "/search", "Search"),
     ("albums", "/", "Downloads"),
     ("uploads", "/uploads", "Uploads"),
+    ("activity", "/activity", "Activity"),
     ("wishlist", "/wishlist", "Wishlist"),
     ("library", "/library", "Library"),
     ("browse", "/browse", "Browse"),
@@ -666,6 +669,7 @@ async fn render_page(
         "search" => search::page(&s.app, search_tab.as_ref(), &query(uri)).await,
         "uploads" => uploads_html(&s.app, PAGE).await,
         "wishlist" => wishlist::page(&s.app).await,
+        "activity" => activity::page(&s.app).await,
         "library" => library::page(s, &filter),
         "browse" => browse::page(s, &query::<browse::BrowseQuery>(uri).username),
         "chat" => chat::page(&s.app, &query(uri)).await,
@@ -1705,6 +1709,7 @@ async fn stream(
         // Everything is drawn the first time.
         let (mut topics, mut moved, mut connection, mut minute) =
             ([true; crate::live::TOPICS], true, true, true);
+        let mut first = true;
         loop {
             let jobs = topics[Topic::Jobs as usize];
             let mut parts: [Option<String>; 5] = Default::default();
@@ -1783,6 +1788,14 @@ async fn stream(
                 "wishlist" if topics[Topic::Social as usize] || jobs || minute => {
                     parts[1] = Some(wishlist::html(&app).await);
                 }
+                "activity" => {
+                    if topics[Topic::Activity as usize] || minute {
+                        parts[1] = Some(activity::feed_html(&app));
+                    }
+                    if minute || first {
+                        parts[2] = Some(activity::trends_html(&app).await);
+                    }
+                }
                 "search" if topics[Topic::Search as usize] || minute => {
                     parts[1] = Some(search::tabs_html(&app, Uuid::parse_str(&shown.tab).ok()).await);
                 }
@@ -1805,7 +1818,7 @@ async fn stream(
             tokio::time::sleep(THROTTLE).await;
             let next_minute = tokio::time::Instant::now()
                 + Duration::from_secs(60 - (chrono::Utc::now().timestamp() % 60) as u64);
-            (moved, connection, minute) = (false, false, false);
+            (moved, connection, minute, first) = (false, false, false, false);
             tokio::select! {
                 r = changes.changed() => if r.is_err() { break },
                 r = transfers.changed() => match r {

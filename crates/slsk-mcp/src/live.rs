@@ -24,11 +24,13 @@ pub enum Topic {
     Search = 3,
     /// A run over the library (re-file, re-match, credits).
     Library = 4,
+    /// Other users browsing, searching or downloading from our shares.
+    Activity = 5,
 }
 
 /// Transfers, the search budget and the distributed network are not topics
 /// here: the engine has its own signal, [`slsk_engine::changes`].
-pub const TOPICS: usize = 5;
+pub const TOPICS: usize = 6;
 
 pub type Counts = [u64; TOPICS];
 
@@ -106,6 +108,7 @@ pub fn of_table(table: &str) -> Option<Topic> {
         "uploads" => Topic::Uploads,
         "messages" | "wishes" => Topic::Social,
         "search_tabs" => Topic::Search,
+        "share_events" => Topic::Activity,
         _ => return None,
     })
 }
