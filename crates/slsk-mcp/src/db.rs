@@ -58,6 +58,10 @@ pub(crate) const EVENTS_SINCE: &str = "SELECT job_id, title, at, version, outcom
 pub(crate) const JOB_EVENTS: &str = "SELECT job_id, title, at, version, outcome, cause, detail, peer FROM job_events \
          WHERE job_id = ?1 ORDER BY at, id";
 
+/// Each job's moves to another source, newest first.
+pub(crate) const LAST_MOVES: &str = "SELECT job_id, cause, peer FROM job_events \
+         WHERE job_id IN (SELECT unhex(value) FROM json_each(?1)) AND outcome = 'fallback' ORDER BY job_id, at DESC";
+
 /// One file's state, before it changes.
 pub(crate) const FILE_STATE: &str =
     "SELECT state, size FROM job_files WHERE job_id = ?1 AND peer = ?2 AND remote = ?3";
@@ -132,7 +136,7 @@ impl Db {
         let path = path.to_path_buf();
         let db = tokio::task::spawn_blocking(move || -> anyhow::Result<Self> {
             let mut conn = Connection::open(&path)?;
-            configure(&conn)?;
+            configure(&mut conn)?;
             conn.pragma_update(None, "journal_mode", "WAL")?;
             migrate(&mut conn)?;
             optimize(&conn);
@@ -164,12 +168,13 @@ impl Db {
             let mut conn = match pool.idle.lock().pop() {
                 Some(c) => c,
                 None => {
-                    let c = Connection::open(&pool.path)?;
-                    configure(&c)?;
+                    let mut c = Connection::open(&pool.path)?;
+                    configure(&mut c)?;
                     c
                 }
             };
             let out = f(&mut conn);
+            crate::live::announce();
             let mut idle = pool.idle.lock();
             if idle.len() < KEEP_IDLE {
                 idle.push(conn);
@@ -198,8 +203,16 @@ impl Db {
 
 /// Settings every connection needs; WAL is a property of the file and is set
 /// once, at open.
-fn configure(conn: &Connection) -> Result<()> {
+fn configure(conn: &mut Connection) -> Result<()> {
     conn.busy_timeout(Duration::from_secs(5))?;
+    // Every write tells the live pages, whichever code made it, once the
+    // call that made it has finished (`Db::run`). A write rolled back still
+    // wakes them; they redraw, find nothing changed and send nothing.
+    conn.update_hook(Some(|_, _: &str, table: &str, _| {
+        if let Some(topic) = crate::live::of_table(table) {
+            crate::live::note(topic);
+        }
+    }))?;
     conn.execute_batch(
         "PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON; PRAGMA temp_store = MEMORY;",
     )
@@ -492,6 +505,7 @@ impl JobFile {
 }
 
 fn insert_files(c: &Connection, files: &[JobFile]) -> Result<()> {
+    crate::live::note(crate::live::Topic::Jobs);
     let mut s = c.prepare_cached(
         "INSERT INTO job_files (job_id, peer, remote, size, subdir) VALUES (?1, ?2, ?3, ?4, ?5)",
     )?;
@@ -543,6 +557,7 @@ pub async fn replace_files(
         if !moved {
             return Ok(false);
         }
+        crate::live::note(crate::live::Topic::Jobs);
         tx.execute("DELETE FROM job_files WHERE job_id = ?1", params![job])?;
         insert_files(&tx, &files)?;
         tx.commit()?;
@@ -731,6 +746,7 @@ pub async fn set_file_state(
     // completed. The transaction holds the write lock from its start, so
     // nothing changes the row between reading and updating it.
     db.run(move |c| {
+        crate::live::note(crate::live::Topic::Jobs);
         let tx = c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let prev: Option<(String, i64)> = tx
             .prepare_cached(FILE_STATE)?
@@ -776,6 +792,7 @@ pub async fn set_file_skipped(
 ) -> Result<()> {
     let (peer, remote) = (peer.to_string(), remote.to_vec());
     db.run(move |c| {
+        crate::live::note(crate::live::Topic::Jobs);
         c.execute(
             "UPDATE job_files SET state = ?4, error = NULL WHERE job_id = ?1 AND peer = ?2 AND remote = ?3",
             params![id, peer, remote, if skipped { "skipped" } else { "queued" }],
@@ -1224,6 +1241,29 @@ pub async fn claim_import(
     .await
 }
 
+/// For each of `ids` that has moved to another source, why it last did and
+/// the peer it left.
+pub async fn last_moves(
+    db: &Db,
+    ids: &[Uuid],
+) -> Result<std::collections::HashMap<Uuid, (Option<String>, Option<String>)>> {
+    if ids.is_empty() {
+        return Ok(Default::default());
+    }
+    let ids = id_list(ids);
+    db.run(move |c| {
+        let mut out = std::collections::HashMap::new();
+        let mut stmt = c.prepare_cached(LAST_MOVES)?;
+        let rows = stmt.query_map([ids], |r| Ok((r.get::<_, Uuid>(0)?, r.get(1)?, r.get(2)?)))?;
+        for row in rows {
+            let (id, cause, peer) = row?;
+            out.entry(id).or_insert((cause, peer));
+        }
+        Ok(out)
+    })
+    .await
+}
+
 /// Put an `importing` job's import off until a metadata service is back:
 /// `waiting`, with `error` saying why. Refused, and `None`, once it has been
 /// put off `limit` times or when the job has moved on; otherwise the number
@@ -1492,6 +1532,7 @@ mod tests {
             FILE_STATE,
             EVENTS_SINCE,
             JOB_EVENTS,
+            LAST_MOVES,
             STALLED_PEERS,
             RECENT_UPLOADS,
             UPLOAD_TOTALS,

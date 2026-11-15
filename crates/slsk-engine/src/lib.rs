@@ -178,6 +178,23 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Bumped whenever something changes that a person watching would see: the
+/// login status, a transfer's state, queue place or measured rate (once a
+/// second while it moves), a search spending the budget, or the distributed
+/// network's parent or children. Shared by every engine in the process.
+static CHANGES: std::sync::LazyLock<watch::Sender<u64>> =
+    std::sync::LazyLock::new(|| watch::channel(0).0);
+
+pub(crate) fn changed() {
+    CHANGES.send_modify(|n| *n = n.wrapping_add(1));
+}
+
+/// Wakes on every change [`CHANGES`] counts, for a caller showing them as
+/// they happen without polling.
+pub fn changes() -> watch::Receiver<u64> {
+    CHANGES.subscribe()
+}
+
 type Key = (String, Bytes);
 
 pub(crate) struct Inner {
@@ -291,6 +308,7 @@ impl Inner {
             Ordering::Relaxed,
         );
         self.status.send_replace(status.clone());
+        changed();
         let _ = self.events.send(Event::Status(status));
     }
 }
@@ -550,6 +568,7 @@ impl Engine {
             recent.push_back(at);
             at
         };
+        changed();
         tokio::time::sleep_until(at).await;
         Ok(())
     }
@@ -674,6 +693,24 @@ impl Engine {
 
     pub fn uploads(&self) -> Vec<TransferView> {
         self.0.uploads.views()
+    }
+
+    /// Searches counted against the last hour, the hourly budget (0 for
+    /// none), and when the oldest of them leaves the hour, freeing a search
+    /// once the budget is spent.
+    pub fn search_budget(&self) -> (usize, usize, Option<std::time::SystemTime>) {
+        let (_, recent) = &*self.0.next_search.lock();
+        let now = tokio::time::Instant::now();
+        let hour = Duration::from_secs(3600);
+        let used = recent
+            .iter()
+            .filter(|t| now.duration_since(**t) < hour)
+            .count();
+        let frees = recent
+            .iter()
+            .find(|t| now.duration_since(**t) < hour)
+            .map(|t| std::time::SystemTime::now() + (hour - now.duration_since(*t)));
+        (used, self.0.cfg.searches_per_hour, frees)
     }
 
     /// Upload and download speeds in bytes per second, summed: what
