@@ -1655,6 +1655,8 @@ impl Default for Shown {
 /// gathered into the next one; bars and countdowns move in the browser in
 /// between, from the measurement and time each patch carries.
 const THROTTLE: Duration = Duration::from_millis(250);
+/// Least time between two sends of one job card for its progress alone.
+const CARD_EVERY: Duration = Duration::from_secs(1);
 /// How long a stream lives before the page opens another.
 const LIFETIME: Duration = Duration::from_secs(60);
 
@@ -1694,7 +1696,11 @@ async fn stream(
         let mut history_sent: Option<Option<String>> = None;
         // The jobs list as last sent: its shape, and each card.
         let mut shape_sent = String::new();
-        let mut cards_sent: std::collections::HashMap<String, String> = Default::default();
+        // Each card as last sent, and when.
+        let mut cards_sent: std::collections::HashMap<String, (String, tokio::time::Instant)> =
+            Default::default();
+        // A card held back by `CARD_EVERY`, due to be looked at again.
+        let mut recheck: Option<tokio::time::Instant> = None;
         let mut seen = *changes.borrow_and_update();
         // Everything is drawn the first time.
         let (mut topics, mut moved, mut connection, mut minute) =
@@ -1724,16 +1730,31 @@ async fn stream(
                     }
                     if jobs || moved || minute {
                         let drawn = live_jobs(&app, &shown, any_settled).await;
+                        let now = tokio::time::Instant::now();
+                        recheck = None;
                         if drawn.shape != shape_sent {
                             parts[1] = Some(drawn.html);
                             shape_sent = drawn.shape;
-                            cards_sent = drawn.cards.into_iter().collect();
+                            cards_sent = drawn.cards.into_iter().map(|(id, h)| (id, (h, now))).collect();
                         } else {
                             for (id, html) in drawn.cards {
-                                if cards_sent.get(&id) != Some(&html) {
-                                    yield Ok(patch(&html));
-                                    cards_sent.insert(id, html);
+                                let last = cards_sent.get(&id);
+                                if last.is_some_and(|(h, _)| *h == html) {
+                                    continue;
                                 }
+                                // Progress alone is sent once a second per
+                                // card; the browser draws it in between. A
+                                // change in the job itself goes at once.
+                                if !jobs
+                                    && let Some((_, at)) = last
+                                    && now < *at + CARD_EVERY
+                                {
+                                    let due = *at + CARD_EVERY;
+                                    recheck = Some(recheck.map_or(due, |r| r.min(due)));
+                                    continue;
+                                }
+                                yield Ok(patch(&html));
+                                cards_sent.insert(id, (html, now));
                             }
                         }
                     }
@@ -1799,6 +1820,12 @@ async fn stream(
                 } => connection = true,
                 () = tokio::time::sleep_until(next_minute) => minute = true,
                 () = tokio::time::sleep_until(ends) => break,
+                () = async {
+                    match recheck {
+                        Some(at) => tokio::time::sleep_until(at).await,
+                        None => std::future::pending().await,
+                    }
+                } => moved = true,
             }
             // Whatever else came in meanwhile is drawn in the same pass.
             let now = *changes.borrow_and_update();
