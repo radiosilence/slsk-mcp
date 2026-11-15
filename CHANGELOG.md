@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.14.0
+
+### Security
+
+- **rmcp 3.10.0.** Fixes RUSTSEC-2026-0462, unbounded buffering of response bodies in rmcp's Streamable HTTP clients. slsk-mcp serves MCP and does not use those clients, so it was not exposed, but the audit flags any vulnerable version in the lockfile. The manifest now requires 3.10, so an older one cannot be resolved again.
+
+### Changed
+
+- **Imports put off by a MusicBrainz outage come back sooner, and purchases stop waiting on it.** A put-off import tries again after 30 seconds, a minute, two minutes, then every five, each with jitter, instead of every five minutes from the start; the job shows when. A job from `importUrl` still waiting on MusicBrainz at its third try is filed by its own tags, as `importAsIs` would, when they describe one album and carry a date; its import log and event say so. Soulseek grabs keep waiting. A waiting job can now be filed with `importAsIs` or `resolveJob` without waiting the outage out.
+- **MusicBrainz outages and shed searches stall imports for seconds, not minutes.** sift 0.11.0 stops retrying a refusing MusicBrainz after 45 seconds and then fails requests without sending them until the requested wait is over, so imports queued behind an outage are put off at once instead of each retrying for about six minutes. A search shed by MusicBrainz under load (`x-ratelimit-zone: search`, `Retry-After: 0`) is retried after a few seconds without slowing the client, and lookups by MusicBrainz id carry on while searches rest.
+
 ## 0.13.6
 
 ### Fixed
