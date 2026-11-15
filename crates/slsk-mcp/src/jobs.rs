@@ -85,9 +85,11 @@ const RETRY_ROUNDS: u32 = 2;
 /// How long an import waits for MusicBrainz or Discogs to come back after
 /// each put-off in a row, the last repeating, and how many times before the
 /// job fails for a person to retry. Most refusals pass within a minute, so
-/// the first tries come soon; sift has already retried for up to 30 seconds
-/// and rests through any `Retry-After`, so an early try costs MusicBrainz at
-/// most one request.
+/// the first tries come soon. Each try goes through sift's one shared
+/// MusicBrainz gate, at most a request a second; from sift 0.11 a refused
+/// request gives up within 45 seconds and the client then rests through any
+/// `Retry-After` without asking, so an early try during an outage costs
+/// MusicBrainz a request or none.
 const DEFER: [Duration; 4] = [
     Duration::from_secs(30),
     Duration::from_secs(60),
@@ -96,7 +98,7 @@ const DEFER: [Duration; 4] = [
 ];
 const DEFER_TRIES: u32 = 24;
 /// Put-offs after which a purchase is filed by its own tags if MusicBrainz
-/// is still unavailable. See [`Jobs::file`].
+/// is unavailable again. See [`Jobs::file`].
 const AS_IS_AFTER: u32 = 2;
 
 /// How long a job put off `tries` times in a row waits before the next try:
@@ -107,16 +109,6 @@ fn defer_wait(id: Uuid, tries: u32) -> Duration {
     let spread =
         ((id.as_u128() as u64) ^ u64::from(tries)).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 54;
     base.mul_f64(0.8 + spread as f64 / 1024.0 * 0.4)
-}
-
-/// `wait` as a person would say it.
-fn in_words(wait: Duration) -> String {
-    let secs = wait.as_secs();
-    if secs < 90 {
-        format!("{secs} seconds")
-    } else {
-        format!("{} minutes", (secs + 30) / 60)
-    }
 }
 
 /// How long a download may go without a single byte before another source
@@ -734,12 +726,7 @@ impl Jobs {
     /// Import again the jobs that have waited long enough on a metadata
     /// service.
     async fn import_due(self: &Arc<Self>) -> Result<()> {
-        let now = chrono::Utc::now();
-        for job in db::waiting(&self.db).await? {
-            let wait = defer_wait(job.id, job.defer_tries);
-            if job.updated_at + wait > now {
-                continue;
-            }
+        for job in db::due_waiting(&self.db).await? {
             let how = job.import_how.unwrap_or(How::Match(None));
             if db::claim_import(&self.db, job.id, &["waiting"], &how).await? {
                 self.import_in_background(job.id, how);
@@ -1226,9 +1213,13 @@ impl Jobs {
             How::AsIs(edits) => self.tagger.import_as_is(&dir, edits).await,
         };
         // A purchase comes with tags its seller wrote, which are good, and
-        // nothing else will tell more about it; once MusicBrainz has stayed
-        // away through a few tries it is filed by them rather than kept
-        // waiting. Not a Soulseek copy, whose tags are anyone's.
+        // nothing else will tell more about it; once a metadata service has
+        // put it off a few times and MusicBrainz is unavailable again, it is
+        // filed by them rather than kept waiting. Only tags that describe
+        // one album and carry a date: as-is asks MusicBrainz for a missing
+        // year, which it would not answer now. Not a Soulseek copy, whose
+        // tags are anyone's. Should filing by the tags fail, the job waits
+        // for MusicBrainz as it would have.
         let mut as_is_because = None;
         if let Err(e) = &outcome
             && e.is_transient()
@@ -1238,18 +1229,39 @@ impl Jobs {
             && !job.replaces
             && job.defer_tries >= AS_IS_AFTER
         {
+            let dated = self
+                .tagger
+                .tracks(&dir)
+                .await
+                .is_ok_and(|t| !t.is_empty() && t.iter().all(|t| t.date.is_some()));
             match self.tagger.check_as_is(&dir).await {
-                Ok(()) => {
+                Ok(()) if dated => {
                     let why = format!(
-                        "filed by its own tags: MusicBrainz was unavailable through {} tries ({e:#})",
-                        job.defer_tries + 1
+                        "filed by its own tags: put off {} times and MusicBrainz still unavailable ({e:#})",
+                        job.defer_tries
                     );
                     tracing::info!(%id, "{why}");
-                    as_is_because = Some(why);
-                    outcome = self
+                    match self
                         .tagger
                         .import_as_is(&dir, &sift::Edits::default())
-                        .await;
+                        .await
+                    {
+                        Ok(filed) => {
+                            db::set_import_how(&self.db, id, &How::AsIs(sift::Edits::default()))
+                                .await?;
+                            as_is_because = Some(why);
+                            outcome = Ok(filed);
+                        }
+                        Err(sift::ImportError::Exists(existing)) => {
+                            outcome = Err(sift::ImportError::Exists(existing));
+                        }
+                        Err(as_is) => {
+                            tracing::warn!(%id, error = %as_is, "could not file by its own tags; waiting for MusicBrainz")
+                        }
+                    }
+                }
+                Ok(()) => {
+                    tracing::info!(%id, "MusicBrainz unavailable and the tags carry no date; waiting")
                 }
                 Err(blocker) => {
                     tracing::info!(%id, error = %blocker, "MusicBrainz unavailable and the tags do not describe one album; waiting")
@@ -1337,8 +1349,11 @@ impl Jobs {
                     _ => ("MusicBrainz", cause::MB_UNAVAILABLE),
                 };
                 let wait = defer_wait(id, job.defer_tries + 1);
-                let waiting = format!("{e:#}; trying again in {}", in_words(wait));
-                if db::defer_import(&self.db, id, &waiting, DEFER_TRIES)
+                let waiting = format!(
+                    "{e:#}; put off {} of {DEFER_TRIES} times",
+                    job.defer_tries + 1
+                );
+                if db::defer_import(&self.db, id, &waiting, DEFER_TRIES, wait)
                     .await?
                     .is_some()
                 {
@@ -1498,13 +1513,18 @@ impl Jobs {
     /// Take a job waiting on a decision into `importing`, or say why not. A
     /// second request for the same job (a double tap, an assistant beside a
     /// person) is refused here rather than queued behind the first.
+    ///
+    /// A job waiting on a metadata service can be taken too, so a person
+    /// need not wait out an outage to file it by its tags or name its
+    /// release.
     async fn claim(&self, id: Uuid, how: &How) -> Result<()> {
-        if db::claim_import(&self.db, id, db::DECIDED, how).await? {
+        let from = [db::DECIDED, &["waiting"]].concat();
+        if db::claim_import(&self.db, id, &from, how).await? {
             return Ok(());
         }
         let job = db::job(&self.db, id).await?.context("no such job")?;
         bail!(
-            "job is {}; only review, suspect and failed jobs import",
+            "job is {}; only review, suspect, failed and waiting jobs import",
             job.status
         )
     }
@@ -2173,8 +2193,6 @@ mod tests {
         let spread: std::collections::HashSet<_> =
             (0..20).map(|_| defer_wait(Uuid::new_v4(), 1)).collect();
         assert!(spread.len() > 10, "jobs put off together return apart");
-        assert_eq!(in_words(Duration::from_secs(31)), "31 seconds");
-        assert_eq!(in_words(Duration::from_secs(290)), "5 minutes");
     }
 
     #[test]
