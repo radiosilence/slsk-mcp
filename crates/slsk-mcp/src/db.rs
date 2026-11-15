@@ -1662,7 +1662,7 @@ mod tests {
         );
         // Due once its wait has passed, which here is at once.
         assert_eq!(due_waiting(&db).await.unwrap().len(), 1);
-        let later = job("b", "importing");
+        let later = super::tests::job("b", "importing");
         insert_job(&db, &later, &[]).await.unwrap();
         let wait = std::time::Duration::from_secs(300);
         defer_import(&db, later.id, "down", 2, wait).await.unwrap();

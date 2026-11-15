@@ -231,6 +231,7 @@ fn view_of(app: &App, job: db::Job, rows: Vec<db::JobFile>, with_files: bool) ->
         Source::Files { username } => (Some(username.clone()), None, None),
         Source::Url { url } => (None, None, Some(crate::jobs::host(url))),
     };
+    let retry_at = job.retry_at.filter(|_| job.status == "waiting");
     Job {
         id: ID(job.id.to_string()),
         title: job.title,
@@ -252,7 +253,7 @@ fn view_of(app: &App, job: db::Job, rows: Vec<db::JobFile>, with_files: bool) ->
         analysis: job.analysis.map(|a| a.0).unwrap_or_default(),
         import_log: job.import_log,
         as_is_blocker: job.as_is_blocker,
-        retry_at: job.retry_at.filter(|_| job.status == "waiting"),
+        retry_at,
         created_at: job.created_at,
         updated_at: job.updated_at,
     }
