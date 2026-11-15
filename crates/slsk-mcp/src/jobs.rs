@@ -74,6 +74,24 @@ pub enum How {
     AsIs(sift::Edits),
 }
 
+/// What an import is doing now, as it reported it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Stage {
+    /// "searching MusicBrainz", "checking the audio", …
+    pub label: String,
+    pub since: chrono::DateTime<chrono::Utc>,
+    /// The end of a wait, when the stage is one.
+    pub until: Option<chrono::DateTime<chrono::Utc>>,
+    /// Bytes of the work done and in all, when it is counted.
+    pub progress: Option<(u64, u64)>,
+    /// MusicBrainz's request count when the import began, so the requests
+    /// it has made are the count now less this.
+    mb_base: u64,
+    /// The stage a wait interrupted and when it began, restored when the
+    /// importer reports it again.
+    before_wait: Option<(String, chrono::DateTime<chrono::Utc>)>,
+}
+
 /// The states a job leaves its source from: downloading, or waiting on a
 /// decision. A job cancelled, removed or imported meanwhile stays as it is.
 const LEAVING: &[&str] = &["downloading", "review", "suspect", "failed"];
@@ -177,6 +195,9 @@ pub struct Jobs {
     /// their folders last for a day, since cancelling our queue with them
     /// makes them look idle again.
     stalled_peers: parking_lot::Mutex<HashMap<String, tokio::time::Instant>>,
+    /// What each import is doing now. Kept in memory: it is only true
+    /// while this process is the one doing it.
+    stages: parking_lot::Mutex<HashMap<Uuid, Stage>>,
     /// Fetches from URLs in progress, to follow and to stop.
     fetches: parking_lot::Mutex<HashMap<Uuid, (tokio::task::AbortHandle, Arc<Fetched>)>>,
     http: reqwest::Client,
@@ -213,6 +234,7 @@ impl Jobs {
             places: Default::default(),
             started: tokio::time::Instant::now(),
             stalled_peers: Default::default(),
+            stages: Default::default(),
             fetches: Default::default(),
             http: web_client()
                 .read_timeout(URL_IDLE)
@@ -688,6 +710,91 @@ impl Jobs {
     }
 
     /// The job's place in its peer's upload queue, while it is waiting in one.
+    /// What the import of `id` is doing now, and the MusicBrainz requests
+    /// it has made and the budget the service last reported.
+    pub fn stage(&self, id: Uuid) -> Option<(Stage, u64, Option<(u64, u64)>)> {
+        let stage = self.stages.lock().get(&id).cloned()?;
+        let mb = self.tagger.musicbrainz_stats();
+        let made = mb.requests.saturating_sub(stage.mb_base);
+        Some((stage, made, mb.budget))
+    }
+
+    fn set_stage(
+        &self,
+        id: Uuid,
+        label: String,
+        until: Option<chrono::DateTime<chrono::Utc>>,
+        progress: Option<(u64, u64)>,
+    ) {
+        let now = chrono::Utc::now();
+        let mut stages = self.stages.lock();
+        let base = || self.tagger.musicbrainz_stats().requests;
+        let stage = stages.entry(id).or_insert_with(|| Stage {
+            label: String::new(),
+            since: now,
+            until: None,
+            progress: None,
+            mb_base: base(),
+            before_wait: None,
+        });
+        if stage.label == label && stage.until == until && stage.progress == progress {
+            return;
+        }
+        let since = match (&until, stage.before_wait.take()) {
+            // Back from a wait to the stage it interrupted: its own clock.
+            (None, Some((was, since))) if was == label => since,
+            (None, _) if stage.label == label => stage.since,
+            (Some(_), _) => {
+                if stage.until.is_none() {
+                    stage.before_wait = Some((stage.label.clone(), stage.since));
+                } else {
+                    stage.before_wait = stage.before_wait.clone();
+                }
+                now
+            }
+            (None, _) => now,
+        };
+        stage.label = label;
+        stage.since = since;
+        stage.until = until;
+        stage.progress = progress;
+        drop(stages);
+        crate::live::changed(crate::live::Topic::Jobs);
+    }
+
+    fn on_stage(&self, id: Uuid, stage: &sift::progress::Stage) {
+        use sift::progress::Stage as S;
+        match stage {
+            S::WaitingOnMusicBrainz { why, retry_in } => self.set_stage(
+                id,
+                format!("waiting on MusicBrainz ({why})"),
+                Some(chrono::Utc::now() + *retry_in),
+                None,
+            ),
+            other => self.set_stage(id, other.to_string(), None, None),
+        }
+    }
+
+    fn clear_stage(&self, id: Uuid) {
+        if self.stages.lock().remove(&id).is_some() {
+            crate::live::changed(crate::live::Topic::Jobs);
+        }
+    }
+
+    /// Run `fut`, an import of `id`, with each stage it reaches recorded.
+    async fn staged<T>(self: &Arc<Self>, id: Uuid, fut: impl Future<Output = T>) -> T {
+        let jobs = Arc::downgrade(self);
+        sift::progress::scope(
+            move |s: &sift::progress::Stage| {
+                if let Some(jobs) = jobs.upgrade() {
+                    jobs.on_stage(id, s);
+                }
+            },
+            fut,
+        )
+        .await
+    }
+
     pub fn place(&self, id: Uuid) -> Option<u32> {
         self.places.lock().get(&id).copied()
     }
@@ -1140,6 +1247,20 @@ impl Jobs {
         // A file that does not decode never goes in, whoever approved it: it
         // plays as noise, and no judgement about the release changes that.
         let tracks = self.analyse(id, &dir).await;
+        let filed = self.import_stages(id, job, dir, tracks, how).await;
+        self.clear_stage(id);
+        filed
+    }
+
+    /// [`Self::file`] from the spectral check on, its stages recorded.
+    async fn import_stages(
+        self: &Arc<Self>,
+        id: Uuid,
+        job: Job,
+        dir: std::path::PathBuf,
+        tracks: Vec<crate::analysis::TrackAnalysis>,
+        how: How,
+    ) -> Result<()> {
         db::set_analysis(&self.db, id, &tracks).await?;
         let damaged: Vec<_> = tracks.iter().filter(|t| t.damaged()).collect();
         if !damaged.is_empty() {
@@ -1203,15 +1324,19 @@ impl Jobs {
             }
         }
         tracing::info!(%id, title = %job.title, dir = %dir.display(), "import started");
-        let mut outcome = match &how {
-            How::Match(release) if job.replaces => {
-                self.tagger
-                    .import_replacing(&dir, release.as_deref(), self.library.bin())
-                    .await
-            }
-            How::Match(release) => self.tagger.import(&dir, release.as_deref()).await,
-            How::AsIs(edits) => self.tagger.import_as_is(&dir, edits).await,
-        };
+        let mut outcome = self
+            .staged(id, async {
+                match &how {
+                    How::Match(release) if job.replaces => {
+                        self.tagger
+                            .import_replacing(&dir, release.as_deref(), self.library.bin())
+                            .await
+                    }
+                    How::Match(release) => self.tagger.import(&dir, release.as_deref()).await,
+                    How::AsIs(edits) => self.tagger.import_as_is(&dir, edits).await,
+                }
+            })
+            .await;
         // A purchase comes with tags its seller wrote, which are good, and
         // nothing else will tell more about it; once a metadata service has
         // put it off a few times and MusicBrainz is unavailable again, it is
@@ -1242,8 +1367,7 @@ impl Jobs {
                     );
                     tracing::info!(%id, "{why}");
                     match self
-                        .tagger
-                        .import_as_is(&dir, &sift::Edits::default())
+                        .staged(id, self.tagger.import_as_is(&dir, &sift::Edits::default()))
                         .await
                     {
                         Ok(filed) => {
@@ -1468,6 +1592,16 @@ impl Jobs {
         }
         files.sort();
         let out_dir = self.spectrograms.join(id.to_string());
+        let sizes: Vec<u64> = {
+            let mut sizes = Vec::with_capacity(files.len());
+            for f in &files {
+                sizes.push(tokio::fs::metadata(f).await.map_or(0, |m| m.len()));
+            }
+            sizes
+        };
+        let total: u64 = sizes.iter().sum();
+        let mut done = 0;
+        self.set_stage(id, "checking the audio".into(), None, Some((0, total)));
         let limit = Arc::new(tokio::sync::Semaphore::new(3));
         let tasks: Vec<_> = files
             .into_iter()
@@ -1502,10 +1636,12 @@ impl Jobs {
             })
             .collect();
         let mut tracks = Vec::new();
-        for t in tasks {
+        for (t, size) in tasks.into_iter().zip(sizes) {
             if let Ok(Some(a)) = t.await {
                 tracks.push(a);
             }
+            done += size;
+            self.set_stage(id, "checking the audio".into(), None, Some((done, total)));
         }
         tracks
     }

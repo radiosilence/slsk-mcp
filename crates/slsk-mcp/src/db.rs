@@ -58,6 +58,10 @@ pub(crate) const EVENTS_SINCE: &str = "SELECT job_id, title, at, version, outcom
 pub(crate) const JOB_EVENTS: &str = "SELECT job_id, title, at, version, outcome, cause, detail, peer FROM job_events \
          WHERE job_id = ?1 ORDER BY at, id";
 
+/// Each job's moves to another source, newest first.
+pub(crate) const LAST_MOVES: &str = "SELECT job_id, cause, peer FROM job_events \
+         WHERE job_id IN (SELECT value FROM json_each(?1)) AND outcome = 'fallback' ORDER BY job_id, at DESC";
+
 /// One file's state, before it changes.
 pub(crate) const FILE_STATE: &str =
     "SELECT state, size FROM job_files WHERE job_id = ?1 AND peer = ?2 AND remote = ?3";
@@ -132,7 +136,7 @@ impl Db {
         let path = path.to_path_buf();
         let db = tokio::task::spawn_blocking(move || -> anyhow::Result<Self> {
             let mut conn = Connection::open(&path)?;
-            configure(&conn)?;
+            configure(&mut conn)?;
             conn.pragma_update(None, "journal_mode", "WAL")?;
             migrate(&mut conn)?;
             optimize(&conn);
@@ -164,8 +168,8 @@ impl Db {
             let mut conn = match pool.idle.lock().pop() {
                 Some(c) => c,
                 None => {
-                    let c = Connection::open(&pool.path)?;
-                    configure(&c)?;
+                    let mut c = Connection::open(&pool.path)?;
+                    configure(&mut c)?;
                     c
                 }
             };
@@ -198,8 +202,16 @@ impl Db {
 
 /// Settings every connection needs; WAL is a property of the file and is set
 /// once, at open.
-fn configure(conn: &Connection) -> Result<()> {
+fn configure(conn: &mut Connection) -> Result<()> {
     conn.busy_timeout(Duration::from_secs(5))?;
+    // Every write tells the live pages, whichever code made it. A write
+    // rolled back still wakes them; they redraw, find nothing changed and
+    // send nothing.
+    conn.update_hook(Some(|_, _: &str, table: &str, _| {
+        if let Some(topic) = crate::live::of_table(table) {
+            crate::live::changed(topic);
+        }
+    }))?;
     conn.execute_batch(
         "PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON; PRAGMA temp_store = MEMORY;",
     )
@@ -1224,6 +1236,29 @@ pub async fn claim_import(
     .await
 }
 
+/// For each of `ids` that has moved to another source, why it last did and
+/// the peer it left.
+pub async fn last_moves(
+    db: &Db,
+    ids: &[Uuid],
+) -> Result<std::collections::HashMap<Uuid, (Option<String>, Option<String>)>> {
+    if ids.is_empty() {
+        return Ok(Default::default());
+    }
+    let ids = id_list(ids);
+    db.run(move |c| {
+        let mut out = std::collections::HashMap::new();
+        let mut stmt = c.prepare_cached(LAST_MOVES)?;
+        let rows = stmt.query_map([ids], |r| Ok((r.get::<_, Uuid>(0)?, r.get(1)?, r.get(2)?)))?;
+        for row in rows {
+            let (id, cause, peer) = row?;
+            out.entry(id).or_insert((cause, peer));
+        }
+        Ok(out)
+    })
+    .await
+}
+
 /// Put an `importing` job's import off until a metadata service is back:
 /// `waiting`, with `error` saying why. Refused, and `None`, once it has been
 /// put off `limit` times or when the job has moved on; otherwise the number
@@ -1492,6 +1527,7 @@ mod tests {
             FILE_STATE,
             EVENTS_SINCE,
             JOB_EVENTS,
+            LAST_MOVES,
             STALLED_PEERS,
             RECENT_UPLOADS,
             UPLOAD_TOTALS,

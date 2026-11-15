@@ -96,6 +96,7 @@ pub(crate) fn reset(inner: &Inner, announce: bool) {
     inner.dist.candidates.clear();
     inner.dist.children.clear();
     inner.metrics.children.store(0, Ordering::Relaxed);
+    crate::changed();
     inner.dist.level.store(0, Ordering::Relaxed);
     *inner.dist.root.lock() = own.clone();
     // After the parent is taken: its task, woken by this, must not find
@@ -232,6 +233,7 @@ async fn run_parent(
                         break;
                     }
                     tracing::info!(parent = %username, level = ?position.0, "adopted distributed parent");
+                    crate::changed();
                     inner.dist.candidates.clear();
                     let _ = inner.send_server(ToServer::HaveNoParent { no_parent: false });
                     adopt_position(&inner, position.0.unwrap_or(0), position.1.clone());
@@ -257,6 +259,7 @@ async fn run_parent(
     };
     if lost {
         tracing::info!(parent = %username, "lost distributed parent");
+        crate::changed();
         reset(&inner, true);
     }
 }
@@ -310,10 +313,10 @@ fn forward(inner: &Inner, raw: &Bytes) {
         .metrics
         .distributed_forwarded
         .fetch_add(sent as u64, Ordering::Relaxed);
-    inner
-        .metrics
-        .children
-        .store(inner.dist.children.len() as u64, Ordering::Relaxed);
+    let children = inner.dist.children.len() as u64;
+    if inner.metrics.children.swap(children, Ordering::Relaxed) != children {
+        crate::changed();
+    }
 }
 
 /// A peer wants us as its parent.
@@ -340,10 +343,10 @@ pub(crate) fn on_child(
         .dist
         .children
         .insert(username.clone(), Child { id, tx });
-    inner
-        .metrics
-        .children
-        .store(inner.dist.children.len() as u64, Ordering::Relaxed);
+    let children = inner.dist.children.len() as u64;
+    if inner.metrics.children.swap(children, Ordering::Relaxed) != children {
+        crate::changed();
+    }
     tokio::spawn(async move {
         let _inbound = inbound;
         // Children only send pings and obsolete depth reports. Reading keeps
@@ -368,9 +371,9 @@ pub(crate) fn on_child(
             _ = &mut written => {}
         }
         inner.dist.children.remove_if(&username, |_, c| c.id == id);
-        inner
-            .metrics
-            .children
-            .store(inner.dist.children.len() as u64, Ordering::Relaxed);
+        let children = inner.dist.children.len() as u64;
+        if inner.metrics.children.swap(children, Ordering::Relaxed) != children {
+            crate::changed();
+        }
     });
 }

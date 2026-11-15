@@ -348,6 +348,28 @@ server's answer, never a guess. Anything that changes the library or reaches
 other people (binning, re-filing, enriching, banning, sending a message) asks
 first; library changes show exactly what they will do before they do it.
 
+The live stream is driven by what changes, never by a timer: a database
+write to a table a page shows, a stage an import reaches, or the engine's
+signal for a transfer changing state, queue place or measured rate, a search
+spending the hourly budget, or the distributed network gaining or losing a
+parent or child. It redraws only the parts those touch, at most four times a
+second, and sends a part only when it differs from what was sent; on the
+Downloads page a card that changed is sent alone. Between patches the
+browser moves bars, transfer rates, times left and countdowns from the
+measurement each patch carries (bytes, total, rate, and when it was read),
+with one animation-frame loop that runs only while something moves and the
+tab is visible. It never draws past the total or more than two seconds past
+the last measurement, so a stalled peer shows as stalled. Countdowns (a
+put-off import's next try, a MusicBrainz wait, the next free search) are
+sent as deadlines.
+
+An import's card says what it is doing and for how long: checking the audio
+(with the bytes checked), searching MusicBrainz, comparing candidates, a wait
+on MusicBrainz with its reason, fingerprinting, Discogs, cover art, writing
+tags and moving into the library, with the MusicBrainz requests it has made
+and the budget the service last reported. GraphQL gives the same on `Job`
+(`stage`, `stageSince`, `stageUntil`, `musicbrainzRequests`).
+
 Each search opens a tab on the Search page, so a run of searches can be
 read one at a time without losing the earlier results. Tabs are kept in the
 database with the best 500 folders each search found, so they survive a

@@ -2121,7 +2121,7 @@ pub(super) struct RunSent {
 /// The run panel's changes since `sent`: the whole panel when a run
 /// starts or ends, and while it runs, its head and the albums done since.
 pub(super) fn run_events(s: &UiState, sent: &mut RunSent) -> Vec<axum::response::sse::Event> {
-    let run = s.run.lock();
+    let run = s.run.read();
     let stamp = (
         run.id,
         run.running,
@@ -2172,7 +2172,7 @@ pub(super) fn run_events(s: &UiState, sent: &mut RunSent) -> Vec<axum::response:
 }
 
 pub(super) fn run_html(s: &UiState) -> String {
-    let run = s.run.lock();
+    let run = s.run.read();
     RunView {
         run: &run,
         root: &s.app.library.root().to_string_lossy(),
@@ -2357,7 +2357,7 @@ fn edited(path: String) -> Outcome {
 
 async fn run(
     app: &crate::App,
-    state: &parking_lot::Mutex<LibraryRun>,
+    state: &crate::live::Watched<LibraryRun>,
     art: &ArtStash,
     action: Action,
     paths: &[String],

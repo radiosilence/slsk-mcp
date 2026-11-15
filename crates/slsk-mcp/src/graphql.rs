@@ -99,6 +99,10 @@ pub(crate) struct JobFile {
     pub path: String,
     pub size: u64,
     pub bytes: u64,
+    /// Bytes a second, measured over the last second, while it transfers.
+    pub bytes_per_sec: u64,
+    /// Its place in the peer's upload queue, while it waits there.
+    pub place: Option<u32>,
     pub state: String,
     pub error: Option<String>,
 }
@@ -146,6 +150,16 @@ pub(crate) struct Job {
     pub alternates: usize,
     pub total_bytes: u64,
     pub downloaded_bytes: u64,
+    /// Bytes a second across its files, as last measured.
+    pub bytes_per_sec: u64,
+    /// When `downloaded_bytes` and `bytes_per_sec` were read, for a client
+    /// drawing progress between reads.
+    pub measured_at: chrono::DateTime<chrono::Utc>,
+    /// Why it last moved to another source (peer_failed, stalled_peer,
+    /// corrupt_copy, requested, …) and the peer it left; null if it never
+    /// moved.
+    pub moved_because: Option<String>,
+    pub moved_from: Option<String>,
     /// For a downloading job: some of its music has arrived, so
     /// `finishDownload` would import it.
     pub finishable: bool,
@@ -163,32 +177,60 @@ pub(crate) struct Job {
     pub as_is_blocker: Option<String>,
     /// For a waiting job, when its import is tried again.
     pub retry_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// While importing, what the import is doing now: "checking the audio",
+    /// "searching MusicBrainz", "waiting on MusicBrainz (HTTP 503)",
+    /// "writing tags", "moving into the library" and so on.
+    pub stage: Option<String>,
+    /// When the current stage began, to tell a slow step from a stuck one.
+    pub stage_since: Option<chrono::DateTime<chrono::Utc>>,
+    /// When a wait the stage is ends.
+    pub stage_until: Option<chrono::DateTime<chrono::Utc>>,
+    /// Bytes of the stage's work done and in all, when it is counted (the
+    /// spectral check).
+    pub stage_done: Option<u64>,
+    pub stage_total: Option<u64>,
+    /// MusicBrainz requests made since this import began, retries included.
+    pub musicbrainz_requests: Option<u64>,
+    /// MusicBrainz's rate-limit budget, remaining and in all, as the service
+    /// last reported it.
+    pub musicbrainz_remaining: Option<u64>,
+    pub musicbrainz_limit: Option<u64>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
 pub(crate) async fn job_view(app: &App, job: db::Job, with_files: bool) -> Result<Job> {
     let rows = db::job_files(&app.db, job.id).await?;
-    Ok(view_of(app, job, rows, with_files))
+    let moved = db::last_moves(&app.db, &[job.id]).await?.remove(&job.id);
+    Ok(view_of(app, job, rows, moved, with_files))
 }
 
 /// Jobs for a list: one query for every job's files.
 pub(crate) async fn job_views(app: &App, jobs: Vec<db::Job>, with_files: bool) -> Result<Vec<Job>> {
     let ids: Vec<_> = jobs.iter().map(|j| j.id).collect();
     let mut files = db::files_of_jobs(&app.db, &ids).await?;
+    let mut moves = db::last_moves(&app.db, &ids).await?;
     Ok(jobs
         .into_iter()
         .map(|j| {
             let rows = files.remove(&j.id).unwrap_or_default();
-            view_of(app, j, rows, with_files)
+            let moved = moves.remove(&j.id);
+            view_of(app, j, rows, moved, with_files)
         })
         .collect())
 }
 
-fn view_of(app: &App, job: db::Job, rows: Vec<db::JobFile>, with_files: bool) -> Job {
+fn view_of(
+    app: &App,
+    job: db::Job,
+    rows: Vec<db::JobFile>,
+    moved: Option<(Option<String>, Option<String>)>,
+    with_files: bool,
+) -> Job {
     let engine = app.session.engine();
+    let measured_at = chrono::Utc::now();
     let mut files = Vec::with_capacity(rows.len());
-    let (mut total, mut done) = (0u64, 0u64);
+    let (mut total, mut done, mut rate) = (0u64, 0u64, 0u64);
     let music = rows.iter().any(|f| !app.jobs.optional(f));
     let mut finishable = false;
     for f in rows {
@@ -202,6 +244,7 @@ fn view_of(app: &App, job: db::Job, rows: Vec<db::JobFile>, with_files: bool) ->
         if f.state != "skipped" {
             total += f.size as u64;
             done += bytes;
+            rate += live.as_ref().map_or(0, |v| v.speed);
         }
         finishable |= job.status == "downloading"
             && !(music && app.jobs.optional(&f))
@@ -213,6 +256,8 @@ fn view_of(app: &App, job: db::Job, rows: Vec<db::JobFile>, with_files: bool) ->
                 name: name.rsplit('\\').next().unwrap_or(&name).to_string(),
                 size: f.size as u64,
                 bytes,
+                bytes_per_sec: live.as_ref().map_or(0, |v| v.speed),
+                place: live.as_ref().and_then(|v| v.place).filter(|p| *p > 0),
                 state: live
                     .as_ref()
                     .map_or(f.state.clone(), |v| v.state.to_string()),
@@ -232,6 +277,7 @@ fn view_of(app: &App, job: db::Job, rows: Vec<db::JobFile>, with_files: bool) ->
         Source::Url { url } => (None, None, Some(crate::jobs::host(url))),
     };
     let retry_at = job.retry_at.filter(|_| job.status == "waiting");
+    let stage = app.jobs.stage(job.id);
     Job {
         id: ID(job.id.to_string()),
         title: job.title,
@@ -243,6 +289,10 @@ fn view_of(app: &App, job: db::Job, rows: Vec<db::JobFile>, with_files: bool) ->
         alternates: job.alternates.0.len(),
         total_bytes: total,
         downloaded_bytes: done,
+        bytes_per_sec: rate,
+        measured_at,
+        moved_because: moved.as_ref().and_then(|m| m.0.clone()),
+        moved_from: moved.and_then(|m| m.1),
         finishable,
         files,
         candidates: job
@@ -254,6 +304,14 @@ fn view_of(app: &App, job: db::Job, rows: Vec<db::JobFile>, with_files: bool) ->
         import_log: job.import_log,
         as_is_blocker: job.as_is_blocker,
         retry_at,
+        stage_since: stage.as_ref().map(|(s, _, _)| s.since),
+        stage_until: stage.as_ref().and_then(|(s, _, _)| s.until),
+        stage_done: stage.as_ref().and_then(|(s, _, _)| s.progress.map(|p| p.0)),
+        stage_total: stage.as_ref().and_then(|(s, _, _)| s.progress.map(|p| p.1)),
+        musicbrainz_requests: stage.as_ref().map(|(_, n, _)| *n),
+        musicbrainz_remaining: stage.as_ref().and_then(|(_, _, b)| b.map(|b| b.0)),
+        musicbrainz_limit: stage.as_ref().and_then(|(_, _, b)| b.map(|b| b.1)),
+        stage: stage.map(|(s, _, _)| s.label),
         created_at: job.created_at,
         updated_at: job.updated_at,
     }

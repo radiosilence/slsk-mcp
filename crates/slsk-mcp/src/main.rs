@@ -13,6 +13,7 @@ mod folders;
 mod graphql;
 mod jobs;
 mod library;
+mod live;
 mod mcp;
 mod session;
 mod social;
