@@ -161,6 +161,8 @@ pub(crate) struct Job {
     /// For a job in review: why `importAsIs` would be refused, or empty when
     /// it would be accepted; null when not yet checked.
     pub as_is_blocker: Option<String>,
+    /// For a waiting job, when its import is tried again.
+    pub retry_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -229,6 +231,7 @@ fn view_of(app: &App, job: db::Job, rows: Vec<db::JobFile>, with_files: bool) ->
         Source::Files { username } => (Some(username.clone()), None, None),
         Source::Url { url } => (None, None, Some(crate::jobs::host(url))),
     };
+    let retry_at = job.retry_at.filter(|_| job.status == "waiting");
     Job {
         id: ID(job.id.to_string()),
         title: job.title,
@@ -250,6 +253,7 @@ fn view_of(app: &App, job: db::Job, rows: Vec<db::JobFile>, with_files: bool) ->
         analysis: job.analysis.map(|a| a.0).unwrap_or_default(),
         import_log: job.import_log,
         as_is_blocker: job.as_is_blocker,
+        retry_at,
         created_at: job.created_at,
         updated_at: job.updated_at,
     }
@@ -1943,8 +1947,9 @@ impl Mutation {
     }
 
     /// File a job in review by its files' own tags, without MusicBrainz: for
-    /// a release MusicBrainz does not have. Refused, and left in review with
-    /// the reason, unless the tags describe one album.
+    /// a release MusicBrainz does not have, or for a job waiting out a
+    /// MusicBrainz outage whose tags are good. Refused, and left in review
+    /// with the reason, unless the tags describe one album.
     async fn import_as_is(
         &self,
         ctx: &Context<'_>,

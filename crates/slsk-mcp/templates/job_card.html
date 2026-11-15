@@ -7,6 +7,7 @@
     {% match self.asked(j) %}{% when Some with (q) %}asked for “{{ q }}” · {% when None %}{% endmatch %}{% match j.username %}{% when Some with (u) %}from <a class="wrap-anywhere" href="{{ crate::ui::profile_href(u) }}">{{ u }}</a>{% when None %}{% match j.host %}{% when Some with (h) %}from {{ h }}{% when None %}{% endmatch %}{% endmatch %}
     {% if j.status == "downloading" %} · {{ self.progress(j) }}{% endif %}
     {% if j.status == "importing" %} · tagging and filing{% endif %}
+    {% match self.retry(j) %}{% when Some with (r) %} · {{ r }}{% when None %}{% endmatch %}
     {% if let Some(href) = self.filed(j) %} · <a href="{{ href }}">in the library</a>{% endif %}
   </div>
   {% if j.status == "downloading" %}<progress max="100" value="{{ self.pct(j) }}">{{ self.pct(j) }}%</progress>{% endif %}

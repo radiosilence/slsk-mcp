@@ -109,6 +109,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0006_waiting.sql"),
     include_str!("../migrations/0007_search_tabs.sql"),
     include_str!("../migrations/0008_search_tab_ids.sql"),
+    include_str!("../migrations/0009_retry_at.sql"),
 ];
 
 /// How many idle connections to keep. More than the concurrency the service
@@ -394,6 +395,10 @@ pub struct Job {
     /// How its latest import was asked to decide the album.
     /// `None` for one written by a build whose `How` no longer reads.
     pub import_how: Option<crate::jobs::How>,
+    /// Times its import has been put off for a metadata service in a row.
+    pub defer_tries: u32,
+    /// For a `waiting` job, when its import is tried again.
+    pub retry_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -418,6 +423,8 @@ impl Job {
             as_is_blocker: None,
             replaces: false,
             import_how: None,
+            defer_tries: 0,
+            retry_at: None,
             created_at: now,
             updated_at: now,
         }
@@ -448,6 +455,11 @@ impl Job {
                         None
                     }
                 }),
+            defer_tries: r.get("defer_tries")?,
+            retry_at: r
+                .get::<_, Option<String>>("retry_at")?
+                .map(|t| ts_from(&t))
+                .transpose()?,
             created_at: ts_from(&r.get::<_, String>("created_at")?)?,
             updated_at: ts_from(&r.get::<_, String>("updated_at")?)?,
         })
@@ -681,6 +693,20 @@ pub async fn set_import_log(db: &Db, id: Uuid, log: &str) -> Result<()> {
                 " WHERE id = ?1"
             ),
             params![id, log],
+        )?;
+        Ok(())
+    })
+    .await
+}
+
+/// Record how a job's album was decided, when the import chose otherwise
+/// than it was asked.
+pub async fn set_import_how(db: &Db, id: Uuid, how: &crate::jobs::How) -> Result<()> {
+    let how = how.clone();
+    db.run(move |c| {
+        c.execute(
+            "UPDATE jobs SET import_how = ?2 WHERE id = ?1",
+            params![id, Json(&how)],
         )?;
         Ok(())
     })
@@ -1202,16 +1228,24 @@ pub async fn claim_import(
 /// `waiting`, with `error` saying why. Refused, and `None`, once it has been
 /// put off `limit` times or when the job has moved on; otherwise the number
 /// of times so far.
-pub async fn defer_import(db: &Db, id: Uuid, error: &str, limit: u32) -> Result<Option<u32>> {
+pub async fn defer_import(
+    db: &Db,
+    id: Uuid,
+    error: &str,
+    limit: u32,
+    wait: std::time::Duration,
+) -> Result<Option<u32>> {
     let error = error.to_string();
+    let wait = format!("+{:.3} seconds", wait.as_secs_f64());
     db.run(move |c| {
         c.query_row(
             concat!(
-                "UPDATE jobs SET status = 'waiting', error = ?2, defer_tries = defer_tries + 1, updated_at = ",
+                "UPDATE jobs SET status = 'waiting', error = ?2, defer_tries = defer_tries + 1, \
+                 retry_at = strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now', ?4), updated_at = ",
                 now!(),
                 " WHERE id = ?1 AND status = 'importing' AND defer_tries < ?3 RETURNING defer_tries"
             ),
-            params![id, error, limit],
+            params![id, error, limit, wait],
             |r| r.get(0),
         )
         .optional()
@@ -1219,15 +1253,16 @@ pub async fn defer_import(db: &Db, id: Uuid, error: &str, limit: u32) -> Result<
     .await
 }
 
-const DUE_WAITING: &str = "SELECT * FROM jobs WHERE status = 'waiting' \
-     AND updated_at <= strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now', ?1)";
+const DUE_WAITING: &str = concat!(
+    "SELECT * FROM jobs WHERE status = 'waiting' AND retry_at <= ",
+    now!()
+);
 
-/// Jobs `waiting` for at least `secs`, due another try.
-pub async fn due_waiting(db: &Db, secs: u64) -> Result<Vec<Job>> {
-    let since = format!("-{secs} seconds");
+/// Jobs put off for a metadata service whose time to try again has come.
+pub async fn due_waiting(db: &Db) -> Result<Vec<Job>> {
     db.run(move |c| {
         c.prepare_cached(DUE_WAITING)?
-            .query_map([since], Job::from_row)?
+            .query_map([], Job::from_row)?
             .collect::<Result<_>>()
     })
     .await
@@ -1615,24 +1650,56 @@ mod tests {
         let db = Db::memory().await;
         let job = job("a", "importing");
         insert_job(&db, &job, &[]).await.unwrap();
-        assert_eq!(defer_import(&db, job.id, "down", 2).await.unwrap(), Some(1));
+        assert_eq!(
+            defer_import(&db, job.id, "down", 2, std::time::Duration::ZERO)
+                .await
+                .unwrap(),
+            Some(1)
+        );
         assert_eq!(
             super::job(&db, job.id).await.unwrap().unwrap().status,
             "waiting"
         );
-        // Not due until the wait has passed; due at once with no wait.
-        assert!(due_waiting(&db, 300).await.unwrap().is_empty());
-        assert_eq!(due_waiting(&db, 0).await.unwrap().len(), 1);
+        // Due once its wait has passed, which here is at once.
+        assert_eq!(due_waiting(&db).await.unwrap().len(), 1);
+        let later = super::tests::job("b", "importing");
+        insert_job(&db, &later, &[]).await.unwrap();
+        let wait = std::time::Duration::from_secs(300);
+        defer_import(&db, later.id, "down", 2, wait).await.unwrap();
+        assert_eq!(due_waiting(&db).await.unwrap().len(), 1, "b is not due yet");
+        let retry_at = super::job(&db, later.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .retry_at
+            .unwrap();
+        let ahead = (retry_at - chrono::Utc::now()).num_seconds();
+        assert!((295..=300).contains(&ahead), "{ahead}");
         // Back to importing from waiting keeps the count.
         let how = crate::jobs::How::Match(None);
         assert!(claim_import(&db, job.id, &["waiting"], &how).await.unwrap());
-        assert_eq!(defer_import(&db, job.id, "down", 2).await.unwrap(), Some(2));
+        assert_eq!(
+            defer_import(&db, job.id, "down", 2, std::time::Duration::ZERO)
+                .await
+                .unwrap(),
+            Some(2)
+        );
         assert!(claim_import(&db, job.id, &["waiting"], &how).await.unwrap());
-        assert_eq!(defer_import(&db, job.id, "down", 2).await.unwrap(), None);
+        assert_eq!(
+            defer_import(&db, job.id, "down", 2, std::time::Duration::ZERO)
+                .await
+                .unwrap(),
+            None
+        );
         // A person's retry from failed starts the count again.
         set_status(&db, job.id, "failed", None).await.unwrap();
         assert!(claim_import(&db, job.id, &["failed"], &how).await.unwrap());
-        assert_eq!(defer_import(&db, job.id, "down", 2).await.unwrap(), Some(1));
+        assert_eq!(
+            defer_import(&db, job.id, "down", 2, std::time::Duration::ZERO)
+                .await
+                .unwrap(),
+            Some(1)
+        );
     }
 
     #[tokio::test]

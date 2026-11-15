@@ -88,6 +88,12 @@ tested for interoperability against the `soulseek-rs` client.
    to choose from. A release the matcher did not find can be named by pasting
    its MusicBrainz ID or URL. For a release MusicBrainz lacks, the files can
    be imported as-is by their own tags when those describe one album.
+   While MusicBrainz is refusing requests the job waits (`waiting`) and tries
+   again after 30 seconds, a minute, two minutes, then every five, each give
+   or take a fifth so jobs put off together come back apart; after 24 tries
+   it fails for a person to retry. A waiting job can be cancelled, or filed
+   by its tags (`importAsIs`) or a named release (`resolveJob`) without
+   waiting the outage out.
 
 ### Discogs
 
@@ -120,7 +126,10 @@ lands, unpacks it if it is a zip (one folder wrapping everything is
 unwrapped, and an entry naming a path outside the archive refuses it), and
 continues from step 3. The tags are checked and chosen in the same review
 as any other album, so a purchase is not filed until it matches or a person
-has looked at it. There is no other copy to fall back to; a failed fetch is
+has looked at it, with one exception: a purchase's tags come from its seller
+and are usually right, so when MusicBrainz is still unavailable on the third
+try, a purchase whose tags describe one album and carry a date is filed by
+them as `importAsIs` would, and its import log and event say so. There is no other copy to fall back to; a failed fetch is
 retried from the same link. Only the link's host is logged or shown, since
 purchase links carry access tokens, and a fetch is capped at 8 GiB.
 

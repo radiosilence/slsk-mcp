@@ -1053,13 +1053,25 @@ impl CardView {
 
     /// Whether to show `action` among the other choices: it applies, and
     /// is not already the suggestion.
+    /// When a waiting job tries again, counted down by the stream's redraws.
+    fn retry(&self, j: &Job) -> Option<String> {
+        let secs = (j.retry_at? - chrono::Utc::now()).num_seconds();
+        Some(match secs {
+            ..1 => "trying again now".into(),
+            1..90 => format!("trying again in {secs}s"),
+            _ => format!("trying again in {}m", (secs + 30) / 60),
+        })
+    }
+
     fn offer(&self, j: &Job, action: &str) -> bool {
         let applies = match action {
             "approve" => j.status == "suspect",
             "next" => {
                 matches!(j.status.as_str(), "review" | "suspect" | "failed") && j.alternates > 0
             }
-            "as-is" => j.status == "review" && self.as_is_blocked(j).is_none(),
+            "as-is" => {
+                matches!(j.status.as_str(), "review" | "waiting") && self.as_is_blocked(j).is_none()
+            }
             "retry" => matches!(j.status.as_str(), "failed" | "cancelled"),
             "match" => j.status == "review",
             "cancel" => matches!(j.status.as_str(), "downloading" | "waiting"),
