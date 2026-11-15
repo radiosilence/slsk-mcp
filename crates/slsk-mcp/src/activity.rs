@@ -159,10 +159,15 @@ fn folder_of(path: &str) -> &str {
     path.rsplit_once('\\').map_or(path, |(f, _)| f)
 }
 
+/// Searches, matched and relayed by the distributed network, in an hour.
+type Totals = (u64, u64, u64);
+/// Words with their searches and matched counts.
+type Counted = Vec<(String, u64, u64)>;
+
 impl Hour {
     /// What is written for the hour: its key, its totals, and its most
     /// searched words.
-    fn top(&self) -> (String, (u64, u64, u64), Vec<(String, u64, u64)>) {
+    fn top(&self) -> (String, Totals, Counted) {
         let key = self
             .start
             .map(|s| s.format("%Y-%m-%dT%H").to_string())
@@ -175,7 +180,7 @@ impl Hour {
     }
 
     /// The `n` most searched words, copying no others.
-    fn most(&self, n: usize) -> Vec<(String, u64, u64)> {
+    fn most(&self, n: usize) -> Counted {
         let mut terms: Vec<(&String, &(u64, u64))> = self.terms.iter().collect();
         let by = |a: &(&String, &(u64, u64)), b: &(&String, &(u64, u64))| {
             b.1.0.cmp(&a.1.0).then_with(|| a.0.cmp(b.0))
