@@ -178,10 +178,10 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Bumped whenever something changes that a person watching would see: a
-/// transfer's state, queue place or measured rate (once a second while it
-/// moves), a search spending the budget, or the distributed network's
-/// parent or children. Shared by every engine in the process.
+/// Bumped whenever something changes that a person watching would see: the
+/// login status, a transfer's state, queue place or measured rate (once a
+/// second while it moves), a search spending the budget, or the distributed
+/// network's parent or children. Shared by every engine in the process.
 static CHANGES: std::sync::LazyLock<watch::Sender<u64>> =
     std::sync::LazyLock::new(|| watch::channel(0).0);
 
@@ -308,6 +308,7 @@ impl Inner {
             Ordering::Relaxed,
         );
         self.status.send_replace(status.clone());
+        changed();
         let _ = self.events.send(Event::Status(status));
     }
 }

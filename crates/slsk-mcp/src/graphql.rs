@@ -266,8 +266,8 @@ fn view_of(
         }
     }
     // A fetch from a URL has no files to count until it is unpacked.
-    if let Some((received, size)) = app.jobs.fetched(job.id) {
-        (done, total) = (received, size);
+    if let Some((received, size, bytes_per_sec)) = app.jobs.fetched(job.id) {
+        (done, total, rate) = (received, size, bytes_per_sec);
     }
     let (username, folder, host) = match &job.source.0 {
         Source::Soulseek {

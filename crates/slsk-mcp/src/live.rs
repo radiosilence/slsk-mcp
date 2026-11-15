@@ -2,9 +2,11 @@
 //!
 //! Each kind of thing a page shows has a counter, bumped whenever something
 //! of that kind changes: a database write to its tables, or a stage an
-//! import reaches. A page's stream
-//! waits on these instead of polling, and redraws only the parts whose
-//! counters moved.
+//! import reaches. A page's stream waits on these instead of polling, and
+//! redraws only the parts whose counters moved.
+//!
+//! A write is announced once the database call that made it has finished,
+//! so its transaction has committed and a stream woken by it reads it.
 
 use std::sync::LazyLock;
 
@@ -95,20 +97,62 @@ impl<T> Drop for Writing<'_, T> {
     }
 }
 
-/// The topic a write to `table` changes, if a page shows it.
+/// The topic a write to `table` changes, if a page shows it. SQLite reports
+/// no writes to `WITHOUT ROWID` tables, so `job_files` is noted by the
+/// functions that write it ([`note`]).
 pub fn of_table(table: &str) -> Option<Topic> {
     Some(match table {
-        "jobs" | "job_files" | "job_events" => Topic::Jobs,
-        "uploads" | "totals" => Topic::Uploads,
-        "messages" | "buddies" | "rooms" | "wishes" | "interests" => Topic::Social,
+        "jobs" | "job_events" => Topic::Jobs,
+        "uploads" => Topic::Uploads,
+        "messages" | "wishes" => Topic::Social,
         "search_tabs" => Topic::Search,
         _ => return None,
     })
 }
 
+thread_local! {
+    /// Topics written by the database call running on this thread, not yet
+    /// announced.
+    static PENDING: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+}
+
+/// Something of `topic` is being written by the database call on this
+/// thread; announced by [`announce`] when the call has finished.
+pub fn note(topic: Topic) {
+    PENDING.with(|p| p.set(p.get() | 1 << topic as u8));
+}
+
+/// Announce what the database call on this thread wrote.
+pub fn announce() {
+    let pending = PENDING.with(|p| p.replace(0));
+    if pending == 0 {
+        return;
+    }
+    CHANGES.send_modify(|c| {
+        for (i, n) in c.iter_mut().enumerate() {
+            if pending & 1 << i != 0 {
+                *n += 1;
+            }
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_noted_write_is_announced_only_when_the_call_ends() {
+        let rx = subscribe();
+        let before = *rx.borrow();
+        note(Topic::Uploads);
+        assert_eq!(
+            rx.borrow()[Topic::Uploads as usize],
+            before[Topic::Uploads as usize]
+        );
+        announce();
+        assert!(rx.borrow()[Topic::Uploads as usize] > before[Topic::Uploads as usize]);
+    }
 
     #[tokio::test]
     async fn a_change_wakes_a_subscriber_with_its_topic_counted() {

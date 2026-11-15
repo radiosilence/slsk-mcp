@@ -36,7 +36,7 @@ use crate::graphql::{self, Job, Transfer};
 mod admin;
 mod browse;
 mod chat;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod cost;
 mod library;
 mod profile;
@@ -406,16 +406,6 @@ fn status_label(status: &str) -> &'static str {
     }
 }
 
-/// Seconds as `live.js` writes a span: "42s", "3m 04s", "1h 02m".
-fn span(secs: i64) -> String {
-    let s = secs.max(0);
-    match s {
-        0..60 => format!("{s}s"),
-        60..3600 => format!("{}m {:02}s", s / 60, s % 60),
-        _ => format!("{}h {:02}m", s / 3600, s / 60 % 60),
-    }
-}
-
 fn human(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
     let mut v = bytes as f64;
@@ -466,6 +456,9 @@ struct Page {
     /// The page's starting signals, from the address.
     signals: String,
     body: String,
+    /// The server's clock as it drew the page (ms since the epoch), for
+    /// `live.js` to correct a client clock that differs.
+    now: i64,
 }
 
 struct NavItem {
@@ -690,6 +683,7 @@ async fn render_page(
         heading,
         signals,
         body,
+        now: chrono::Utc::now().timestamp_millis(),
     };
     Ok((status, Html(page.render().map_err(anyhow::Error::from)?)))
 }
@@ -711,12 +705,6 @@ struct StatusView {
     /// Once the budget is spent, when the next search is free (ms since the
     /// epoch).
     search_free: Option<i64>,
-}
-
-impl StatusView {
-    fn left(&self, at: &i64) -> String {
-        span((*at - chrono::Utc::now().timestamp_millis()) / 1000)
-    }
 }
 
 async fn status_html(app: &App) -> String {
@@ -1114,10 +1102,10 @@ impl CardView {
         rate: &u64,
         at: &chrono::DateTime<chrono::Utc>,
     ) -> String {
-        format!(
-            r#"data-bytes="{bytes}" data-total="{total}" data-rate="{rate}" data-at="{}""#,
-            at.timestamp_millis()
-        )
+        // Stamped only while it moves: an idle card then reads the same
+        // from one redraw to the next, and is not sent again.
+        let at = if *rate > 0 { at.timestamp_millis() } else { 0 };
+        format!(r#"data-bytes="{bytes}" data-total="{total}" data-rate="{rate}" data-at="{at}""#)
     }
 
     fn at(&self, at: &chrono::DateTime<chrono::Utc>) -> i64 {
@@ -1126,16 +1114,6 @@ impl CardView {
 
     fn ms(&self, at: &Option<chrono::DateTime<chrono::Utc>>) -> i64 {
         at.map_or(0, |t| t.timestamp_millis())
-    }
-
-    /// Time since `at`, as `live.js` writes it, for the first draw.
-    fn since(&self, at: &Option<chrono::DateTime<chrono::Utc>>) -> String {
-        at.map(|t| span((chrono::Utc::now() - t).num_seconds()))
-            .unwrap_or_default()
-    }
-
-    fn until(&self, at: &chrono::DateTime<chrono::Utc>) -> String {
-        span((*at - chrono::Utc::now()).num_seconds())
     }
 
     fn size(&self, b: &u64) -> String {

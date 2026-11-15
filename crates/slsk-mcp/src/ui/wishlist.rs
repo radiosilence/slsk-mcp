@@ -45,12 +45,9 @@ impl WishlistView {
         }
     }
     /// When `w` is searched next, if it is the next one.
-    fn next_for(&self, w: &Wish) -> Option<(i64, String)> {
+    fn next_for(&self, w: &Wish) -> Option<i64> {
         let (id, at) = self.next?;
-        (id == w.id).then(|| {
-            let left = (at - chrono::Utc::now().timestamp_millis()) / 1000;
-            (at, super::span(left))
-        })
+        (id == w.id).then_some(at)
     }
     fn label(&self, status: &str) -> &'static str {
         super::status_label(status)

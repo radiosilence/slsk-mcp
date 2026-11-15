@@ -162,6 +162,9 @@ const URL_TIMEOUT: Duration = Duration::from_secs(2 * 3600);
 struct Fetched {
     received: std::sync::atomic::AtomicU64,
     size: std::sync::atomic::AtomicU64,
+    /// Bytes a second over the last second, as the engine measures a
+    /// transfer.
+    rate: std::sync::atomic::AtomicU64,
 }
 
 pub struct Jobs {
@@ -396,12 +399,17 @@ impl Jobs {
     }
 
     /// Bytes received and announced by a fetch from a URL in progress.
-    pub fn fetched(&self, id: Uuid) -> Option<(u64, u64)> {
+    /// A URL fetch's bytes received, its size (0 when the server did not
+    /// say) and its rate.
+    pub fn fetched(&self, id: Uuid) -> Option<(u64, u64, u64)> {
         use std::sync::atomic::Ordering::Relaxed;
-        self.fetches
-            .lock()
-            .get(&id)
-            .map(|(_, f)| (f.received.load(Relaxed), f.size.load(Relaxed)))
+        self.fetches.lock().get(&id).map(|(_, f)| {
+            (
+                f.received.load(Relaxed),
+                f.size.load(Relaxed),
+                f.rate.load(Relaxed),
+            )
+        })
     }
 
     /// Fetch a URL job's file in the background, then import it. A job
@@ -489,6 +497,7 @@ impl Jobs {
         let part = self.fetch_file(id);
         let mut file = tokio::fs::File::create(&part).await?;
         let mut received = 0u64;
+        let mut window = (tokio::time::Instant::now(), 0u64);
         let mut head = Vec::<u8>::with_capacity(4);
         while let Some(chunk) = resp
             .chunk()
@@ -504,6 +513,14 @@ impl Jobs {
             }
             file.write_all(&chunk).await?;
             fetched.received.store(received, Relaxed);
+            // Measured, and the pages told, once a second, like a transfer.
+            let elapsed = window.0.elapsed();
+            if elapsed >= Duration::from_secs(1) {
+                let rate = ((received - window.1) as f64 / elapsed.as_secs_f64()) as u64;
+                fetched.rate.store(rate, Relaxed);
+                window = (tokio::time::Instant::now(), received);
+                crate::live::changed(crate::live::Topic::Jobs);
+            }
         }
         file.flush().await?;
         drop(file);
@@ -751,13 +768,19 @@ impl Jobs {
             // Back from a wait to the stage it interrupted: its own clock.
             (None, Some((was, since))) if was == label => since,
             (None, _) if stage.label == label => stage.since,
-            (Some(_), _) => {
-                if stage.until.is_none() {
-                    stage.before_wait = Some((stage.label.clone(), stage.since));
+            // A wait, or another report of the same wait: what it
+            // interrupted is kept until the importer reports it again.
+            (Some(_), interrupted) => {
+                stage.before_wait = if stage.until.is_none() {
+                    Some((stage.label.clone(), stage.since))
                 } else {
-                    stage.before_wait = stage.before_wait.clone();
+                    interrupted
+                };
+                if stage.until.is_some() && stage.label == label {
+                    stage.since
+                } else {
+                    now
                 }
-                now
             }
             (None, _) => now,
         };

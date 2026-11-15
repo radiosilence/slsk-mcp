@@ -9,7 +9,7 @@
         <button class="quiet" data-indicator="{{ self.sig(r.wish) }}" data-attr:disabled="${{ self.sig(r.wish) }}" data-class:busy="${{ self.sig(r.wish) }}" data-on:click="@post('/wishlist/{{ r.wish.id }}/remove')">Remove</button>
       </div>
       <div class="text-meta text-muted wrap-anywhere">
-        {% if r.wish.lossless %}lossless · {% endif %}{% if r.wish.grab %}grabs when found{% else %}search only{% endif %} · {{ self.searched(r.wish) }}{% match self.next_for(r.wish) %}{% when Some with (n) %} · searched next, in <span data-until="{{ n.0 }}">{{ n.1 }}</span>{% when None %}{% endmatch %}
+        {% if r.wish.lossless %}lossless · {% endif %}{% if r.wish.grab %}grabs when found{% else %}search only{% endif %} · {{ self.searched(r.wish) }}{% match self.next_for(r.wish) %}{% when Some with (at) %} · searched next, in <span data-until="{{ at }}"></span>{% when None %}{% endmatch %}
         {% match r.job %}{% when Some with (j) %} · became <a href="/#job-{{ r.wish.job_id.unwrap_or_default() }}">{{ j.0 }}</a> ({{ self.label(j.1) }}){% when None %}{% endmatch %}
       </div>
     </li>

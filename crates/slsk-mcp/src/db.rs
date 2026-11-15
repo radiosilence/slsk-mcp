@@ -60,7 +60,7 @@ pub(crate) const JOB_EVENTS: &str = "SELECT job_id, title, at, version, outcome,
 
 /// Each job's moves to another source, newest first.
 pub(crate) const LAST_MOVES: &str = "SELECT job_id, cause, peer FROM job_events \
-         WHERE job_id IN (SELECT value FROM json_each(?1)) AND outcome = 'fallback' ORDER BY job_id, at DESC";
+         WHERE job_id IN (SELECT unhex(value) FROM json_each(?1)) AND outcome = 'fallback' ORDER BY job_id, at DESC";
 
 /// One file's state, before it changes.
 pub(crate) const FILE_STATE: &str =
@@ -174,6 +174,7 @@ impl Db {
                 }
             };
             let out = f(&mut conn);
+            crate::live::announce();
             let mut idle = pool.idle.lock();
             if idle.len() < KEEP_IDLE {
                 idle.push(conn);
@@ -204,12 +205,12 @@ impl Db {
 /// once, at open.
 fn configure(conn: &mut Connection) -> Result<()> {
     conn.busy_timeout(Duration::from_secs(5))?;
-    // Every write tells the live pages, whichever code made it. A write
-    // rolled back still wakes them; they redraw, find nothing changed and
-    // send nothing.
+    // Every write tells the live pages, whichever code made it, once the
+    // call that made it has finished (`Db::run`). A write rolled back still
+    // wakes them; they redraw, find nothing changed and send nothing.
     conn.update_hook(Some(|_, _: &str, table: &str, _| {
         if let Some(topic) = crate::live::of_table(table) {
-            crate::live::changed(topic);
+            crate::live::note(topic);
         }
     }))?;
     conn.execute_batch(
@@ -504,6 +505,7 @@ impl JobFile {
 }
 
 fn insert_files(c: &Connection, files: &[JobFile]) -> Result<()> {
+    crate::live::note(crate::live::Topic::Jobs);
     let mut s = c.prepare_cached(
         "INSERT INTO job_files (job_id, peer, remote, size, subdir) VALUES (?1, ?2, ?3, ?4, ?5)",
     )?;
@@ -555,6 +557,7 @@ pub async fn replace_files(
         if !moved {
             return Ok(false);
         }
+        crate::live::note(crate::live::Topic::Jobs);
         tx.execute("DELETE FROM job_files WHERE job_id = ?1", params![job])?;
         insert_files(&tx, &files)?;
         tx.commit()?;
@@ -743,6 +746,7 @@ pub async fn set_file_state(
     // completed. The transaction holds the write lock from its start, so
     // nothing changes the row between reading and updating it.
     db.run(move |c| {
+        crate::live::note(crate::live::Topic::Jobs);
         let tx = c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let prev: Option<(String, i64)> = tx
             .prepare_cached(FILE_STATE)?
@@ -788,6 +792,7 @@ pub async fn set_file_skipped(
 ) -> Result<()> {
     let (peer, remote) = (peer.to_string(), remote.to_vec());
     db.run(move |c| {
+        crate::live::note(crate::live::Topic::Jobs);
         c.execute(
             "UPDATE job_files SET state = ?4, error = NULL WHERE job_id = ?1 AND peer = ?2 AND remote = ?3",
             params![id, peer, remote, if skipped { "skipped" } else { "queued" }],
