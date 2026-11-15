@@ -84,8 +84,12 @@ pub struct Stage {
     pub until: Option<chrono::DateTime<chrono::Utc>>,
     /// Bytes of the work done and in all, when it is counted.
     pub progress: Option<(u64, u64)>,
-    /// MusicBrainz's request count when the import began, so the requests
-    /// it has made are the count now less this.
+    /// MusicBrainz requests made since the import began, retries included,
+    /// and the service's budget (remaining, limit) as it last reported it.
+    /// Filled in by [`Jobs::stage`].
+    pub mb_requests: u64,
+    pub mb_budget: Option<(u64, u64)>,
+    /// MusicBrainz's request count when the import began.
     mb_base: u64,
     /// The stage a wait interrupted and when it began, restored when the
     /// importer reports it again.
@@ -712,11 +716,12 @@ impl Jobs {
     /// The job's place in its peer's upload queue, while it is waiting in one.
     /// What the import of `id` is doing now, and the MusicBrainz requests
     /// it has made and the budget the service last reported.
-    pub fn stage(&self, id: Uuid) -> Option<(Stage, u64, Option<(u64, u64)>)> {
-        let stage = self.stages.lock().get(&id).cloned()?;
+    pub fn stage(&self, id: Uuid) -> Option<Stage> {
+        let mut stage = self.stages.lock().get(&id).cloned()?;
         let mb = self.tagger.musicbrainz_stats();
-        let made = mb.requests.saturating_sub(stage.mb_base);
-        Some((stage, made, mb.budget))
+        stage.mb_requests = mb.requests.saturating_sub(stage.mb_base);
+        stage.mb_budget = mb.budget;
+        Some(stage)
     }
 
     fn set_stage(
@@ -734,6 +739,8 @@ impl Jobs {
             since: now,
             until: None,
             progress: None,
+            mb_requests: 0,
+            mb_budget: None,
             mb_base: base(),
             before_wait: None,
         });
