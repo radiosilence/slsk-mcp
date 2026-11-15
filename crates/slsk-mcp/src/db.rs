@@ -394,6 +394,8 @@ pub struct Job {
     /// How its latest import was asked to decide the album.
     /// `None` for one written by a build whose `How` no longer reads.
     pub import_how: Option<crate::jobs::How>,
+    /// Times its import has been put off for a metadata service in a row.
+    pub defer_tries: u32,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -418,6 +420,7 @@ impl Job {
             as_is_blocker: None,
             replaces: false,
             import_how: None,
+            defer_tries: 0,
             created_at: now,
             updated_at: now,
         }
@@ -448,6 +451,7 @@ impl Job {
                         None
                     }
                 }),
+            defer_tries: r.get("defer_tries")?,
             created_at: ts_from(&r.get::<_, String>("created_at")?)?,
             updated_at: ts_from(&r.get::<_, String>("updated_at")?)?,
         })
@@ -1219,15 +1223,11 @@ pub async fn defer_import(db: &Db, id: Uuid, error: &str, limit: u32) -> Result<
     .await
 }
 
-const DUE_WAITING: &str = "SELECT * FROM jobs WHERE status = 'waiting' \
-     AND updated_at <= strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now', ?1)";
-
-/// Jobs `waiting` for at least `secs`, due another try.
-pub async fn due_waiting(db: &Db, secs: u64) -> Result<Vec<Job>> {
-    let since = format!("-{secs} seconds");
+/// Jobs whose import is put off until a metadata service is back.
+pub async fn waiting(db: &Db) -> Result<Vec<Job>> {
     db.run(move |c| {
-        c.prepare_cached(DUE_WAITING)?
-            .query_map([since], Job::from_row)?
+        c.prepare_cached("SELECT * FROM jobs WHERE status = 'waiting'")?
+            .query_map([], Job::from_row)?
             .collect::<Result<_>>()
     })
     .await
