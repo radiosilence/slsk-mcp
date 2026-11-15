@@ -225,10 +225,10 @@ impl Downloads {
     }
 
     pub fn set_place(&self, username: &str, filename: &RawStr, place: u32) {
-        if let Some(d) = self.get(username, filename) {
-            if d.place.swap(place, Ordering::Relaxed) != place {
-                crate::changed();
-            }
+        if let Some(d) = self.get(username, filename)
+            && d.place.swap(place, Ordering::Relaxed) != place
+        {
+            crate::changed();
         }
     }
 }
