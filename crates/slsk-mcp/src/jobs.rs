@@ -1430,9 +1430,19 @@ impl Jobs {
             Err(e) => tracing::info!(%id, error = %e, "import finished: not filed"),
         }
         match outcome {
-            Ok(sift::Outcome::Imported { dir: path, log, .. }) => {
+            Ok(sift::Outcome::Imported {
+                dir: path,
+                log,
+                musicbrainz_unavailable,
+                ..
+            }) => {
                 let path_text = path.to_string_lossy();
-                let (log, detail) = match &as_is_because {
+                let why = as_is_because.or_else(|| {
+                    musicbrainz_unavailable.map(|e| {
+                        format!("matched on Discogs because MusicBrainz was unavailable ({e})")
+                    })
+                });
+                let (log, detail) = match &why {
                     Some(why) => (format!("{why}\n{log}"), format!("{path_text}; {why}")),
                     None => (log, path_text.to_string()),
                 };
@@ -1473,11 +1483,19 @@ impl Jobs {
                     }
                 });
             }
+            // sift's reason says so when Discogs stood in for MusicBrainz.
             Ok(sift::Outcome::Review {
                 reason,
                 candidates,
                 log,
+                musicbrainz_unavailable,
             }) => {
+                let log = match musicbrainz_unavailable {
+                    Some(e) => format!(
+                        "matched on Discogs because MusicBrainz was unavailable ({e})\n{log}"
+                    ),
+                    None => log,
+                };
                 db::set_import_log(&self.db, id, &log).await?;
                 db::set_review(&self.db, id, &reason, &candidates).await?;
                 let blocker = match self.tagger.check_as_is(&dir).await {
@@ -1543,9 +1561,11 @@ impl Jobs {
                 let _ = tokio::fs::remove_dir_all(&dir).await;
             }
             // As-is refused: the tags are not good enough to file by, which
-            // leaves the album where it was, waiting on a decision.
+            // leaves the album where it was, waiting on a decision. The
+            // refusal is the blocker too, so the card stops offering it.
             Err(e @ sift::ImportError::Untagged(_)) => {
                 db::set_status(&self.db, id, "review", Some(&format!("{e:#}"))).await?;
+                db::set_as_is_blocker(&self.db, id, &format!("{e:#}")).await?;
                 self.event(
                     &job,
                     "review",
