@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.17.0
+
+### Changed
+
+- **Discogs stands in while MusicBrainz is unavailable.** An import whose MusicBrainz search fails after its retries searches Discogs instead: a close match is filed and a weak one goes to review with its Discogs candidates. The job is put off only when Discogs is off, unavailable or has nothing, or the files name their MusicBrainz release, and its log and event record that Discogs was used because MusicBrainz was unavailable.
+
+### Fixed
+
+- **Import as-is files a single.** One file with no album tag, as Bandcamp sells a single, is filed as its own album named by its title, its artist as album artist and as track 1, where it was refused. The card no longer suggests Import as-is until the files have been checked and pass, and a refusal becomes the card's stated blocker instead of leaving the suggestion in place.
+
 ## 0.16.0
 
 ### Added
