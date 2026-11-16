@@ -1158,6 +1158,9 @@ impl CardView {
     /// underneath is the machine's.
     fn ask(&self, j: &Job) -> Option<&'static str> {
         match j.status.as_str() {
+            "review" if j.candidates.is_empty() && self.as_is_blocked(j).is_some() => Some(
+                "MusicBrainz has nothing that fits these files, and their tags are not enough to file them as they are. Correct the tags or try another copy.",
+            ),
             "review" if j.candidates.is_empty() => Some(
                 "MusicBrainz has nothing that fits these files. Import them as they are tagged, or try another copy.",
             ),

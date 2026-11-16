@@ -1483,19 +1483,14 @@ impl Jobs {
                     }
                 });
             }
-            // sift's reason says so when Discogs stood in for MusicBrainz.
+            // When Discogs stood in for MusicBrainz, sift's reason and log
+            // say so, and the cause is the outage rather than the files.
             Ok(sift::Outcome::Review {
                 reason,
                 candidates,
                 log,
                 musicbrainz_unavailable,
             }) => {
-                let log = match musicbrainz_unavailable {
-                    Some(e) => format!(
-                        "matched on Discogs because MusicBrainz was unavailable ({e})\n{log}"
-                    ),
-                    None => log,
-                };
                 db::set_import_log(&self.db, id, &log).await?;
                 db::set_review(&self.db, id, &reason, &candidates).await?;
                 let blocker = match self.tagger.check_as_is(&dir).await {
@@ -1504,6 +1499,7 @@ impl Jobs {
                 };
                 db::set_as_is_blocker(&self.db, id, &blocker).await?;
                 let c = match candidates.first() {
+                    _ if musicbrainz_unavailable.is_some() => cause::MB_UNAVAILABLE,
                     None => cause::NO_CANDIDATES,
                     Some(b) if b.missing > 0 => cause::INCOMPLETE,
                     Some(b) if b.extra > 0 => cause::EXTRA_FILES,
@@ -1561,11 +1557,16 @@ impl Jobs {
                 let _ = tokio::fs::remove_dir_all(&dir).await;
             }
             // As-is refused: the tags are not good enough to file by, which
-            // leaves the album where it was, waiting on a decision. The
-            // refusal is the blocker too, so the card stops offering it.
+            // leaves the album where it was, waiting on a decision. The card
+            // takes its blocker from the files as they stand, not from the
+            // edits this attempt carried, which may be what was refused.
             Err(e @ sift::ImportError::Untagged(_)) => {
                 db::set_status(&self.db, id, "review", Some(&format!("{e:#}"))).await?;
-                db::set_as_is_blocker(&self.db, id, &format!("{e:#}")).await?;
+                let blocker = match self.tagger.check_as_is(&dir).await {
+                    Ok(()) => String::new(),
+                    Err(e) => format!("{e:#}"),
+                };
+                db::set_as_is_blocker(&self.db, id, &blocker).await?;
                 self.event(
                     &job,
                     "review",
