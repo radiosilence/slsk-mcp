@@ -88,7 +88,9 @@ tested for interoperability against the `soulseek-rs` client.
    to choose from. A release the matcher did not find can be named by pasting
    its MusicBrainz ID or URL. For a release MusicBrainz lacks, the files can
    be imported as-is by their own tags when those describe one album.
-   While MusicBrainz is refusing requests the job waits (`waiting`) and tries
+   A single file with no album tag, as a store's single comes, is filed as
+   its own album named by its title. While MusicBrainz is refusing requests,
+   and Discogs (below) is off or has nothing for the album, the job waits (`waiting`) and tries
    again after 30 seconds, a minute, two minutes, then every five, each give
    or take a fifth so jobs put off together come back apart; after 24 tries
    it fails for a person to retry. A waiting job can be cancelled, or filed
@@ -102,7 +104,11 @@ all, where Discogs often has the exact pressing. With `DISCOGS_TOKEN` set to a
 Discogs personal access token, sift searches Discogs whenever MusicBrainz has
 no strong match, and the two compete on distance: a close Discogs release is
 applied without review, and otherwise its releases are offered beside
-MusicBrainz's. The token alone turns this on; the service adds beets'
+MusicBrainz's. When MusicBrainz is unavailable, Discogs is searched in its
+place rather than the import waiting on it (unless the files name their
+MusicBrainz release), so an outage on one service does
+not hold up an album the other knows; the job's log and event say when this
+happened. The token alone turns this on; the service adds beets'
 `discogs` plugin itself, since nobody setting a token means it to go unused.
 
 ### AcoustID

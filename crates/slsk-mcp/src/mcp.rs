@@ -166,7 +166,8 @@ impl ServerHandler for SlskMcp {
                  `tagger { discogs }` is on. Pick the right one, asking the user if it is not obvious, and call \
                  `resolveJob(id, releaseId)`; a release the user links to on either site can be passed as its URL. If no candidate fits these files (wrong \
                  edition, missing discs), `nextSource(id)` drops them and downloads the next copy found. When neither MusicBrainz nor Discogs has such a release \
-                 (no candidates, and the files' tags look right), `importAsIs(id)` files it by those tags; it is \
+                 (no candidates, and the files' tags look right), `importAsIs(id)` files it by those tags (a lone file with no \
+                 album tag, as a store's single comes, is its own album named by its title); it is \
                  refused, with the reason, when they do not describe one album.\n\n\
                  Working the review queue, when the user asks you to deal with what is waiting: for each job in \
                  `review`, read `jobTracks(id)` (the files' tags) and `compareRelease(id, releaseId)` for the best \

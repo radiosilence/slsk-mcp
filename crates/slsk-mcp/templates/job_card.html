@@ -87,7 +87,7 @@
   </form>
   {% endif %}
   {% match self.advice(j) %}{% when Some with (a) %}<p class="mt-2.5 mb-0 rounded-sm border-l-3 border-brand bg-brand/8 px-2.5 py-2"><strong>Suggested:</strong> {{ a.why }}</p>{% when None %}{% endmatch %}
-  {% match self.as_is_blocked(j) %}{% when Some with (b) %}{% if j.status == "review" %}<p class="my-0.5 text-meta text-muted">Import as-is won't work: {{ b }}</p>{% endif %}{% when None %}{% endmatch %}
+  {% match self.as_is_blocker_line(j) %}{% when Some with (b) %}{% if j.status == "review" %}<p class="my-0.5 text-meta text-muted">Import as-is won't work: {{ b }}</p>{% endif %}{% when None %}{% endmatch %}
   <div class="mt-2.5 flex flex-wrap items-center gap-2">
     {% match self.advice(j) %}{% when Some with (a) %}<button class="primary" data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/{{ a.action }}')">{{ a.label }}</button>{% when None %}{% endmatch %}
     {% if self.offer(j, "approve") %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/approve')">Import anyway</button>{% endif %}

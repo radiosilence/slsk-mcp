@@ -1430,9 +1430,19 @@ impl Jobs {
             Err(e) => tracing::info!(%id, error = %e, "import finished: not filed"),
         }
         match outcome {
-            Ok(sift::Outcome::Imported { dir: path, log, .. }) => {
+            Ok(sift::Outcome::Imported {
+                dir: path,
+                log,
+                musicbrainz_unavailable,
+                ..
+            }) => {
                 let path_text = path.to_string_lossy();
-                let (log, detail) = match &as_is_because {
+                let why = as_is_because.or_else(|| {
+                    musicbrainz_unavailable.map(|e| {
+                        format!("matched on Discogs because MusicBrainz was unavailable ({e})")
+                    })
+                });
+                let (log, detail) = match &why {
                     Some(why) => (format!("{why}\n{log}"), format!("{path_text}; {why}")),
                     None => (log, path_text.to_string()),
                 };
@@ -1473,10 +1483,13 @@ impl Jobs {
                     }
                 });
             }
+            // When Discogs stood in for MusicBrainz, sift's reason and log
+            // say so, and the cause is the outage rather than the files.
             Ok(sift::Outcome::Review {
                 reason,
                 candidates,
                 log,
+                musicbrainz_unavailable,
             }) => {
                 db::set_import_log(&self.db, id, &log).await?;
                 db::set_review(&self.db, id, &reason, &candidates).await?;
@@ -1486,6 +1499,7 @@ impl Jobs {
                 };
                 db::set_as_is_blocker(&self.db, id, &blocker).await?;
                 let c = match candidates.first() {
+                    _ if musicbrainz_unavailable.is_some() => cause::MB_UNAVAILABLE,
                     None => cause::NO_CANDIDATES,
                     Some(b) if b.missing > 0 => cause::INCOMPLETE,
                     Some(b) if b.extra > 0 => cause::EXTRA_FILES,
@@ -1543,9 +1557,16 @@ impl Jobs {
                 let _ = tokio::fs::remove_dir_all(&dir).await;
             }
             // As-is refused: the tags are not good enough to file by, which
-            // leaves the album where it was, waiting on a decision.
+            // leaves the album where it was, waiting on a decision. The card
+            // takes its blocker from the files as they stand, not from the
+            // edits this attempt carried, which may be what was refused.
             Err(e @ sift::ImportError::Untagged(_)) => {
                 db::set_status(&self.db, id, "review", Some(&format!("{e:#}"))).await?;
+                let blocker = match self.tagger.check_as_is(&dir).await {
+                    Ok(()) => String::new(),
+                    Err(e) => format!("{e:#}"),
+                };
+                db::set_as_is_blocker(&self.db, id, &blocker).await?;
                 self.event(
                     &job,
                     "review",

@@ -998,6 +998,12 @@ impl CardView {
         j.as_is_blocker.as_deref().filter(|b| !b.is_empty())
     }
 
+    /// The blocker, unless the job's error already says the same.
+    fn as_is_blocker_line<'a>(&self, j: &'a Job) -> Option<&'a str> {
+        self.as_is_blocked(j)
+            .filter(|b| j.error.as_deref() != Some(*b))
+    }
+
     /// The one action most likely right, and why: the judgement a person
     /// would otherwise make from the evidence on the card.
     fn advice(&self, j: &Job) -> Option<Advice> {
@@ -1023,7 +1029,9 @@ impl CardView {
                         ),
                     });
                 }
-                if best.is_none() && self.as_is_blocked(j).is_none() {
+                // Only once checked and found clean: an unchecked job may be
+                // refused, and a suggestion has to be one that works.
+                if best.is_none() && j.as_is_blocker.as_deref() == Some("") {
                     return Some(Advice {
                         action: "as-is".into(),
                         label: "Import as-is",
@@ -1150,6 +1158,9 @@ impl CardView {
     /// underneath is the machine's.
     fn ask(&self, j: &Job) -> Option<&'static str> {
         match j.status.as_str() {
+            "review" if j.candidates.is_empty() && self.as_is_blocked(j).is_some() => Some(
+                "MusicBrainz has nothing that fits these files, and their tags are not enough to file them as they are. Correct the tags or try another copy.",
+            ),
             "review" if j.candidates.is_empty() => Some(
                 "MusicBrainz has nothing that fits these files. Import them as they are tagged, or try another copy.",
             ),
