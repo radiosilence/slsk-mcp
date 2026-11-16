@@ -811,6 +811,41 @@ impl Query {
             .unwrap_or_default()
     }
 
+    /// What other users have just done with our shares, newest first:
+    /// browses, folders opened, searches our shares answered, and uploads
+    /// starting and ending. Held in memory: the latest 200 since the start.
+    async fn share_activity(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(default = 50)] limit: usize,
+    ) -> Vec<crate::activity::ShareEvent> {
+        app(ctx).activity.feed(limit.min(200))
+    }
+
+    /// Browses, folders opened and searches our shares answered, as kept
+    /// (90 days), newest first. `kind` is browse, folder or search.
+    async fn share_log(
+        &self,
+        ctx: &Context<'_>,
+        kind: Option<String>,
+        #[graphql(default = 100)] limit: u32,
+    ) -> Result<Vec<crate::activity::ShareEvent>> {
+        Ok(app(ctx).activity.log(kind, limit.min(1000)).await?)
+    }
+
+    /// What people have been after over the last `days` (at most 90): the
+    /// searches that reached us and how many our shares answered, the most
+    /// searched words, those searched for that we do not hold, our folders
+    /// most opened or downloaded, and visitors who came back. For "what have
+    /// people been looking for lately".
+    async fn share_trends(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(default = 7)] days: u32,
+    ) -> Result<crate::activity::Trends> {
+        Ok(app(ctx).activity.trends(days).await?)
+    }
+
     /// Albums on their way into the library, newest first.
     async fn jobs(
         &self,

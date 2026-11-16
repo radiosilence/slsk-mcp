@@ -114,6 +114,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0007_search_tabs.sql"),
     include_str!("../migrations/0008_search_tab_ids.sql"),
     include_str!("../migrations/0009_retry_at.sql"),
+    include_str!("../migrations/0010_share_activity.sql"),
 ];
 
 /// How many idle connections to keep. More than the concurrency the service

@@ -1,9 +1,11 @@
 //! Records every finished upload, so the uploads page has a history that
 //! outlives the engine's in-memory list of recent transfers and restarts.
 //!
-//! The engine announces no upload's end, so this watches its transfer list:
-//! an upload is timed from the first moment it is seen sending, and written
-//! once when it reaches completed, failed or cancelled.
+//! The engine announces no upload's end, so this reads its transfer list
+//! whenever the engine signals a change: an upload is timed from the first
+//! moment it is seen sending, and written once when it reaches completed,
+//! failed or cancelled. Each start and end also goes on the share activity
+//! feed.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -11,7 +13,6 @@ use std::time::{Duration, Instant};
 
 use crate::App;
 
-const POLL: Duration = Duration::from_secs(2);
 const KEEP_DAYS: i32 = 180;
 
 pub fn spawn(app: Arc<App>) {
@@ -19,8 +20,11 @@ pub fn spawn(app: Arc<App>) {
         let mut started: HashMap<u64, Instant> = HashMap::new();
         let mut recorded: HashSet<u64> = HashSet::new();
         let mut pruned = Instant::now() - Duration::from_secs(3600);
+        let mut changes = slsk_engine::changes();
         loop {
-            tokio::time::sleep(POLL).await;
+            if changes.changed().await.is_err() {
+                return;
+            }
             let Some(engine) = app.session.engine() else {
                 continue;
             };
@@ -29,13 +33,17 @@ pub fn spawn(app: Arc<App>) {
             for t in &uploads {
                 match t.state {
                     "transferring" => {
-                        started.entry(t.id).or_insert_with(Instant::now);
+                        started.entry(t.id).or_insert_with(|| {
+                            app.activity.upload(t, true);
+                            Instant::now()
+                        });
                     }
                     "completed" | "failed" | "cancelled" if !recorded.contains(&t.id) => {
                         let seconds = started.get(&t.id).map(|s| s.elapsed().as_secs_f64());
                         match crate::db::record_upload(&app.db, t, seconds).await {
                             Ok(()) => {
                                 recorded.insert(t.id);
+                                app.activity.upload(t, false);
                             }
                             Err(e) => tracing::warn!(error = %e, "could not record an upload"),
                         }

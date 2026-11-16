@@ -135,6 +135,25 @@ pub enum Event {
     Status(Status),
 }
 
+/// What another user did with our shares.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Activity {
+    /// Asked for our whole share list.
+    Browse { username: String },
+    /// Opened one of our folders.
+    Folder { username: String, folder: String },
+    /// A search reached us, from the server or the distributed network, and
+    /// was looked up in our shares: `results` files matched (0 for none).
+    /// Searches not looked up (our own, a banned user's, too short, or shed
+    /// under load) are not reported.
+    Search {
+        username: String,
+        query: String,
+        distributed: bool,
+        results: usize,
+    },
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Direction {
     Download,
@@ -203,6 +222,9 @@ pub(crate) struct Inner {
     server_tx: RwLock<Option<mpsc::Sender<Bytes>>>,
     status: watch::Sender<Status>,
     events: broadcast::Sender<Event>,
+    /// Kept apart from `events`: the distributed network relays searches
+    /// fast enough to crowd out the messages that channel carries.
+    activity: broadcast::Sender<Arc<Activity>>,
     reconnect: Notify,
     shares: shares::Shares,
     excluded: RwLock<Vec<String>>,
@@ -302,6 +324,12 @@ impl Inner {
         self.banned.read().contains(&username.to_lowercase())
     }
 
+    /// Tell subscribers what someone did with our shares. Nobody listening
+    /// is fine: the event is dropped.
+    fn activity(&self, activity: Activity) {
+        let _ = self.activity.send(Arc::new(activity));
+    }
+
     fn set_status(&self, status: Status) {
         self.metrics.logged_in.store(
             u64::from(matches!(status, Status::LoggedIn { .. })),
@@ -327,12 +355,14 @@ impl Engine {
         cfg.listen_port = listener.local_addr()?.port();
         let (status, _) = watch::channel(Status::Connecting);
         let (events, _) = broadcast::channel(4096);
+        let (activity, _) = broadcast::channel(4096);
         let metrics = Arc::new(Metrics::default());
         let inner = Arc::new(Inner {
             credentials: RwLock::new((cfg.username.clone(), cfg.password.clone())),
             server_tx: RwLock::new(None),
             status,
             events,
+            activity,
             reconnect: Notify::new(),
             shares: Arc::new(arc_swap::ArcSwap::from_pointee(shares::ShareIndex::empty())),
             excluded: RwLock::new(Vec::new()),
@@ -388,6 +418,12 @@ impl Engine {
 
     pub fn status(&self) -> watch::Receiver<Status> {
         self.0.status.subscribe()
+    }
+
+    /// What other users do with our shares, as it happens. A subscriber that
+    /// falls behind loses the oldest; nothing waits for it.
+    pub fn activity(&self) -> broadcast::Receiver<Arc<Activity>> {
+        self.0.activity.subscribe()
     }
 
     pub fn events(&self) -> broadcast::Receiver<Event> {

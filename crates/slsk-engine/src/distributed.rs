@@ -239,7 +239,7 @@ async fn run_parent(
                     adopt_position(&inner, position.0.unwrap_or(0), position.1.clone());
                 }
                 forward(&inner, &raw);
-                peers::respond_to_search(&inner, &searcher, token, &query);
+                peers::respond_to_search(&inner, &searcher, token, &query, true);
             }
             DistribMessage::Embedded { code: 3, payload } if is_parent(&inner) => {
                 handle_search_body(&inner, payload)
@@ -299,7 +299,7 @@ fn handle_search_body(inner: &Arc<Inner>, payload: Bytes) {
     }) = DistribMessage::decode(3, payload)
     {
         forward(inner, &raw);
-        peers::respond_to_search(inner, &username, token, &query);
+        peers::respond_to_search(inner, &username, token, &query, true);
     }
 }
 

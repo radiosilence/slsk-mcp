@@ -2,6 +2,7 @@
 //! album from a peer into the library, a web UI, and GraphQL/MCP for an
 //! assistant to drive it.
 
+mod activity;
 mod analysis;
 mod art;
 mod auth;
@@ -36,6 +37,7 @@ pub struct App {
     pub jobs: Arc<jobs::Jobs>,
     pub social: Arc<social::Social>,
     pub library: Arc<library::Library>,
+    pub activity: Arc<activity::Activity>,
 }
 
 #[tokio::main]
@@ -149,6 +151,8 @@ async fn main() -> anyhow::Result<()> {
     session.boot().await?;
     let jobs = jobs::Jobs::new(db.clone(), session.clone(), &cfg, importer, library.clone());
     let social = social::Social::new(db.clone(), session.clone(), jobs.clone());
+    let activity = activity::Activity::new(db.clone());
+    activity.spawn(session.clone());
     let app = Arc::new(App {
         cfg: cfg.clone(),
         db,
@@ -156,6 +160,7 @@ async fn main() -> anyhow::Result<()> {
         jobs: jobs.clone(),
         social: social.clone(),
         library: library.clone(),
+        activity,
     });
     tokio::spawn(async move { library.follow().await });
     jobs.spawn();
@@ -179,9 +184,11 @@ async fn main() -> anyhow::Result<()> {
     // a drain that can take minutes, rather than going dark for it.
     let (stopped, _) = tokio::sync::watch::channel(false);
     let stop = stopped.clone();
+    let activity = app.activity.clone();
     tokio::spawn(async move {
         shutdown().await;
         tracing::info!("stopping; waiting for any import in progress");
+        activity.close().await;
         jobs.drain().await;
         let _ = stop.send(true);
     });

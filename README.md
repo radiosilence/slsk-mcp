@@ -370,6 +370,20 @@ tags and moving into the library, with the MusicBrainz requests it has made
 and the budget the service last reported. GraphQL gives the same on `Job`
 (`stage`, `stageSince`, `stageUntil`, `musicbrainzRequests`).
 
+The Activity page shows what other users do with your shares: who is
+browsing them and which folders they open, the searches that reach you that
+your shares answer (with how many files, and whether the distributed network
+relayed them), and uploads starting and ending, each as it happens. Below it
+are the last week's trends: the most searched words, those searched for that
+your shares never answered (worth a wishlist entry), your folders most opened
+or downloaded from, and people who came back on more than one day.
+Browses, opened folders and answered searches are kept a row each for 90
+days. The distributed network relays many searches a second, so every search
+is otherwise only counted by its normalised words per hour, held in memory
+for the hour and written as that hour's thousand most searched when it ends.
+GraphQL has the same: `shareActivity`, `shareLog` and `shareTrends`, for an
+assistant asked what people have been looking for lately.
+
 Each search opens a tab on the Search page, so a run of searches can be
 read one at a time without losing the earlier results. Tabs are kept in the
 database with the best 500 folders each search found, so they survive a
