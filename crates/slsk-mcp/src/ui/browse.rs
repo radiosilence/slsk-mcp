@@ -691,12 +691,10 @@ pub(super) fn albums(
         if d.files.is_empty() || !within(name, at) {
             continue;
         }
-        let music = d.files.iter().any(|f| {
-            let n = f.name.to_string_lossy();
-            n.rsplit_once('.').is_some_and(|(_, ext)| {
-                crate::folders::AUDIO.contains(&ext.to_ascii_lowercase().as_str())
-            })
-        });
+        let music = d
+            .files
+            .iter()
+            .any(|f| crate::folders::is_audio_name(&f.name.to_string_lossy()));
         if !music {
             extras.push(d);
             continue;

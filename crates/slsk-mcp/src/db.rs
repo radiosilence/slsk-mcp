@@ -83,8 +83,9 @@ pub(crate) const LIVE_GRAB: &str = "SELECT * FROM jobs WHERE lower(title) = lowe
 const JOB_OF_SOURCE: &str = "SELECT * FROM jobs \
      WHERE json_extract(source, '$.username') = ?1 AND json_extract(source, '$.folder') = ?2 \
        AND (?4 IS NULL OR id != ?4) \
+       AND NOT coalesce(json_extract(source, '$.picked'), 0) \
        AND (status IN ('downloading', 'importing', 'waiting', 'review', 'suspect') \
-            OR (status = 'imported' AND updated_at > ?3)) \
+            OR (?5 AND status = 'imported' AND updated_at > ?3)) \
      ORDER BY created_at DESC LIMIT 1";
 pub(crate) const JOBS: &str = "SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?1";
 pub(crate) const JOBS_OF_STATUS: &str =
@@ -370,6 +371,9 @@ pub enum Source {
         username: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         folder: Option<String>,
+        /// Some of the folder's files, ticked one by one, rather than all.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        picked: bool,
     },
     /// A file fetched over HTTP: an album as a zip, or a single track.
     Url { url: String },
@@ -655,20 +659,24 @@ pub async fn live_grab(db: &Db, query: &str) -> Result<Option<Job>> {
     .await
 }
 
-/// A job already fetching the folder `folder` from `username`, or that
-/// imported it in the last day, other than `except`: asking for it again is
-/// the same request.
+/// A job other than `except` fetching the whole folder `folder` from
+/// `username`, or with `imported`, one that imported it in the last day:
+/// asking for it again is the same request.
 pub async fn job_of_source(
     db: &Db,
     username: &str,
     folder: &str,
     except: Option<Uuid>,
+    imported: bool,
 ) -> Result<Option<Job>> {
     let (username, folder) = (username.to_string(), folder.to_string());
     let since = ts(&(chrono::Utc::now() - chrono::Duration::days(1)));
     db.run(move |c| {
         c.prepare_cached(JOB_OF_SOURCE)?
-            .query_row(params![username, folder, since, except], Job::from_row)
+            .query_row(
+                params![username, folder, since, except, imported],
+                Job::from_row,
+            )
             .optional()
     })
     .await
@@ -1647,6 +1655,7 @@ mod tests {
             Source::Files {
                 username: "peer".into(),
                 folder: None,
+                picked: false,
             },
             Vec::new(),
         );
@@ -1902,33 +1911,44 @@ mod tests {
     #[tokio::test]
     async fn a_folder_in_hand_is_found_by_peer_and_path() {
         let db = Db::memory().await;
+        let files = |folder: &str, picked: bool| {
+            Json(Source::Files {
+                username: "teamnatour".into(),
+                folder: Some(folder.into()),
+                picked,
+            })
+        };
         let mut j = job("Liquid", "downloading");
-        j.source = Json(Source::Files {
-            username: "teamnatour".into(),
-            folder: Some(r"music\Recoil\Liquid".into()),
-        });
+        j.source = files(r"music\Recoil\Liquid", false);
         insert_job(&db, &j, &[file(&j, "01.flac", 10)])
             .await
             .unwrap();
-        let found = |user: &'static str, folder: &'static str, except| {
+        let found = |user: &'static str, folder: &'static str, except, imported| {
             let db = db.clone();
             async move {
-                job_of_source(&db, user, folder, except)
+                job_of_source(&db, user, folder, except, imported)
                     .await
                     .unwrap()
                     .map(|j| j.id)
             }
         };
+        let liquid = r"music\Recoil\Liquid";
+        assert_eq!(found("teamnatour", liquid, None, false).await, Some(j.id));
+        assert_eq!(found("teamnatour", liquid, Some(j.id), false).await, None);
+        assert_eq!(found("someone", liquid, None, false).await, None);
         assert_eq!(
-            found("teamnatour", r"music\Recoil\Liquid", None).await,
-            Some(j.id)
-        );
-        assert_eq!(
-            found("teamnatour", r"music\Recoil\Liquid", Some(j.id)).await,
+            found("teamnatour", r"music\Recoil", None, false).await,
             None
         );
-        assert_eq!(found("someone", r"music\Recoil\Liquid", None).await, None);
-        assert_eq!(found("teamnatour", r"music\Recoil", None).await, None);
+
+        // A track picked from a folder is not the folder.
+        let mut p = job("01", "downloading");
+        p.source = files(r"music\Recoil\Bloodline", true);
+        insert_job(&db, &p, &[]).await.unwrap();
+        assert_eq!(
+            found("teamnatour", r"music\Recoil\Bloodline", None, true).await,
+            None
+        );
 
         let mut g = job("recoil liquid", "downloading");
         g.source = Json(Source::Soulseek {
@@ -1937,25 +1957,29 @@ mod tests {
             folder_raw: br"Music\Recoil\Liquid".to_vec(),
         });
         insert_job(&db, &g, &[]).await.unwrap();
-        assert_eq!(
-            found("paper", r"Music\Recoil\Liquid", None).await,
-            Some(g.id)
-        );
+        let paper = r"Music\Recoil\Liquid";
+        assert_eq!(found("paper", paper, None, false).await, Some(g.id));
         move_status(&db, g.id, &["downloading"], "failed", None)
             .await
             .unwrap();
         assert_eq!(
-            found("paper", r"Music\Recoil\Liquid", None).await,
+            found("paper", paper, None, true).await,
             None,
             "a failed job is not in hand"
         );
+
         move_status(&db, j.id, &["downloading"], "imported", None)
             .await
             .unwrap();
         assert_eq!(
-            found("teamnatour", r"music\Recoil\Liquid", None).await,
+            found("teamnatour", liquid, None, false).await,
+            None,
+            "imported is not in hand"
+        );
+        assert_eq!(
+            found("teamnatour", liquid, None, true).await,
             Some(j.id),
-            "imported today"
+            "but counts as taken for a fallback, for a day"
         );
     }
 
@@ -1969,6 +1993,7 @@ mod tests {
         let source = Source::Files {
             username: "other".into(),
             folder: None,
+            picked: false,
         };
         let moved = replace_files(&db, j.id, &source, &[], &[file(&j, "02.flac", 10)])
             .await

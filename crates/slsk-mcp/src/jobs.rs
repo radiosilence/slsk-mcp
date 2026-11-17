@@ -196,6 +196,10 @@ struct Refused {
     since: tokio::time::Instant,
     next: tokio::time::Instant,
     rounds: u32,
+    /// The job's bytes received when it was last refused: it is settled
+    /// only once more arrive, since files asked for again sit queued for a
+    /// while before the peer accepts or refuses them.
+    received: u64,
 }
 
 /// What to do about a job's files refused for a full queue.
@@ -326,6 +330,9 @@ pub struct Jobs {
     held: parking_lot::Mutex<std::collections::HashSet<Uuid>>,
     /// Downloading jobs whose peer refused files for a full queue.
     refused: parking_lot::Mutex<HashMap<Uuid, Refused>>,
+    /// Held from checking that a folder is not already in hand to making
+    /// its job, so two requests at once make one.
+    creating: Mutex<()>,
 }
 
 impl Jobs {
@@ -341,6 +348,7 @@ impl Jobs {
             limits: cfg.peer_limits,
             held: Default::default(),
             refused: Default::default(),
+            creating: Mutex::new(()),
             library,
             db,
             session,
@@ -401,9 +409,9 @@ impl Jobs {
     /// Queue `folder` and everything under it. The peer is asked for the
     /// complete listing, since search results only carry files whose paths
     /// matched the query — a cover image or a second disc can be missing.
-    /// A folder already on its way, or imported in the last day, is that
-    /// job; a folder holding no audio is refused, since there is no album
-    /// in it to import.
+    /// A folder already on its way is that job; a folder holding no audio is
+    /// refused, since there is no album in it to import. One already
+    /// imported is fetched again, as `grab(refetch)` asks.
     pub async fn from_folder(
         self: &Arc<Self>,
         folder: &Folder,
@@ -411,8 +419,7 @@ impl Jobs {
         alternates: Vec<Alternate>,
     ) -> Result<Job> {
         let engine = self.session.require()?.clone();
-        if let Some(job) = db::job_of_source(&self.db, &folder.username, &folder.path, None).await?
-        {
+        if let Some(job) = self.in_hand(&folder.username, &folder.path).await? {
             return Ok(job);
         }
         let files = self
@@ -447,14 +454,25 @@ impl Jobs {
             alternates,
         );
         let rows = self.rows(job.id, &folder.username, &files);
+        // Checked again under the lock, so two requests at once make one job.
+        let _creating = self.creating.lock().await;
+        if let Some(job) = self.in_hand(&folder.username, &folder.path).await? {
+            return Ok(job);
+        }
         db::insert_job(&self.db, &job, &rows).await?;
         // The next tick asks the peer, once it has room for the job.
         self.wake.notify_one();
         Ok(job)
     }
 
+    /// A job already fetching this folder from this peer.
+    async fn in_hand(&self, username: &str, folder: &str) -> Result<Option<Job>> {
+        Ok(db::job_of_source(&self.db, username, folder, None, false).await?)
+    }
+
     /// Individual files from one user, as a job of their own, from the
-    /// folder that holds them all, if one does.
+    /// folder that holds them all, if one does. Picked files are not the
+    /// whole folder, so they neither find nor stand for a job fetching it.
     pub async fn from_files(
         self: &Arc<Self>,
         username: &str,
@@ -466,7 +484,7 @@ impl Jobs {
             .into_iter()
             .map(|(r, s)| (r, s, String::new()))
             .collect();
-        self.from_listing(username, folder, listing, title).await
+        self.listed(username, folder, true, listing, title).await
     }
 
     /// Files already known from a share listing, each with its
@@ -481,19 +499,33 @@ impl Jobs {
         listing: Vec<(RawStr, u64, String)>,
         title: String,
     ) -> Result<Job> {
+        self.listed(username, folder, false, listing, title).await
+    }
+
+    async fn listed(
+        self: &Arc<Self>,
+        username: &str,
+        folder: Option<String>,
+        picked: bool,
+        listing: Vec<(RawStr, u64, String)>,
+        title: String,
+    ) -> Result<Job> {
         let engine = self.session.require()?.clone();
-        if let Some(folder) = &folder
-            && let Some(job) = db::job_of_source(&self.db, username, folder, None).await?
+        ensure_audio(&listing, folder.as_deref().unwrap_or(&title))?;
+        let _creating = self.creating.lock().await;
+        if !picked
+            && let Some(folder) = &folder
+            && let Some(job) = self.in_hand(username, folder).await?
         {
             return Ok(job);
         }
-        ensure_audio(&listing, folder.as_deref().unwrap_or(&title))?;
         let job = Job::new(
             engine.username(),
             title,
             Source::Files {
                 username: username.to_string(),
                 folder,
+                picked,
             },
             Vec::new(),
         );
@@ -1145,7 +1177,7 @@ impl Jobs {
     /// the wait since the last ask has passed; or give up once it has gone
     /// on for [`QUEUE_FULL_PATIENCE`]. The second value is true the first
     /// time it is seen.
-    fn refusal(&self, id: Uuid, peer: &str, peer_busy: usize) -> (Refusal, bool) {
+    fn refusal(&self, id: Uuid, peer: &str, peer_busy: usize, received: u64) -> (Refusal, bool) {
         let now = tokio::time::Instant::now();
         let mut refused = self.refused.lock();
         let mut first = false;
@@ -1156,8 +1188,10 @@ impl Jobs {
                 since: now,
                 next: now + QUEUE_FULL_FIRST,
                 rounds: 0,
+                received,
             }
         });
+        r.received = received;
         let decision = refusal_due(r, now, peer_busy);
         if decision == Refusal::GiveUp {
             refused.remove(&id);
@@ -1256,11 +1290,15 @@ impl Jobs {
                 .or_default() += 1;
         }
         let now = tokio::time::Instant::now();
-        let mut queue_gave_up = false;
         if refused.is_empty() {
-            self.refused.lock().remove(&job.id);
+            // Settled once the peer sends more; until then, files asked for
+            // again may yet be refused, and the wait goes on where it was.
+            let mut open = self.refused.lock();
+            if open.get(&job.id).is_some_and(|r| received > r.received) {
+                open.remove(&job.id);
+            }
         } else {
-            let (decision, first) = self.refusal(job.id, &refused[0].0.peer, peer_busy);
+            let (decision, first) = self.refusal(job.id, &refused[0].0.peer, peer_busy, received);
             if first {
                 let why = summarise(refused.iter().map(|(_, r)| r.as_str()));
                 tracing::info!(job = %job.id, peer = %refused[0].0.peer, %why, "peer queue full; waiting for it to drain");
@@ -1287,9 +1325,11 @@ impl Jobs {
                 }
                 // What it accepted is still coming: followed as usual.
                 Refusal::Wait => {}
+                // Six hours of a full queue is not a peer dropping off: no
+                // rounds of asking again, whatever else is still coming.
                 Refusal::GiveUp => {
-                    queue_gave_up = true;
-                    *states.entry("failed").or_default() += refused.len();
+                    self.retried.lock().remove(&job.id);
+                    return self.leave(engine, job, &rows, cause::PEER_QUEUE_FULL).await;
                 }
             }
         }
@@ -1371,16 +1411,7 @@ impl Jobs {
             // Most failures are a peer dropping off for a moment. Asking
             // the same peer again, spaced out, resumes from the partial
             // files; a new source would start the album from nothing.
-            let cause = if queue_gave_up {
-                cause::PEER_QUEUE_FULL
-            } else {
-                cause::PEER_FAILED
-            };
-            // Six hours of a full queue is not a peer dropping off.
-            let round = if queue_gave_up {
-                self.retried.lock().remove(&job.id);
-                None
-            } else {
+            let round = {
                 let mut retried = self.retried.lock();
                 let (rounds, next) = retried.entry(job.id).or_insert((0, now));
                 if *rounds >= RETRY_ROUNDS {
@@ -1409,25 +1440,34 @@ impl Jobs {
                     }
                 }
                 Some(false) => {}
-                // Out of stored fallbacks, as a folder picked by hand
-                // always is: a peer that refuses (a daily file limit, a
-                // ban) will not relent, but another may have the album.
-                None if job.alternates.0.is_empty() => {
-                    match self.search_again(engine, job, cause).await? {
-                        Searched::Moved => {}
-                        Searched::NotFound => {
-                            self.fall_back(engine, job, &rows, cause, None).await?
-                        }
-                        Searched::NothingToSearch => {
-                            self.fall_back(engine, job, &rows, cause, Some(NOTHING_TO_SEARCH))
-                                .await?
-                        }
-                    }
-                }
-                None => self.fall_back(engine, job, &rows, cause, None).await?,
+                None => self.leave(engine, job, &rows, cause::PEER_FAILED).await?,
             }
         }
         Ok(())
+    }
+
+    /// Leave this source for the next fallback; out of stored fallbacks, as
+    /// a folder picked by hand always is, search for the album again, since
+    /// a peer that refuses (a daily file limit, a ban) will not relent but
+    /// another may have it.
+    async fn leave(
+        self: &Arc<Self>,
+        engine: &Engine,
+        job: &Job,
+        rows: &[JobFile],
+        cause: &str,
+    ) -> Result<()> {
+        if !job.alternates.0.is_empty() {
+            return self.fall_back(engine, job, rows, cause, None).await;
+        }
+        match self.search_again(engine, job, cause).await? {
+            Searched::Moved => Ok(()),
+            Searched::NotFound => self.fall_back(engine, job, rows, cause, None).await,
+            Searched::NothingToSearch => {
+                self.fall_back(engine, job, rows, cause, Some(NOTHING_TO_SEARCH))
+                    .await
+            }
+        }
     }
 
     /// The folder failed; move to the next candidate, or give up. `cause` is
@@ -1455,7 +1495,7 @@ impl Jobs {
         while !alternates.is_empty() {
             let alt = alternates.remove(0);
             if let Some(other) =
-                db::job_of_source(&self.db, &alt.username, &alt.folder, Some(job.id)).await?
+                db::job_of_source(&self.db, &alt.username, &alt.folder, Some(job.id), true).await?
             {
                 tracing::info!(job = %job.id, user = %alt.username, other = %other.id, "another job has that copy; passing it over");
                 continue;
@@ -2216,7 +2256,7 @@ impl Jobs {
     ) -> Result<Searched> {
         let rows = db::job_files(&self.db, job.id).await?;
         let current = rows.first().map(|r| r.peer.clone()).unwrap_or_default();
-        let Some(wanted) = self.wanted(job, &rows).await else {
+        let Some((wanted, from_title)) = self.wanted(job, &rows).await else {
             tracing::info!(job = %job.id, title = %job.title, "nothing names an album to search for; not looking for another copy");
             return Ok(Searched::NothingToSearch);
         };
@@ -2267,6 +2307,12 @@ impl Jobs {
             .lock()
             .insert(current, tokio::time::Instant::now());
         let mut job = job.clone();
+        // Named for the album from here on, so a later search is for the
+        // album and not for the name of whichever folder it then sits in.
+        if !from_title {
+            db::set_title(&self.db, job.id, &query).await?;
+            job.title = query.clone();
+        }
         job.alternates = Json(found.into_iter().take(4).map(Alternate::from).collect());
         self.fall_back(engine, &job, &rows, cause, None).await?;
         Ok(Searched::Moved)
@@ -2275,7 +2321,8 @@ impl Jobs {
     /// The album a job is of, for searching again: the title it was given,
     /// when a person or a grab chose it rather than it being the folder's
     /// own name; else the tags of what arrived; else the folder it came from.
-    async fn wanted(&self, job: &Job, rows: &[JobFile]) -> Option<crate::fallback::Wanted> {
+    /// True with it when it is the title.
+    async fn wanted(&self, job: &Job, rows: &[JobFile]) -> Option<(crate::fallback::Wanted, bool)> {
         use crate::fallback::Wanted;
         let folder = match &job.source.0 {
             Source::Soulseek { folder, .. } => Some(folder.clone()),
@@ -2293,12 +2340,15 @@ impl Jobs {
         if leaf != Some(job.title.as_str())
             && let Some(w) = Wanted::from_title(&job.title)
         {
-            return Some(w);
+            return Some((w, true));
         }
         if let Some(w) = self.tagged(job.id).await {
-            return Some(w);
+            return Some((w, false));
         }
-        folder.as_deref().and_then(Wanted::from_path)
+        folder
+            .as_deref()
+            .and_then(Wanted::from_path)
+            .map(|w| (w, false))
     }
 
     /// The album the arrived files' tags name most often.
@@ -2480,9 +2530,7 @@ impl Jobs {
 fn ensure_audio(files: &[(RawStr, u64, String)], folder: &str) -> Result<()> {
     let audio = files.iter().any(|(remote, ..)| {
         let name = remote.to_string_lossy();
-        name.rsplit_once('.').is_some_and(|(_, ext)| {
-            crate::folders::AUDIO.contains(&ext.to_ascii_lowercase().as_str())
-        })
+        crate::folders::is_audio_name(&name)
     });
     anyhow::ensure!(audio, "no audio files in {folder}: nothing to import");
     Ok(())
@@ -2822,6 +2870,7 @@ mod tests {
             since: start,
             next: start + QUEUE_FULL_FIRST,
             rounds: 0,
+            received: 0,
         };
         assert_eq!(refusal_due(&mut r, start, 0), Refusal::Wait, "not at once");
         let later = start + QUEUE_FULL_FIRST;

@@ -1328,9 +1328,9 @@ impl SourcesView {
                 folder,
                 folder_raw,
             } => SourceLine::peer(username, Some((folder, folder_raw)), None),
-            Source::Files { username, folder } => {
-                SourceLine::peer(username, folder.as_deref().map(|f| (f, f.as_bytes())), None)
-            }
+            Source::Files {
+                username, folder, ..
+            } => SourceLine::peer(username, folder.as_deref().map(|f| (f, f.as_bytes())), None),
             Source::Url { url } => SourceLine {
                 from: crate::jobs::host(url),
                 profile: None,

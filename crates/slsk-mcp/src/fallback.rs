@@ -198,10 +198,11 @@ fn is_generic_word(w: &str) -> bool {
 
 /// Whether a folder's name says nothing about which album it is: "Covers",
 /// "CD1", "Disc 2", "CD-Extra", "Сovers" in Cyrillic, "Singles & EP's".
+/// A name of numbers alone is a title ("21", "1989"), not a disc number.
 pub fn is_generic(name: &str) -> bool {
-    words(&fold_confusables(name))
-        .iter()
-        .all(|w| is_generic_word(w))
+    let words = words(&fold_confusables(name));
+    words.iter().all(|w| is_generic_word(w))
+        && (words.is_empty() || !words.iter().all(|w| w.chars().all(|c| c.is_ascii_digit())))
 }
 
 /// Whether a folder is one disc or medium of an album: its name starts with
@@ -216,13 +217,16 @@ fn is_medium(name: &str) -> bool {
     }
 }
 
-/// An album's name with what sharers add around it dropped: a leading or
-/// trailing year, and format and media words.
+/// An album's name with what sharers add around it dropped: years and
+/// format and media words, unless nothing else is left ("1989").
 fn album_words(name: &str) -> Vec<String> {
-    words(name)
-        .into_iter()
+    let all = words(name);
+    let kept: Vec<String> = all
+        .iter()
         .filter(|w| !is_year(w) && !GENERIC_FORMAT.contains(&w.as_str()))
-        .collect()
+        .cloned()
+        .collect();
+    if kept.is_empty() { all } else { kept }
 }
 
 /// Generic words that can be dropped from inside an album's name without
@@ -301,13 +305,19 @@ impl Wanted {
     /// Whether a folder found by searching holds this album rather than
     /// something sharing a word with it: every word of the album in the
     /// folder's own album name or the artist above it, and every word of the
-    /// artist somewhere in its path.
+    /// artist somewhere in its path. A title ("recoil liquid") does not say
+    /// which words are the artist, so each of its words need only be
+    /// somewhere in the path, with at least one in the folder's album name.
     pub fn matches(&self, path: &str) -> bool {
         let Some(found) = Self::from_path(path) else {
             return false;
         };
         let near: Vec<&String> = found.album.iter().chain(&found.artist).collect();
         let anywhere: Vec<String> = path.split(['\\', '/']).flat_map(words).collect();
+        if self.artist.is_empty() {
+            return self.album.iter().all(|w| anywhere.contains(w))
+                && self.album.iter().any(|w| found.album.contains(w));
+        }
         self.album.iter().all(|w| near.contains(&w))
             && self.artist.iter().all(|w| anywhere.contains(w))
     }
@@ -451,6 +461,32 @@ mod tests {
         );
         assert_eq!(Wanted::from_tags("Recoil", ""), None);
         assert_eq!(Wanted::from_tags("Recoil", "CD 1"), None);
+    }
+
+    #[test]
+    fn a_title_of_numbers_is_a_title() {
+        assert!(!is_generic("21"));
+        assert!(!is_generic("1989"));
+        assert!(is_generic("CD 2"));
+        let adele = Wanted::from_path(r"Music\Adele\21").unwrap();
+        assert_eq!(adele.query(), "adele 21");
+        assert!(!adele.matches(r"Music\Adele\25"));
+        assert!(adele.matches(r"FLAC\Adele - 21 (2011)"));
+        assert_eq!(
+            Wanted::from_tags("Taylor Swift", "1989")
+                .map(|w| w.query())
+                .as_deref(),
+            Some("taylor swift 1989")
+        );
+    }
+
+    #[test]
+    fn a_grab_title_matches_a_copy_at_the_top_of_a_share() {
+        let grab = Wanted::from_title("recoil liquid").unwrap();
+        assert!(grab.matches(r"Recoil\Liquid"));
+        assert!(grab.matches(r"Nate\Recoil\Liquid (2000)"));
+        assert!(!grab.matches(r"Nate\Recoil\Bloodline"));
+        assert!(!grab.matches(r"Liquid\Recoil\Bloodline"));
     }
 
     #[test]

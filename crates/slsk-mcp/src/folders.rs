@@ -36,6 +36,15 @@ pub(crate) const AUDIO: &[&str] = &[
     "flac", "wav", "aiff", "aif", "ape", "wv", "alac", "mp3", "m4a", "aac", "ogg", "opus", "wma",
 ];
 
+/// Whether a file name is music: one of [`AUDIO`], or DSD, which is not
+/// ranked among copies found but is still an album.
+pub(crate) fn is_audio_name(name: &str) -> bool {
+    name.rsplit_once('.').is_some_and(|(_, ext)| {
+        let ext = ext.to_ascii_lowercase();
+        AUDIO.contains(&ext.as_str()) || matches!(ext.as_str(), "dsf" | "dff")
+    })
+}
+
 #[derive(Debug, Clone, async_graphql::SimpleObject, serde::Serialize, serde::Deserialize)]
 pub struct File {
     /// The full path on the peer, as it must be requested.

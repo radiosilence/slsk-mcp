@@ -289,7 +289,9 @@ fn view_of(
         Source::Soulseek {
             username, folder, ..
         } => (Some(username.clone()), Some(folder.clone()), None),
-        Source::Files { username, folder } => (
+        Source::Files {
+            username, folder, ..
+        } => (
             Some(username.clone()),
             folder
                 .clone()
