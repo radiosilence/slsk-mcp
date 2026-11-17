@@ -547,7 +547,7 @@ impl Jobs {
                 .filter_map(|d| {
                     let dir = d.name.to_string_lossy();
                     let Some(sub) = subdir(&dir, &root) else {
-                        tracing::debug!(%username, %dir, "peer listed a sibling folder; left out");
+                        tracing::info!(%username, %dir, "peer listed a sibling folder; left out");
                         return None;
                     };
                     let prefix = d.name.clone();
@@ -571,17 +571,18 @@ impl Jobs {
         if !listed.is_empty() {
             return Ok(listed);
         }
-        anyhow::ensure!(!fallback.is_empty(), "the peer did not list the folder");
         // Disc folders are grouped under their album, so each file's own
         // directory still decides where it lands.
-        Ok(fallback
+        let found: Vec<_> = fallback
             .iter()
             .filter_map(|(remote, size)| {
                 let path = remote.to_string_lossy();
                 let dir = path.rsplit_once('\\').map_or("", |(d, _)| d);
                 Some((remote.clone(), *size, subdir(dir, &root)?))
             })
-            .collect())
+            .collect();
+        anyhow::ensure!(!found.is_empty(), "the peer did not list the folder");
+        Ok(found)
     }
 
     /// One row per remote path: a peer's listing can repeat a file, and a job
@@ -2108,18 +2109,15 @@ impl Jobs {
 /// since some peers answer a folder request with every folder sharing its
 /// prefix. Anything else keeps to the job's top level.
 fn subdir(dir: &str, root: &str) -> Option<String> {
-    let Some(rest) = dir
-        .get(..root.len())
-        .filter(|head| head.eq_ignore_ascii_case(root))
-        .map(|_| &dir[root.len()..])
-    else {
-        return Some(String::new());
+    let root = root.trim_end_matches('\\');
+    let rest = match dir.get(..root.len()) {
+        Some(head) if head.eq_ignore_ascii_case(root) => &dir[root.len()..],
+        _ => return Some(String::new()),
     };
-    match rest.strip_prefix('\\') {
-        Some(sub) => Some(sub.trim_start_matches('\\').replace('\\', "/")),
-        None if rest.is_empty() => Some(String::new()),
-        None => None,
+    if !root.is_empty() && !rest.is_empty() && !rest.starts_with('\\') {
+        return None;
     }
+    Some(rest.trim_start_matches('\\').replace('\\', "/"))
 }
 
 /// A file's path within its album, as a person and the API name it.
@@ -2404,6 +2402,16 @@ mod tests {
         ] {
             assert_eq!(subdir(dir, root).as_deref(), want, "{dir}");
         }
+        assert_eq!(
+            subdir("music\\Iconic\\CD1", "music\\Iconic\\").as_deref(),
+            Some("CD1"),
+            "a root typed with a trailing backslash"
+        );
+        assert_eq!(
+            subdir("Iconic\\CD1", "").as_deref(),
+            Some("Iconic/CD1"),
+            "a folder at the share root"
+        );
     }
 
     #[test]
