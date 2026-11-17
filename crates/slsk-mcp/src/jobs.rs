@@ -115,10 +115,11 @@ const RETRY_ROUNDS: u32 = 2;
 /// each put-off in a row, the last repeating, and how many times before the
 /// job fails for a person to retry. Most refusals pass within a minute, so
 /// the first tries come soon. Each try goes through sift's one shared
-/// MusicBrainz gate, at most a request a second; from sift 0.11 a refused
-/// request gives up within 45 seconds and the client then rests through any
-/// `Retry-After` without asking, so an early try during an outage costs
-/// MusicBrainz a request or none.
+/// MusicBrainz gate, at most a request a second; a refused request gives up
+/// within 45 seconds and the client then rests without asking, for at least
+/// the `Retry-After` and from sift 0.12.1 for half a minute doubling with each
+/// give-up in a row, so an early try during an outage costs MusicBrainz a
+/// request or none.
 const DEFER: [Duration; 4] = [
     Duration::from_secs(30),
     Duration::from_secs(60),
