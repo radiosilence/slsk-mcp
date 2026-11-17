@@ -3004,9 +3004,9 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
 name = "sift-music"
-version = "0.12.1"
+version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cee4b4933ca2d62a010b3933d6b56c16094e9860305ff782521de610ba818bab"
+checksum = "abf35770b5a203a641b70cd3905712a3c9a579354dba407e48c10a7087abea63"
 dependencies = [
  "anyhow",
  "bytes",
