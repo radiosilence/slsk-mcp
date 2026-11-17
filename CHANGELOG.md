@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.17.1
+
+### Fixed
+
+- **Accept a folder whose listing repeats a file or names its siblings.** A peer's listing that named the same path twice, or answered for `Iconic` with `Iconic (2021)` as well, failed the job on a database constraint. Each path now becomes one download, sibling folders that only share the name's prefix are left out, and both are logged.
+
 ## 0.17.0
 
 ### Changed
