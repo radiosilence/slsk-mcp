@@ -1719,17 +1719,22 @@ mod tests {
         // Held so the write is under way, waiting on the index, when its
         // request goes away.
         let held = library.writer.lock().await;
+        let (done, outcome) = tokio::sync::oneshot::channel();
         let request = library.detached("set album art", move |l| async move {
-            l.set_art(
-                &dir,
-                &image,
-                Target {
-                    embed: true,
-                    file: false,
-                },
-                true,
-            )
-            .await
+            let set = l
+                .set_art(
+                    &dir,
+                    &image,
+                    Target {
+                        embed: true,
+                        file: false,
+                    },
+                    true,
+                )
+                .await
+                .map(drop);
+            let _ = done.send(set.as_ref().map_err(|e| format!("{e:#}")).cloned());
+            set
         });
         assert!(
             tokio::time::timeout(std::time::Duration::from_millis(100), request)
@@ -1738,8 +1743,7 @@ mod tests {
             "the write finished while the index was held"
         );
         drop(held);
-        // The lock is fair: this waits until the write has had it and let go.
-        drop(library.writer.lock().await);
+        outcome.await.unwrap().expect("the write failed");
 
         for f in &files {
             assert_eq!(
