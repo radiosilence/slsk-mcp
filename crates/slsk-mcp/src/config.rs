@@ -61,6 +61,28 @@ pub struct Config {
     pub description: String,
     /// Extensions of files a download asks for but does not wait on.
     pub optional_extensions: Vec<String>,
+    pub peer_limits: PeerLimits,
+}
+
+/// How much is asked of one peer at a time. Sharers cap each user's queue
+/// (often a hundred files or a gigabyte) and refuse files past it, so jobs
+/// beyond these wait here instead of in the peer's queue. A job is never
+/// split: one larger than the limits is asked for alone.
+#[derive(Debug, Clone, Copy)]
+pub struct PeerLimits {
+    pub jobs: usize,
+    pub files: usize,
+    pub bytes: u64,
+}
+
+impl Default for PeerLimits {
+    fn default() -> Self {
+        Self {
+            jobs: 3,
+            files: 100,
+            bytes: 1000 << 20,
+        }
+    }
 }
 
 /// Album cruft: release notes, checksums, playlists, rip logs and scans.
@@ -164,6 +186,14 @@ impl Config {
                 .map(|e| e.trim().trim_start_matches('.').to_lowercase())
                 .filter(|e| !e.is_empty())
                 .collect(),
+            peer_limits: {
+                let d = PeerLimits::default();
+                PeerLimits {
+                    jobs: num("PEER_MAX_JOBS", d.jobs)?.max(1),
+                    files: num("PEER_MAX_FILES", d.files)?.max(1),
+                    bytes: num("PEER_MAX_MEGABYTES", d.bytes >> 20)?.max(1) << 20,
+                }
+            },
             description: or(
                 "DESCRIPTION",
                 concat!(

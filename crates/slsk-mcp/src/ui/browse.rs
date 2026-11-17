@@ -674,17 +674,29 @@ fn parent(path: &[u8]) -> &[u8] {
         .map_or(&[][..], |i| &path[..i])
 }
 
-/// Every folder at or under `at` that holds files, grouped into albums: a
+/// Every folder at or under `at` that holds music, grouped into albums: a
 /// disc folder ("CD1") belongs to its parent, and its name becomes the
 /// file's subdirectory so same-named tracks on different discs stay apart.
+/// A folder with no music (scans, artwork, extras) goes with the nearest
+/// album above it, as a subdirectory, and is left out when there is none:
+/// alone it is no album, and searching for its name finds someone else's.
 pub(super) fn albums(
     dirs: &[Directory],
     at: &[u8],
 ) -> BTreeMap<Vec<u8>, Vec<(RawStr, u64, String)>> {
     let mut out: BTreeMap<Vec<u8>, Vec<(RawStr, u64, String)>> = BTreeMap::new();
+    let mut extras = Vec::new();
     for d in dirs {
         let name = d.name.as_bytes();
         if d.files.is_empty() || !within(name, at) {
+            continue;
+        }
+        let music = d
+            .files
+            .iter()
+            .any(|f| crate::folders::is_audio_name(&f.name.to_string_lossy()));
+        if !music {
+            extras.push(d);
             continue;
         }
         let (root, sub) = match name.iter().rposition(|b| *b == b'\\') {
@@ -700,6 +712,25 @@ pub(super) fn albums(
             _ => (name.to_vec(), String::new()),
         };
         let files = out.entry(root).or_default();
+        for f in &d.files {
+            let mut full = name.to_vec();
+            full.push(b'\\');
+            full.extend_from_slice(f.name.as_bytes());
+            files.push((RawStr(full.into()), f.size, sub.clone()));
+        }
+    }
+    for d in extras {
+        let name = d.name.as_bytes();
+        let Some(root) = out
+            .keys()
+            .filter(|r| under(name, r))
+            .max_by_key(|r| r.len())
+            .cloned()
+        else {
+            continue;
+        };
+        let sub = String::from_utf8_lossy(&name[root.len() + 1..]).replace('\\', "/");
+        let files = out.get_mut(&root).expect("a key just found");
         for f in &d.files {
             let mut full = name.to_vec();
             full.push(b'\\');
@@ -730,7 +761,7 @@ async fn download_tree(State(s): State<UiState>, body: Bytes) -> Response {
     };
     let albums = albums(&listing, &at);
     if albums.is_empty() {
-        return failed(&anyhow::anyhow!("There are no files under that folder."));
+        return failed(&anyhow::anyhow!("There is no music under that folder."));
     }
     if albums.len() > MAX_ALBUMS {
         return failed(&anyhow::anyhow!(
@@ -741,13 +772,14 @@ async fn download_tree(State(s): State<UiState>, body: Bytes) -> Response {
     let count = albums.len();
     let mut started = Vec::new();
     for (root, files) in albums {
-        let title = RawStr(root.into())
-            .to_string_lossy()
-            .rsplit('\\')
-            .next()
-            .unwrap_or_default()
-            .to_string();
-        match s.app.jobs.from_listing(username, files, title).await {
+        let folder = RawStr(root.into()).to_string_lossy();
+        let title = folder.rsplit('\\').next().unwrap_or_default().to_string();
+        match s
+            .app
+            .jobs
+            .from_listing(username, Some(folder), files, title)
+            .await
+        {
             Ok(job) => started.push(job.title),
             Err(e) => {
                 return failed(&e.context(format!("started {} of {count} albums", started.len())));

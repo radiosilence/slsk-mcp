@@ -109,7 +109,7 @@ pub(crate) struct JobFile {
 
 #[derive(SimpleObject)]
 pub(crate) struct TriageCause {
-    /// peer_failed, url_failed, stalled_peer, corrupt_copy, no_audio, requested, untagged, no_candidates,
+    /// peer_failed, peer_queue_full, url_failed, stalled_peer, corrupt_copy, no_audio, requested, untagged, no_candidates,
     /// incomplete, extra_files, weak_match, lossy_source, upsampled,
     /// mb_unavailable, discogs_unavailable or import_error.
     pub cause: String,
@@ -141,7 +141,15 @@ pub(crate) struct Job {
     pub status: String,
     pub error: Option<String>,
     pub username: Option<String>,
+    /// The folder on the peer it is fetched from: the album's, for one
+    /// downloaded from a browse; null for a fetch from a URL, and for files
+    /// picked from more than one folder.
     pub folder: Option<String>,
+    /// For a downloading job asking nothing of its peer yet, why: as much
+    /// of ours as the per-peer limits allow is already with that peer, or
+    /// the peer refused files for a full queue and is asked again once what
+    /// it is sending has arrived.
+    pub held: Option<String>,
     /// For a job started by `importUrl`, the host its file comes from. The
     /// URL itself is not given back: download links carry access tokens.
     pub host: Option<String>,
@@ -155,9 +163,9 @@ pub(crate) struct Job {
     /// When `downloaded_bytes` and `bytes_per_sec` were read, for a client
     /// drawing progress between reads.
     pub measured_at: chrono::DateTime<chrono::Utc>,
-    /// Why it last moved to another source (peer_failed, stalled_peer,
-    /// corrupt_copy, requested, …) and the peer it left; null if it never
-    /// moved.
+    /// Why it last moved to another source (peer_failed, peer_queue_full,
+    /// stalled_peer, corrupt_copy, requested, …) and the peer it left; null
+    /// if it never moved.
     pub moved_because: Option<String>,
     pub moved_from: Option<String>,
     /// For a downloading job: some of its music has arrived, so
@@ -230,6 +238,14 @@ fn view_of(
     let engine = app.session.engine();
     let measured_at = chrono::Utc::now();
     let mut files = Vec::with_capacity(rows.len());
+    // For a job written before its folder was kept.
+    let rows_paths: Vec<String> = match &job.source.0 {
+        Source::Files { folder: None, .. } => rows
+            .iter()
+            .map(|f| String::from_utf8_lossy(&f.remote).into_owned())
+            .collect(),
+        _ => Vec::new(),
+    };
     let (mut total, mut done, mut rate) = (0u64, 0u64, 0u64);
     let music = rows.iter().any(|f| !app.jobs.optional(f));
     let mut finishable = false;
@@ -273,7 +289,15 @@ fn view_of(
         Source::Soulseek {
             username, folder, ..
         } => (Some(username.clone()), Some(folder.clone()), None),
-        Source::Files { username } => (Some(username.clone()), None, None),
+        Source::Files {
+            username, folder, ..
+        } => (
+            Some(username.clone()),
+            folder
+                .clone()
+                .or_else(|| crate::jobs::common_folder(rows_paths.iter().map(String::as_str))),
+            None,
+        ),
         Source::Url { url } => (None, None, Some(crate::jobs::host(url))),
     };
     let retry_at = job.retry_at.filter(|_| job.status == "waiting");
@@ -285,6 +309,7 @@ fn view_of(
         error: job.error,
         username,
         folder,
+        held: app.jobs.held(job.id).map(str::to_string),
         host,
         alternates: job.alternates.0.len(),
         total_bytes: total,

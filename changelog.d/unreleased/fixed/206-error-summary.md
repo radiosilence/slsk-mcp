@@ -1,0 +1,1 @@
+- **Download errors say each reason once.** A job's error and its history now read "Too many files (×312)" rather than repeating the reason for every file, and are cut at 500 characters.
