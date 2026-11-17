@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.18.0
+
+### Added
+
+- **Downloads from one peer are paced to its queue limits.** Each peer is asked for at most three jobs, a hundred files and a gigabyte at once (`PEER_MAX_JOBS`, `PEER_MAX_FILES`, `PEER_MAX_MEGABYTES`), and later jobs wait here. A peer that refuses files for a full queue ("Too many files", "Too many megabytes") is asked again once what it accepted has arrived, less often each time, and is only left after six hours, as the new `peer_queue_full` cause. Before, a discography queued from one sharer failed most of its jobs on the sharer's per-user limit. `Job.held` says why a job is waiting.
+
+### Changed
+
+- **sift 0.12.1: imports deferred for a MusicBrainz outage ask it less and less often.** After giving up on a refusing MusicBrainz the shared client now rests at least 30 seconds, doubling with each give-up in a row up to ten minutes, so a batch of deferred imports no longer keeps returning to a service that is still refusing.
+
+### Fixed
+
+- **Accept a folder whose listing repeats a file or names its siblings.** A peer's listing that named the same path twice, or answered for `Iconic` with `Iconic (2021)` as well, failed the job on a database constraint. Each path now becomes one download, sibling folders that only share the name's prefix are left out, and both are logged.
+- **Scans and extras download with their album.** Downloading a folder tree from a browse made a job of every folder with files, so `Covers`, `PICTURES`, `Assets` and the like were fetched alone and failed as `no_audio`. A folder with no music now goes with the nearest album above it, as a subdirectory, and is left out when there is none; a folder or set of files with no audio is refused up front.
+- **Download errors say each reason once.** A job's error and its history now read "Too many files (×312)" rather than repeating the reason for every file, and are cut at 500 characters.
+- **Looking for another copy searches for the album, not its folder's name.** A job with no fallbacks left searched the network for its title, which for a folder downloaded from a browse is the folder's own name: "Covers", "CD" and "DVD" fetched and imported other artists' albums. The search is now built from the title a person or grab gave, the tags of what arrived, or the artist and album the folder sits under, never from a scans or disc folder's name (lookalike letters such as a Cyrillic "С" included); a copy is taken only when its folder names the same album, and with nothing to search for the job fails saying so.
+- **Jobs keep the folder they came from, and the same folder is not fetched twice at once.** Jobs from a browse or `downloadFiles` now record their folder on the peer, shown as `Job.folder` (derived from the files for older jobs). Asking for a whole folder already on its way returns that job; files picked one by one neither find nor stand for one. A fallback also passes over a copy another job has in hand or imported in the last day.
+- **sift 0.13: albums without art in the Cover Art Archive or on Discogs take the Apple Music catalogue's cover.** Before, an album matched on Discogs while MusicBrainz was unavailable could be filed with no cover, and its import log read only `cover art: none`. The log now gives each source's reason for being passed over. Various Artists compilations are never looked up by name.
+
 ## 0.17.0
 
 ### Changed
