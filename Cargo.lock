@@ -2886,7 +2886,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a253edfdea34032da21af84e16fcc94f4c7a6ba237f9f3bc2dbf43cea8535c44"
 dependencies = [
  "annotate-snippets",
- "base64 0.22.1",
+ "base64 0.23.1",
  "encoding_rs_io",
  "granit-parser",
  "nohash-hasher",
@@ -3005,7 +3005,7 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 [[package]]
 name = "sift-music"
 version = "0.13.0"
-source = "git+https://github.com/radiosilence/sift?rev=3a03b37#3a03b37565126d79d90a6c68fe11435d2bddd189"
+source = "git+https://github.com/radiosilence/sift?rev=7c87f6e#7c87f6eecdd6aa32fd0dc6ce55a1ff44bdf2dc55"
 dependencies = [
  "anyhow",
  "bytes",
