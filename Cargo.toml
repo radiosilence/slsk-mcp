@@ -15,3 +15,6 @@ thiserror = "2"
 strip = true
 lto = "thin"
 codegen-units = 1
+
+[patch.crates-io]
+sift-music = { git = "https://github.com/radiosilence/sift", rev = "3a03b37" }

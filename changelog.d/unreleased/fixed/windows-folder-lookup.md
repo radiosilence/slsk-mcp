@@ -1,0 +1,1 @@
+- **Album art and folder lookups work on Windows.** sift found no album by its folder there, because it bounded indexed paths with `/` while Windows stores them with `\`; setting or removing art, and anything else that names an album by its folder, failed with "not an album in the library".
