@@ -166,7 +166,8 @@ impl ServerHandler for SlskMcp {
                  `tagger { discogs }` is on. Pick the right one, asking the user if it is not obvious, and call \
                  `resolveJob(id, releaseId)`; a release the user links to on either site can be passed as its URL. If no candidate fits these files (wrong \
                  edition, missing discs), `nextSource(id)` drops them and downloads the next copy found. When neither MusicBrainz nor Discogs has such a release \
-                 (no candidates, and the files' tags look right), `importAsIs(id)` files it by those tags; it is \
+                 (no candidates, and the files' tags look right), `importAsIs(id)` files it by those tags (a lone file with no \
+                 album tag, as a store's single comes, is its own album named by its title); it is \
                  refused, with the reason, when they do not describe one album.\n\n\
                  Working the review queue, when the user asks you to deal with what is waiting: for each job in \
                  `review`, read `jobTracks(id)` (the files' tags) and `compareRelease(id, releaseId)` for the best \
@@ -212,7 +213,9 @@ impl ServerHandler for SlskMcp {
                  returns what it would do: the moves, each spare's bin destination, each file's artist \
                  credits and where they come from, every file's edited fields, the genres and lyrics enriching would add (gain is only \
                  measured when written), the release a re-import would apply, the art that would be written or removed. Preview first and show the user \
-                 before applying to more than one album.\n\n\
+                 before applying to more than one album. A write that times out still runs to the end on the \
+                 server: read `albumArt`, `libraryTracks` or `libraryAlbums` to see the result rather than \
+                 calling it again.\n\n\
                  The client is also a chat client: rooms, private messages (`conversations`, `messages`), \
                  buddies and interests. `sendMessage` and `say` reach real people, so they take two calls: \
                  PREVIEW returns a token and sends nothing; show the user the preview, and only after they agree \

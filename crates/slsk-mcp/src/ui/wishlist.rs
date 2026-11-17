@@ -30,6 +30,8 @@ struct Row {
 struct WishlistView {
     rows: Vec<Row>,
     error: Option<String>,
+    /// The wish searched next, by its id, and when (ms since the epoch).
+    next: Option<(uuid::Uuid, i64)>,
 }
 
 impl WishlistView {
@@ -42,12 +44,17 @@ impl WishlistView {
             None => "not searched yet".into(),
         }
     }
+    /// When `w` is searched next, if it is the next one.
+    fn next_for(&self, w: &Wish) -> Option<i64> {
+        let (id, at) = self.next?;
+        (id == w.id).then_some(at)
+    }
     fn label(&self, status: &str) -> &'static str {
         super::status_label(status)
     }
 }
 
-async fn html(app: &App) -> String {
+pub(super) async fn html(app: &App) -> String {
     let view = match app.social.wishes().await {
         Ok(wishes) => {
             let mut rows = Vec::with_capacity(wishes.len());
@@ -62,11 +69,23 @@ async fn html(app: &App) -> String {
                 };
                 rows.push(Row { wish, job });
             }
-            WishlistView { rows, error: None }
+            // The wish the loop picks: unfilled, least recently searched.
+            let next = rows
+                .iter()
+                .filter(|r| r.wish.job_id.is_none())
+                .min_by_key(|r| r.wish.searched_at)
+                .zip(app.social.next_wish())
+                .map(|(r, at)| (r.wish.id, at.timestamp_millis()));
+            WishlistView {
+                rows,
+                error: None,
+                next,
+            }
         }
         Err(e) => WishlistView {
             rows: Vec::new(),
             error: Some(format!("{e:#}")),
+            next: None,
         },
     };
     view.render().unwrap_or_default()

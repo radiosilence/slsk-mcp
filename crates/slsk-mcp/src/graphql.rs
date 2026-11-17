@@ -99,6 +99,10 @@ pub(crate) struct JobFile {
     pub path: String,
     pub size: u64,
     pub bytes: u64,
+    /// Bytes a second, measured over the last second, while it transfers.
+    pub bytes_per_sec: u64,
+    /// Its place in the peer's upload queue, while it waits there.
+    pub place: Option<u32>,
     pub state: String,
     pub error: Option<String>,
 }
@@ -146,6 +150,16 @@ pub(crate) struct Job {
     pub alternates: usize,
     pub total_bytes: u64,
     pub downloaded_bytes: u64,
+    /// Bytes a second across its files, as last measured.
+    pub bytes_per_sec: u64,
+    /// When `downloaded_bytes` and `bytes_per_sec` were read, for a client
+    /// drawing progress between reads.
+    pub measured_at: chrono::DateTime<chrono::Utc>,
+    /// Why it last moved to another source (peer_failed, stalled_peer,
+    /// corrupt_copy, requested, …) and the peer it left; null if it never
+    /// moved.
+    pub moved_because: Option<String>,
+    pub moved_from: Option<String>,
     /// For a downloading job: some of its music has arrived, so
     /// `finishDownload` would import it.
     pub finishable: bool,
@@ -161,32 +175,62 @@ pub(crate) struct Job {
     /// For a job in review: why `importAsIs` would be refused, or empty when
     /// it would be accepted; null when not yet checked.
     pub as_is_blocker: Option<String>,
+    /// For a waiting job, when its import is tried again.
+    pub retry_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// While importing, what the import is doing now: "checking the audio",
+    /// "searching MusicBrainz", "waiting on MusicBrainz (HTTP 503)",
+    /// "writing tags", "moving into the library" and so on.
+    pub stage: Option<String>,
+    /// When the current stage began, to tell a slow step from a stuck one.
+    pub stage_since: Option<chrono::DateTime<chrono::Utc>>,
+    /// When a wait the stage is ends.
+    pub stage_until: Option<chrono::DateTime<chrono::Utc>>,
+    /// Bytes of the stage's work done and in all, when it is counted (the
+    /// spectral check).
+    pub stage_done: Option<u64>,
+    pub stage_total: Option<u64>,
+    /// MusicBrainz requests made since this import began, retries included.
+    pub musicbrainz_requests: Option<u64>,
+    /// MusicBrainz's rate-limit budget, remaining and in all, as the service
+    /// last reported it.
+    pub musicbrainz_remaining: Option<u64>,
+    pub musicbrainz_limit: Option<u64>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
 pub(crate) async fn job_view(app: &App, job: db::Job, with_files: bool) -> Result<Job> {
     let rows = db::job_files(&app.db, job.id).await?;
-    Ok(view_of(app, job, rows, with_files))
+    let moved = db::last_moves(&app.db, &[job.id]).await?.remove(&job.id);
+    Ok(view_of(app, job, rows, moved, with_files))
 }
 
 /// Jobs for a list: one query for every job's files.
 pub(crate) async fn job_views(app: &App, jobs: Vec<db::Job>, with_files: bool) -> Result<Vec<Job>> {
     let ids: Vec<_> = jobs.iter().map(|j| j.id).collect();
     let mut files = db::files_of_jobs(&app.db, &ids).await?;
+    let mut moves = db::last_moves(&app.db, &ids).await?;
     Ok(jobs
         .into_iter()
         .map(|j| {
             let rows = files.remove(&j.id).unwrap_or_default();
-            view_of(app, j, rows, with_files)
+            let moved = moves.remove(&j.id);
+            view_of(app, j, rows, moved, with_files)
         })
         .collect())
 }
 
-fn view_of(app: &App, job: db::Job, rows: Vec<db::JobFile>, with_files: bool) -> Job {
+fn view_of(
+    app: &App,
+    job: db::Job,
+    rows: Vec<db::JobFile>,
+    moved: Option<(Option<String>, Option<String>)>,
+    with_files: bool,
+) -> Job {
     let engine = app.session.engine();
+    let measured_at = chrono::Utc::now();
     let mut files = Vec::with_capacity(rows.len());
-    let (mut total, mut done) = (0u64, 0u64);
+    let (mut total, mut done, mut rate) = (0u64, 0u64, 0u64);
     let music = rows.iter().any(|f| !app.jobs.optional(f));
     let mut finishable = false;
     for f in rows {
@@ -200,6 +244,7 @@ fn view_of(app: &App, job: db::Job, rows: Vec<db::JobFile>, with_files: bool) ->
         if f.state != "skipped" {
             total += f.size as u64;
             done += bytes;
+            rate += live.as_ref().map_or(0, |v| v.speed);
         }
         finishable |= job.status == "downloading"
             && !(music && app.jobs.optional(&f))
@@ -211,6 +256,8 @@ fn view_of(app: &App, job: db::Job, rows: Vec<db::JobFile>, with_files: bool) ->
                 name: name.rsplit('\\').next().unwrap_or(&name).to_string(),
                 size: f.size as u64,
                 bytes,
+                bytes_per_sec: live.as_ref().map_or(0, |v| v.speed),
+                place: live.as_ref().and_then(|v| v.place).filter(|p| *p > 0),
                 state: live
                     .as_ref()
                     .map_or(f.state.clone(), |v| v.state.to_string()),
@@ -219,8 +266,8 @@ fn view_of(app: &App, job: db::Job, rows: Vec<db::JobFile>, with_files: bool) ->
         }
     }
     // A fetch from a URL has no files to count until it is unpacked.
-    if let Some((received, size)) = app.jobs.fetched(job.id) {
-        (done, total) = (received, size);
+    if let Some((received, size, bytes_per_sec)) = app.jobs.fetched(job.id) {
+        (done, total, rate) = (received, size, bytes_per_sec);
     }
     let (username, folder, host) = match &job.source.0 {
         Source::Soulseek {
@@ -229,6 +276,8 @@ fn view_of(app: &App, job: db::Job, rows: Vec<db::JobFile>, with_files: bool) ->
         Source::Files { username } => (Some(username.clone()), None, None),
         Source::Url { url } => (None, None, Some(crate::jobs::host(url))),
     };
+    let retry_at = job.retry_at.filter(|_| job.status == "waiting");
+    let stage = app.jobs.stage(job.id);
     Job {
         id: ID(job.id.to_string()),
         title: job.title,
@@ -240,6 +289,10 @@ fn view_of(app: &App, job: db::Job, rows: Vec<db::JobFile>, with_files: bool) ->
         alternates: job.alternates.0.len(),
         total_bytes: total,
         downloaded_bytes: done,
+        bytes_per_sec: rate,
+        measured_at,
+        moved_because: moved.as_ref().and_then(|m| m.0.clone()),
+        moved_from: moved.and_then(|m| m.1),
         finishable,
         files,
         candidates: job
@@ -250,6 +303,15 @@ fn view_of(app: &App, job: db::Job, rows: Vec<db::JobFile>, with_files: bool) ->
         analysis: job.analysis.map(|a| a.0).unwrap_or_default(),
         import_log: job.import_log,
         as_is_blocker: job.as_is_blocker,
+        retry_at,
+        stage_since: stage.as_ref().map(|s| s.since),
+        stage_until: stage.as_ref().and_then(|s| s.until),
+        stage_done: stage.as_ref().and_then(|s| s.progress.map(|p| p.0)),
+        stage_total: stage.as_ref().and_then(|s| s.progress.map(|p| p.1)),
+        musicbrainz_requests: stage.as_ref().map(|s| s.mb_requests),
+        musicbrainz_remaining: stage.as_ref().and_then(|s| s.mb_budget.map(|b| b.0)),
+        musicbrainz_limit: stage.as_ref().and_then(|s| s.mb_budget.map(|b| b.1)),
+        stage: stage.map(|s| s.label),
         created_at: job.created_at,
         updated_at: job.updated_at,
     }
@@ -747,6 +809,41 @@ impl Query {
             .engine()
             .map(|e| e.uploads().into_iter().map(Transfer::from).collect())
             .unwrap_or_default()
+    }
+
+    /// What other users have just done with our shares, newest first:
+    /// browses, folders opened, searches our shares answered, and uploads
+    /// starting and ending. Held in memory: the latest 200 since the start.
+    async fn share_activity(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(default = 50)] limit: usize,
+    ) -> Vec<crate::activity::ShareEvent> {
+        app(ctx).activity.feed(limit.min(200))
+    }
+
+    /// Browses, folders opened and searches our shares answered, as kept
+    /// (90 days), newest first. `kind` is browse, folder or search.
+    async fn share_log(
+        &self,
+        ctx: &Context<'_>,
+        kind: Option<String>,
+        #[graphql(default = 100)] limit: u32,
+    ) -> Result<Vec<crate::activity::ShareEvent>> {
+        Ok(app(ctx).activity.log(kind, limit.min(1000)).await?)
+    }
+
+    /// What people have been after over the last `days` (at most 90): the
+    /// searches that reached us and how many our shares answered, the most
+    /// searched words, those searched for that we do not hold, our folders
+    /// most opened or downloaded, and visitors who came back. For "what have
+    /// people been looking for lately".
+    async fn share_trends(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(default = 7)] days: u32,
+    ) -> Result<crate::activity::Trends> {
+        Ok(app(ctx).activity.trends(days).await?)
     }
 
     /// Albums on their way into the library, newest first.
@@ -1385,6 +1482,7 @@ impl Mutation {
     /// moves nothing and gives each spare's `binnedTo` as where it would go
     /// (absent, with the reason in `reason`, when it could not be binned):
     /// show the user that first.
+    /// A call that times out still finishes; `libraryAlbums` shows the result.
     async fn bin_duplicates(
         &self,
         ctx: &Context<'_>,
@@ -1398,7 +1496,11 @@ impl Mutation {
                     "give a query; without one this bins every spare in the library",
                 ));
             }
-            return Ok(library.duplicates(&query, true).await?);
+            return Ok(library
+                .detached("bin duplicates", move |l| async move {
+                    l.duplicates(&query, true).await
+                })
+                .await?);
         }
         let mut sets = library.duplicates(&query, false).await?;
         for spare in sets.iter_mut().flat_map(|d| d.spares.iter_mut()) {
@@ -1417,6 +1519,7 @@ impl Mutation {
     /// copy of stays, with the reason in `refused`. `preview: true` moves
     /// nothing and gives each album's `to` as where it would go: show the
     /// user that first, since the query may match more than was meant.
+    /// A call that times out still finishes; `libraryAlbums` shows the result.
     async fn bin_albums(
         &self,
         ctx: &Context<'_>,
@@ -1431,7 +1534,13 @@ impl Mutation {
                 .map(|d| library.bin_destination(d).map_err(anyhow::Error::msg))
                 .collect()
         } else {
-            library.bin_albums(&dirs).await?
+            let dirs: Vec<String> = dirs.iter().map(|d| d.to_string()).collect();
+            library
+                .detached("bin albums", move |l| async move {
+                    let dirs: Vec<&str> = dirs.iter().map(String::as_str).collect();
+                    l.bin_albums(&dirs).await
+                })
+                .await?
         };
         Ok(albums
             .iter()
@@ -1464,6 +1573,7 @@ impl Mutation {
     /// written and the release they come from (none for a split).
     /// `separator` splits each credit on it instead, for artists the
     /// library holds nothing else by ("A; B" with `";"`).
+    /// A call that times out still finishes; `libraryTracks` shows the result.
     async fn credit_artists(
         &self,
         ctx: &Context<'_>,
@@ -1479,7 +1589,11 @@ impl Mutation {
         if preview {
             return Ok(library.credit_plan(&query, &known).await?);
         }
-        Ok(library.credit_with(&query, &known).await?)
+        Ok(library
+            .detached("credit artists", move |l| async move {
+                l.credit_with(&query, &known).await
+            })
+            .await?)
     }
 
     /// Match albums already in the library against MusicBrainz again and
@@ -1491,6 +1605,7 @@ impl Mutation {
     /// given) and why it might stop; `compareRelease` is the track-by-track view for a job, and the
     /// web UI shows the same for a library album. One MusicBrainz search
     /// and several lookups per album.
+    /// A call that times out still finishes; `libraryTracks` shows the result.
     async fn reimport_albums(
         &self,
         ctx: &Context<'_>,
@@ -1515,6 +1630,24 @@ impl Mutation {
                 albums.len()
             )));
         }
+        if !preview {
+            return Ok(library
+                .detached("re-import albums", move |l| async move {
+                    let mut out = Vec::new();
+                    for a in albums {
+                        let result = l.reimport(&a.path, release_id.as_deref()).await;
+                        out.push(result.unwrap_or_else(|e| crate::library::ReimportedAlbum {
+                            path: a.path,
+                            release: None,
+                            review: None,
+                            to: None,
+                            problems: vec![format!("{e:#}")],
+                        }));
+                    }
+                    Ok(out)
+                })
+                .await?);
+        }
         let mut out = Vec::new();
         for a in albums {
             let result = if preview && let Some(id) = &release_id {
@@ -1528,7 +1661,7 @@ impl Mutation {
                         to: None,
                         problems: Vec::new(),
                     })
-            } else if preview {
+            } else {
                 library
                     .rematch(&a.path)
                     .await
@@ -1539,8 +1672,6 @@ impl Mutation {
                         to: None,
                         problems: Vec::new(),
                     })
-            } else {
-                library.reimport(&a.path, release_id.as_deref()).await
             };
             out.push(result.unwrap_or_else(|e| crate::library::ReimportedAlbum {
                 path: a.path,
@@ -1560,6 +1691,7 @@ impl Mutation {
     /// nothing: `genres` and `artists` are what would be added, `lyrics`
     /// how many tracks would get lyrics (`lyricFiles` names them), and
     /// `gainDb` is absent, since gain is measured only when it is written.
+    /// A call that times out still finishes; `libraryTracks` shows the result.
     async fn enrich_library(
         &self,
         ctx: &Context<'_>,
@@ -1571,7 +1703,12 @@ impl Mutation {
         }
         let library = &app(ctx).library;
         if !preview {
-            return Ok(library.enrich(&query).await?);
+            return Ok(library
+                .detached(
+                    "enrich library",
+                    move |l| async move { l.enrich(&query).await },
+                )
+                .await?);
         }
         let known = library.known_artists().await?;
         let mut out = Vec::new();
@@ -1597,6 +1734,7 @@ impl Mutation {
     /// re-filing the whole library is a decision for its owner, made
     /// deliberately with `query: [""]`. `preview: true` moves nothing and
     /// answers as `refilePlan(query)`.
+    /// A call that times out still finishes; `libraryAlbums` shows the result.
     async fn refile(
         &self,
         ctx: &Context<'_>,
@@ -1606,7 +1744,16 @@ impl Mutation {
         if query.is_empty() {
             return Err(Error::new("give a query; [\"\"] means the whole library"));
         }
-        Ok(app(ctx).library.refile(&query, !preview).await?)
+        let library = &app(ctx).library;
+        if preview {
+            return Ok(library.refile(&query, false).await?);
+        }
+        Ok(library
+            .detached(
+                "re-file",
+                move |l| async move { l.refile(&query, true).await },
+            )
+            .await?)
     }
 
     /// Correct tags on albums already in the library, then re-file any the
@@ -1616,6 +1763,7 @@ impl Mutation {
     /// file of each matching album is changed. `changes` are `field=value`,
     /// or `field!` to clear one. A move onto an existing album is refused,
     /// never merged, and reported with the reason.
+    /// A call that times out still finishes; `libraryTracks` shows the result.
     async fn modify_albums(
         &self,
         ctx: &Context<'_>,
@@ -1627,7 +1775,12 @@ impl Mutation {
                 "give a query; this changes every file it matches",
             ));
         }
-        let (_, moves) = app(ctx).library.modify(&query, &changes).await?;
+        let (_, moves) = app(ctx)
+            .library
+            .detached("modify albums", move |l| async move {
+                l.modify(&query, &changes).await
+            })
+            .await?;
         Ok(moves)
     }
 
@@ -1641,6 +1794,7 @@ impl Mutation {
     /// artists, which `creditArtists` can split again. `preview: true`
     /// writes nothing and lists every file's change and where each album
     /// would go: show the user that first.
+    /// A call that times out still finishes; `libraryTracks` shows the result.
     async fn edit_tracks(
         &self,
         ctx: &Context<'_>,
@@ -1704,7 +1858,12 @@ impl Mutation {
         if preview {
             return Ok(out);
         }
-        let moves = library.edit_many(&edits).await?;
+        let moves = library
+            .detached(
+                "edit tracks",
+                move |l| async move { l.edit_many(&edits).await },
+            )
+            .await?;
         for (album, m) in out.iter_mut().zip(moves) {
             album.to = m.to.filter(|to| *to != album.path);
             album.refused = m.refused;
@@ -1717,6 +1876,7 @@ impl Mutation {
     /// folders are left, and listed: players show those before embedded
     /// art. `preview: true` writes nothing and lists the files that carry
     /// pictures: show the user that first.
+    /// A call that times out still finishes; `albumArt` shows the result.
     async fn remove_album_art(
         &self,
         ctx: &Context<'_>,
@@ -1729,7 +1889,14 @@ impl Mutation {
             .into_iter()
             .map(|a| a.path)
             .collect();
-        Ok(library.remove_art(&dirs, !preview).await?)
+        if preview {
+            return Ok(library.remove_art(&dirs, false).await?);
+        }
+        Ok(library
+            .detached("remove album art", move |l| async move {
+                l.remove_art(&dirs, true).await
+            })
+            .await?)
     }
 
     /// Replace the art of the album at `path` (as `libraryAlbums` gives it)
@@ -1742,6 +1909,7 @@ impl Mutation {
     /// before embedded art. `preview: true` fetches and checks the image,
     /// writes nothing, and says what would be written: show the user that
     /// first.
+    /// A call that times out still finishes; `albumArt` shows the result.
     async fn set_album_art(
         &self,
         ctx: &Context<'_>,
@@ -1754,8 +1922,14 @@ impl Mutation {
         let library = &app(ctx).library;
         library.album_at(&path).await?;
         let image = library.fetch_art(&url).await?;
+        let target = crate::art::Target { embed, file };
+        if preview {
+            return Ok(library.set_art(&path, &image, target, false).await?);
+        }
         Ok(library
-            .set_art(&path, &image, crate::art::Target { embed, file }, !preview)
+            .detached("set album art", move |l| async move {
+                l.set_art(&path, &image, target, true).await
+            })
             .await?)
     }
 
@@ -1866,8 +2040,9 @@ impl Mutation {
     }
 
     /// File a job in review by its files' own tags, without MusicBrainz: for
-    /// a release MusicBrainz does not have. Refused, and left in review with
-    /// the reason, unless the tags describe one album.
+    /// a release MusicBrainz does not have, or for a job waiting out a
+    /// MusicBrainz outage whose tags are good. Refused, and left in review
+    /// with the reason, unless the tags describe one album.
     async fn import_as_is(
         &self,
         ctx: &Context<'_>,

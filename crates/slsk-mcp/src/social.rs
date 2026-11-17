@@ -78,6 +78,8 @@ pub struct Social {
     statuses: DashMap<String, (UserStatus, bool)>,
     /// Seconds between wishlist searches, as the server sets it.
     wishlist_interval: AtomicU64,
+    /// When the next wishlist search is due.
+    next_wish: parking_lot::Mutex<Option<chrono::DateTime<chrono::Utc>>>,
     nonces: Nonces,
     /// When each peer's anti-bot challenge was last answered.
     answered: Mutex<HashMap<String, Instant>>,
@@ -130,6 +132,7 @@ impl Social {
             room_list: RwLock::new(Vec::new()),
             statuses: DashMap::new(),
             wishlist_interval: AtomicU64::new(720),
+            next_wish: Default::default(),
             nonces: Nonces::default(),
             answered: Mutex::new(HashMap::new()),
             unread: Mutex::new(None),
@@ -755,14 +758,21 @@ impl Social {
     /// of a wishlist.
     async fn wishlist_loop(&self) {
         loop {
-            tokio::time::sleep(Duration::from_secs(
-                self.wishlist_interval.load(Ordering::Relaxed),
-            ))
-            .await;
+            let wait = Duration::from_secs(self.wishlist_interval.load(Ordering::Relaxed));
+            *self.next_wish.lock() = chrono::Duration::from_std(wait)
+                .ok()
+                .map(|w| chrono::Utc::now() + w);
+            crate::live::changed(crate::live::Topic::Social);
+            tokio::time::sleep(wait).await;
             if let Err(e) = self.wishlist_tick().await {
                 tracing::debug!(error = %e, "wishlist search skipped");
             }
         }
+    }
+
+    /// When the next wishlist search is due, once the loop has started.
+    pub fn next_wish(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        *self.next_wish.lock()
     }
 
     async fn wishlist_tick(&self) -> Result<()> {

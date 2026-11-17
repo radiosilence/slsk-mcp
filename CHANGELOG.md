@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.17.0
+
+### Changed
+
+- **Discogs stands in while MusicBrainz is unavailable.** An import whose MusicBrainz search fails after its retries searches Discogs instead: a close match is filed and a weak one goes to review with its Discogs candidates. The job is put off only when Discogs is off, unavailable or has nothing, or the files name their MusicBrainz release, and its log and event record that Discogs was used because MusicBrainz was unavailable.
+
+### Fixed
+
+- **Import as-is files a single.** One file with no album tag, as Bandcamp sells a single, is filed as its own album named by its title, its artist as album artist and as track 1, where it was refused. The card no longer suggests Import as-is until the files have been checked and pass, and a refusal becomes the card's stated blocker instead of leaving the suggestion in place.
+
+## 0.16.0
+
+### Added
+
+- **Activity on your shares.** A new Activity page shows, as it happens, who browses your shares and which folders they open, the searches your shares answer (with how many files, and whether the distributed network relayed them), and uploads starting and ending, with the week's trends below: the most searched words, what is searched for that you do not hold, your folders most wanted, and people who come back. Browses, folders and answered searches are kept for 90 days; every search is otherwise counted by its words per hour, keeping each hour's thousand most searched, so storage stays bounded. GraphQL has `shareActivity`, `shareLog` and `shareTrends`. The uploads history now follows the engine's changes instead of polling every two seconds.
+
+## 0.15.0
+
+### Added
+
+- **The web UI shows what is happening as it happens.** The live stream is driven by changes (database writes, import stages, the engine's transfer, search-budget and distributed-network signal) instead of a redraw every second, at most four redraws a second, sending only the parts and job cards that changed. An import shows its stage and how long it has been on it (checking the audio with bytes checked, searching MusicBrainz, comparing candidates, a MusicBrainz wait and its reason, writing tags, moving into the library) with its MusicBrainz requests and the service's budget; downloads and uploads show per-file bars with rate and time left, and a waiting job, a MusicBrainz wait and the next free search count down. Bars and countdowns move in the browser from the measurement each patch carries. Cards also say why a job moved to another copy and how many copies remain, the status line names the distributed parent and the searches used this hour, and the wishlist says which wish is searched next and when. GraphQL `Job` gains `stage`, `stageSince`, `stageUntil`, `stageDone`, `stageTotal`, `musicbrainzRequests`, `musicbrainzRemaining`, `musicbrainzLimit`, `bytesPerSec`, `measuredAt`, `movedBecause` and `movedFrom`; `JobFile` gains `bytesPerSec` and `place`.
+
+## 0.14.0
+
+### Security
+
+- **rmcp 3.10.0.** Fixes RUSTSEC-2026-0462, unbounded buffering of response bodies in rmcp's Streamable HTTP clients. slsk-mcp serves MCP and does not use those clients, so it was not exposed, but the audit flags any vulnerable version in the lockfile. The manifest now requires 3.10, so an older one cannot be resolved again.
+
+### Changed
+
+- **Imports put off by a MusicBrainz outage come back sooner, and purchases stop waiting on it.** A put-off import tries again after 30 seconds, a minute, two minutes, then every five, each with jitter, instead of every five minutes from the start; the job shows when. A job from `importUrl` still waiting on MusicBrainz at its third try is filed by its own tags, as `importAsIs` would, when they describe one album and carry a date; its import log and event say so. Soulseek grabs keep waiting. A waiting job can now be filed with `importAsIs` or `resolveJob` without waiting the outage out.
+- **MusicBrainz outages and shed searches stall imports for seconds, not minutes.** sift 0.11.0 stops retrying a refusing MusicBrainz after 45 seconds and then fails requests without sending them until the requested wait is over, so imports queued behind an outage are put off at once instead of each retrying for about six minutes. A search shed by MusicBrainz under load (`x-ratelimit-zone: search`, `Retry-After: 0`) is retried after a few seconds without slowing the client, and lookups by MusicBrainz id carry on while searches rest.
+
+## 0.13.6
+
+### Fixed
+
+- **Library writes outlive their requests.** `setAlbumArt`, `removeAlbumArt`, `editTracks`, `modifyAlbums`, `enrichLibrary`, `creditArtists`, `reimportAlbums`, `refile`, `binAlbums` and `binDuplicates` run in a task of their own that the request waits on, so a client that times out or drops the connection cannot stop a write part way through an album. Each write's outcome, including a panic, is logged when it ends.
+
 ## 0.13.5
 
 ### Added

@@ -111,6 +111,7 @@ impl Download {
         if ok {
             self.wake.notify_one();
             self.stop.notify_waiters();
+            crate::changed();
         }
         ok
     }
@@ -224,8 +225,10 @@ impl Downloads {
     }
 
     pub fn set_place(&self, username: &str, filename: &RawStr, place: u32) {
-        if let Some(d) = self.get(username, filename) {
-            d.place.store(place, Ordering::Relaxed);
+        if let Some(d) = self.get(username, filename)
+            && d.place.swap(place, Ordering::Relaxed) != place
+        {
+            crate::changed();
         }
     }
 }
@@ -635,6 +638,7 @@ async fn receive(inner: &Inner, d: &Download, mut conn: Conn) -> Result<(), Erro
                 Ordering::Relaxed,
             );
             window = (Instant::now(), *offset);
+            crate::changed();
         }
     };
     if !leftover.is_empty() {

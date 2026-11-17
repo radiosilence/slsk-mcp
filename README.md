@@ -88,6 +88,14 @@ tested for interoperability against the `soulseek-rs` client.
    to choose from. A release the matcher did not find can be named by pasting
    its MusicBrainz ID or URL. For a release MusicBrainz lacks, the files can
    be imported as-is by their own tags when those describe one album.
+   A single file with no album tag, as a store's single comes, is filed as
+   its own album named by its title. While MusicBrainz is refusing requests,
+   and Discogs (below) is off or has nothing for the album, the job waits (`waiting`) and tries
+   again after 30 seconds, a minute, two minutes, then every five, each give
+   or take a fifth so jobs put off together come back apart; after 24 tries
+   it fails for a person to retry. A waiting job can be cancelled, or filed
+   by its tags (`importAsIs`) or a named release (`resolveJob`) without
+   waiting the outage out.
 
 ### Discogs
 
@@ -96,7 +104,11 @@ all, where Discogs often has the exact pressing. With `DISCOGS_TOKEN` set to a
 Discogs personal access token, sift searches Discogs whenever MusicBrainz has
 no strong match, and the two compete on distance: a close Discogs release is
 applied without review, and otherwise its releases are offered beside
-MusicBrainz's. The token alone turns this on; the service adds beets'
+MusicBrainz's. When MusicBrainz is unavailable, Discogs is searched in its
+place rather than the import waiting on it (unless the files name their
+MusicBrainz release), so an outage on one service does
+not hold up an album the other knows; the job's log and event say when this
+happened. The token alone turns this on; the service adds beets'
 `discogs` plugin itself, since nobody setting a token means it to go unused.
 
 ### AcoustID
@@ -120,7 +132,10 @@ lands, unpacks it if it is a zip (one folder wrapping everything is
 unwrapped, and an entry naming a path outside the archive refuses it), and
 continues from step 3. The tags are checked and chosen in the same review
 as any other album, so a purchase is not filed until it matches or a person
-has looked at it. There is no other copy to fall back to; a failed fetch is
+has looked at it, with one exception: a purchase's tags come from its seller
+and are usually right, so when MusicBrainz is still unavailable on the third
+try, a purchase whose tags describe one album and carry a date is filed by
+them as `importAsIs` would, and its import log and event say so. There is no other copy to fall back to; a failed fetch is
 retried from the same link. Only the link's host is logged or shown, since
 purchase links carry access tokens, and a fetch is capped at 8 GiB.
 
@@ -339,6 +354,42 @@ server's answer, never a guess. Anything that changes the library or reaches
 other people (binning, re-filing, enriching, banning, sending a message) asks
 first; library changes show exactly what they will do before they do it.
 
+The live stream is driven by what changes, never by a timer: a database
+write to a table a page shows, a stage an import reaches, or the engine's
+signal for a transfer changing state, queue place or measured rate, a search
+spending the hourly budget, or the distributed network gaining or losing a
+parent or child. It redraws only the parts those touch, at most four times a
+second, and sends a part only when it differs from what was sent; on the
+Downloads page a card that changed is sent alone. Between patches the
+browser moves bars, transfer rates, times left and countdowns from the
+measurement each patch carries (bytes, total, rate, and when it was read),
+with one animation-frame loop that runs only while something moves and the
+tab is visible. It never draws past the total or more than two seconds past
+the last measurement, so a stalled peer shows as stalled. Countdowns (a
+put-off import's next try, a MusicBrainz wait, the next free search) are
+sent as deadlines.
+
+An import's card says what it is doing and for how long: checking the audio
+(with the bytes checked), searching MusicBrainz, comparing candidates, a wait
+on MusicBrainz with its reason, fingerprinting, Discogs, cover art, writing
+tags and moving into the library, with the MusicBrainz requests it has made
+and the budget the service last reported. GraphQL gives the same on `Job`
+(`stage`, `stageSince`, `stageUntil`, `musicbrainzRequests`).
+
+The Activity page shows what other users do with your shares: who is
+browsing them and which folders they open, the searches that reach you that
+your shares answer (with how many files, and whether the distributed network
+relayed them), and uploads starting and ending, each as it happens. Below it
+are the last week's trends: the most searched words, those searched for that
+your shares never answered (worth a wishlist entry), your folders most opened
+or downloaded from, and people who came back on more than one day.
+Browses, opened folders and answered searches are kept a row each for 90
+days. The distributed network relays many searches a second, so every search
+is otherwise only counted by its normalised words per hour, held in memory
+for the hour and written as that hour's thousand most searched when it ends.
+GraphQL has the same: `shareActivity`, `shareLog` and `shareTrends`, for an
+assistant asked what people have been looking for lately.
+
 Each search opens a tab on the Search page, so a run of searches can be
 read one at a time without losing the earlier results. Tabs are kept in the
 database with the best 500 folders each search found, so they survive a
@@ -388,7 +439,10 @@ on in the background, an album at a time, with progress and a result for
 each.
 
 The GraphQL mutations behind these take `preview: true` for the same answer
-without the change, so an assistant can show it first.
+without the change, so an assistant can show it first. Applied, each runs in
+a task of its own that the request only waits on: an assistant's call that
+times out, or a dropped connection, does not stop a write part way through
+an album, and the outcome is logged either way.
 
 Browsing shares, a peer's or this client's own (the library as peers see it,
 read from the share index rather than over the network), works like Finder's

@@ -83,9 +83,14 @@ impl Upload {
     /// Move `from` → `to` only if nothing else (a cancel, a ban) moved it
     /// first.
     fn transition(&self, from: UploadState, to: UploadState) -> bool {
-        self.state
+        let ok = self
+            .state
             .compare_exchange(from as u8, to as u8, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
+            .is_ok();
+        if ok {
+            crate::changed();
+        }
+        ok
     }
 
     /// Cancel unless it already finished.
@@ -574,6 +579,7 @@ async fn send(inner: &Arc<Inner>, u: &Upload) -> Result<u64, Error> {
                 Ordering::Relaxed,
             );
             window = (Instant::now(), sent);
+            crate::changed();
         }
     }
     // The downloader closes the connection once it has everything. Wait for

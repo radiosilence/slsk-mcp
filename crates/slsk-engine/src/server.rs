@@ -217,7 +217,7 @@ fn dispatch(inner: &Arc<Inner>, msg: &FromServer) {
             username,
             token,
             query,
-        } => peers::respond_to_search(inner, username, *token, query),
+        } => peers::respond_to_search(inner, username, *token, query, false),
         FromServer::MessageUser {
             id,
             username,

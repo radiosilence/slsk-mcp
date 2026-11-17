@@ -480,6 +480,9 @@ fn on_message(inner: &Arc<Inner>, username: &str, msg: PeerMessage, reply: &mpsc
                 respond(slsk_proto::peer::shared_file_list_frame(&[], &[]));
             } else {
                 respond(inner.shares.load().browse_frame());
+                inner.activity(crate::Activity::Browse {
+                    username: username.to_string(),
+                });
             }
         }
         PeerMessage::SharedFileList { dirs, .. } => {
@@ -525,6 +528,13 @@ fn on_message(inner: &Arc<Inner>, username: &str, msg: PeerMessage, reply: &mpsc
             } else {
                 inner.shares.load().folder(&folder)
             };
+            // Only a folder we hold: a peer can name anything.
+            if !dirs.is_empty() {
+                inner.activity(crate::Activity::Folder {
+                    username: username.to_string(),
+                    folder: folder.to_string_lossy(),
+                });
+            }
             respond(
                 PeerMessage::FolderContentsResponse {
                     token,
@@ -740,7 +750,13 @@ pub(crate) async fn answer_indirect(
 
 /// A search from the server or the distributed network. Answering costs a
 /// connection to the searcher, so answers are bounded and shed under load.
-pub(crate) fn respond_to_search(inner: &Arc<Inner>, username: &str, token: u32, query: &str) {
+pub(crate) fn respond_to_search(
+    inner: &Arc<Inner>,
+    username: &str,
+    token: u32,
+    query: &str,
+    distributed: bool,
+) {
     inner
         .metrics
         .search_requests
@@ -768,6 +784,12 @@ pub(crate) fn respond_to_search(inner: &Arc<Inner>, username: &str, token: u32, 
             .map(|f| f.search_entry())
             .collect()
     };
+    inner.activity(crate::Activity::Search {
+        username: username.to_string(),
+        query: query.to_string(),
+        distributed,
+        results: files.len(),
+    });
     if files.is_empty() {
         return;
     }

@@ -2569,9 +2569,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp"
-version = "3.8.0"
+version = "3.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8be15815186873ea063bf005011d16c356804973489e40c39116ae3a2878d1f"
+checksum = "b5949e504d5ab9944a168259afc0c39ac0230627b6ec5367ace194c59bcbe163"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -2590,6 +2590,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "sha2",
  "sse-stream",
  "thiserror",
  "tokio",
@@ -2602,9 +2603,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp-macros"
-version = "3.8.0"
+version = "3.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8b0748e054a5f5598b3213cf72099ae6b2745ba4d996c59ccf455150a7dbb839"
+checksum = "b98a686693ee91b665c6f89f182fca6e141c8a63dc113b11b38c1bf3491606b7"
 dependencies = [
  "darling 0.24.1",
  "proc-macro2",
@@ -3003,9 +3004,9 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
 name = "sift-music"
-version = "0.10.2"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac845baf237d540038b21bf5d9dc65c5aacf8a18db5d1c7f132c2967573da915"
+checksum = "88c186b0b5ed074f935159bf2ec7f9c6aaff2b6936ccc1b00f08f3ae17faa7be"
 dependencies = [
  "anyhow",
  "bytes",
@@ -3096,7 +3097,7 @@ dependencies = [
 
 [[package]]
 name = "slsk-mcp"
-version = "0.13.5"
+version = "0.17.0"
 dependencies = [
  "anyhow",
  "askama",
@@ -3113,6 +3114,7 @@ dependencies = [
  "futures-util",
  "http",
  "image",
+ "libc",
  "parking_lot 0.13.0",
  "percent-encoding",
  "png",
@@ -3128,6 +3130,7 @@ dependencies = [
  "sha2",
  "sift-music",
  "slsk-engine",
+ "slsk-testserver",
  "soulseek-rs-lib",
  "symphonia",
  "thiserror",

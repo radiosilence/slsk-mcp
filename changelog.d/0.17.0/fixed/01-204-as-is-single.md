@@ -1,0 +1,1 @@
+- **Import as-is files a single.** One file with no album tag, as Bandcamp sells a single, is filed as its own album named by its title, its artist as album artist and as track 1, where it was refused. The card no longer suggests Import as-is until the files have been checked and pass, and a refusal becomes the card's stated blocker instead of leaving the suggestion in place.
