@@ -210,6 +210,8 @@ pub fn is_generic(name: &str) -> bool {
 /// is a medium alone ("CD", "DVD").
 fn is_medium(name: &str) -> bool {
     match words(&fold_confusables(name)).as_slice() {
+        // A disc folder numbered alone ("2"); a longer number is a title.
+        [n] if n.len() == 1 && n.chars().all(|c| c.is_ascii_digit()) => true,
         [first, ..] if is_numbered_medium(first) => true,
         [first] => MEDIA.contains(&first.as_str()),
         [first, n, ..] => MEDIA.contains(&first.as_str()) && n.chars().all(|c| c.is_ascii_digit()),
@@ -280,16 +282,34 @@ impl Wanted {
         })
     }
 
-    /// From a title a person or a grab gave the job, when it names something.
+    /// From a title a person or a grab gave the job, when it names
+    /// something. "Artist - Album" is read as the two; a grab's query does
+    /// not say which of its words are which.
     pub fn from_title(title: &str) -> Option<Self> {
         if is_generic(title) {
             return None;
+        }
+        if let Some((artist, album)) = title.split_once(" - ")
+            && !is_generic(album)
+        {
+            return Some(Self {
+                artist: words(artist),
+                album: album_words(album),
+            });
         }
         let album = album_words(title);
         (!album.is_empty()).then_some(Self {
             artist: Vec::new(),
             album,
         })
+    }
+
+    /// A title that reads back as this: "artist - album".
+    pub fn title(&self) -> String {
+        match self.artist.is_empty() {
+            true => self.album.join(" "),
+            false => format!("{} - {}", self.artist.join(" "), self.album.join(" ")),
+        }
     }
 
     /// The words to search the network for.
@@ -461,6 +481,25 @@ mod tests {
         );
         assert_eq!(Wanted::from_tags("Recoil", ""), None);
         assert_eq!(Wanted::from_tags("Recoil", "CD 1"), None);
+    }
+
+    #[test]
+    fn a_title_written_back_keeps_its_artist_apart() {
+        let w = Wanted::from_path(r"music\Recoil (FLAC)\Albums\2000 Liquid (CD)").unwrap();
+        let again = Wanted::from_title(&w.title()).unwrap();
+        assert_eq!(again, w);
+        assert!(!again.matches(r"Liquid Records\Recoil - Bloodline"));
+        assert!(again.matches(r"FLAC\Recoil - Liquid"));
+    }
+
+    #[test]
+    fn a_disc_folder_numbered_alone_is_not_the_album() {
+        assert_eq!(
+            Wanted::from_path(r"Music\Recoil\Liquid\2")
+                .map(|w| w.query())
+                .as_deref(),
+            Some("recoil liquid")
+        );
     }
 
     #[test]

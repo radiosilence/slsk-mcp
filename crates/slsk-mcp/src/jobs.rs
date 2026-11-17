@@ -2310,8 +2310,8 @@ impl Jobs {
         // Named for the album from here on, so a later search is for the
         // album and not for the name of whichever folder it then sits in.
         if !from_title {
-            db::set_title(&self.db, job.id, &query).await?;
-            job.title = query.clone();
+            job.title = wanted.title();
+            db::set_title(&self.db, job.id, &job.title).await?;
         }
         job.alternates = Json(found.into_iter().take(4).map(Alternate::from).collect());
         self.fall_back(engine, &job, &rows, cause, None).await?;
