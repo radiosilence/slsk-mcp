@@ -80,6 +80,12 @@ pub(crate) const LIVE_GRAB: &str = "SELECT * FROM jobs WHERE lower(title) = lowe
 
 /// Newest first. Two statements rather than `?1 IS NULL OR status = ?1`,
 /// which no index can answer.
+const JOB_OF_SOURCE: &str = "SELECT * FROM jobs \
+     WHERE json_extract(source, '$.username') = ?1 AND json_extract(source, '$.folder') = ?2 \
+       AND (?4 IS NULL OR id != ?4) \
+       AND (status IN ('downloading', 'importing', 'waiting', 'review', 'suspect') \
+            OR (status = 'imported' AND updated_at > ?3)) \
+     ORDER BY created_at DESC LIMIT 1";
 pub(crate) const JOBS: &str = "SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?1";
 pub(crate) const JOBS_OF_STATUS: &str =
     "SELECT * FROM jobs WHERE status = ?1 ORDER BY created_at DESC LIMIT ?2";
@@ -356,8 +362,15 @@ pub enum Source {
         folder: String,
         folder_raw: Vec<u8>,
     },
-    /// Files picked individually.
-    Files { username: String },
+    /// Files picked individually, and the folder they were picked from:
+    /// the album's on the peer, for a browsed album, or the one folder
+    /// holding them all. Absent in rows written before it was kept, and for
+    /// files from more than one folder.
+    Files {
+        username: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        folder: Option<String>,
+    },
     /// A file fetched over HTTP: an album as a zip, or a single track.
     Url { url: String },
 }
@@ -637,6 +650,25 @@ pub async fn live_grab(db: &Db, query: &str) -> Result<Option<Job>> {
     db.run(move |c| {
         c.prepare_cached(LIVE_GRAB)?
             .query_row(params![query, since], Job::from_row)
+            .optional()
+    })
+    .await
+}
+
+/// A job already fetching the folder `folder` from `username`, or that
+/// imported it in the last day, other than `except`: asking for it again is
+/// the same request.
+pub async fn job_of_source(
+    db: &Db,
+    username: &str,
+    folder: &str,
+    except: Option<Uuid>,
+) -> Result<Option<Job>> {
+    let (username, folder) = (username.to_string(), folder.to_string());
+    let since = ts(&(chrono::Utc::now() - chrono::Duration::days(1)));
+    db.run(move |c| {
+        c.prepare_cached(JOB_OF_SOURCE)?
+            .query_row(params![username, folder, since, except], Job::from_row)
             .optional()
     })
     .await
@@ -1614,6 +1646,7 @@ mod tests {
             title.into(),
             Source::Files {
                 username: "peer".into(),
+                folder: None,
             },
             Vec::new(),
         );
@@ -1867,6 +1900,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_folder_in_hand_is_found_by_peer_and_path() {
+        let db = Db::memory().await;
+        let mut j = job("Liquid", "downloading");
+        j.source = Json(Source::Files {
+            username: "teamnatour".into(),
+            folder: Some(r"music\Recoil\Liquid".into()),
+        });
+        insert_job(&db, &j, &[file(&j, "01.flac", 10)])
+            .await
+            .unwrap();
+        let found = |user: &'static str, folder: &'static str, except| {
+            let db = db.clone();
+            async move {
+                job_of_source(&db, user, folder, except)
+                    .await
+                    .unwrap()
+                    .map(|j| j.id)
+            }
+        };
+        assert_eq!(
+            found("teamnatour", r"music\Recoil\Liquid", None).await,
+            Some(j.id)
+        );
+        assert_eq!(
+            found("teamnatour", r"music\Recoil\Liquid", Some(j.id)).await,
+            None
+        );
+        assert_eq!(found("someone", r"music\Recoil\Liquid", None).await, None);
+        assert_eq!(found("teamnatour", r"music\Recoil", None).await, None);
+
+        let mut g = job("recoil liquid", "downloading");
+        g.source = Json(Source::Soulseek {
+            username: "paper".into(),
+            folder: r"Music\Recoil\Liquid".into(),
+            folder_raw: br"Music\Recoil\Liquid".to_vec(),
+        });
+        insert_job(&db, &g, &[]).await.unwrap();
+        assert_eq!(
+            found("paper", r"Music\Recoil\Liquid", None).await,
+            Some(g.id)
+        );
+        move_status(&db, g.id, &["downloading"], "failed", None)
+            .await
+            .unwrap();
+        assert_eq!(
+            found("paper", r"Music\Recoil\Liquid", None).await,
+            None,
+            "a failed job is not in hand"
+        );
+        move_status(&db, j.id, &["downloading"], "imported", None)
+            .await
+            .unwrap();
+        assert_eq!(
+            found("teamnatour", r"music\Recoil\Liquid", None).await,
+            Some(j.id),
+            "imported today"
+        );
+    }
+
+    #[tokio::test]
     async fn a_new_source_does_not_revive_a_cancelled_job() {
         let db = Db::memory().await;
         let j = job("a", "cancelled");
@@ -1875,6 +1968,7 @@ mod tests {
             .unwrap();
         let source = Source::Files {
             username: "other".into(),
+            folder: None,
         };
         let moved = replace_files(&db, j.id, &source, &[], &[file(&j, "02.flac", 10)])
             .await

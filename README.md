@@ -69,9 +69,21 @@ tested for interoperability against the `soulseek-rs` client.
    lossless first (FLAC before WAV), then free upload slot, queue length and
    speed.
 2. The best folder's full listing is requested from the peer and each file is
-   queued. Failed files are asked for again from the same peer twice, resuming
-   from what arrived; after that, or after twenty minutes without a byte, the
-   next of four fallback folders is tried. Cruft such as `.nfo`, `.sfv` and
+   queued. Each peer is asked for at most three jobs, a hundred files and a
+   gigabyte of ours at once (`PEER_MAX_*`); further jobs for it wait here, so
+   queueing a whole discography from one sharer does not run into the
+   per-user queue limits most sharers set. A peer that still refuses files
+   for a full queue ("Too many files", "Too many megabytes") is asked for
+   them again once what it accepted has arrived, less often each time, and
+   only left after six hours (`peer_queue_full`). Other failed files are
+   asked for again from the same peer twice, resuming from what arrived;
+   after that, or after twenty minutes without a byte, the next of four
+   fallback folders is tried. With none left, the album is searched for
+   again: by the title the job was given, the tags of what arrived, or the
+   artist and album its folder sits under, never by a scans or disc folder's
+   own name ("Covers", "CD2"), and a copy found is taken only when its
+   folder names the same album. A folder already being fetched, or imported
+   in the last day, is not fetched again. Cruft such as `.nfo`, `.sfv` and
    cover scans (`OPTIONAL_EXTENSIONS`) is asked for first but never waited
    on: sharers often list a file they will not send, and once the music has
    arrived whatever of it is still queued is dropped. A person can also
@@ -161,7 +173,7 @@ band and are not detected
 ### When something goes wrong
 
 Every outcome other than a clean import is recorded with a cause from a fixed
-set (`stalled_peer`, `corrupt_copy`, `no_audio`, `no_candidates`,
+set (`stalled_peer`, `peer_queue_full`, `corrupt_copy`, `no_audio`, `no_candidates`,
 `weak_match`, `incomplete`, `lossy_source`, `upsampled`, …) and the version
 that produced it, in a history kept after the job itself is gone. The
 `triage` query groups them by cause with examples, and
@@ -321,6 +333,7 @@ startup.
 | `LISTEN_PORT` | `2234` | The peer port. Must be reachable for peers behind NAT to connect. |
 | `UPLOAD_SLOTS`, `UPLOAD_LIMIT`, `DOWNLOAD_LIMIT` | `500`, `0`, `0` | Uploads at once, then limits in bytes per second (0 is unlimited). Each running upload holds a socket and a 256 KiB buffer; past what saturates the uplink, more slots split it more ways rather than send more. |
 | `OPTIONAL_EXTENSIONS` | `nfo,txt,sfv,md5,ffp,st5,m3u,m3u8,pls,log,accurip,url,ini,db,jpg,jpeg,png,gif,bmp,pdf` | Comma-separated. Files a download asks for first but does not wait on: once the music has arrived, any still queued or failed are dropped. Sharers often list an `.nfo` they never send, which would otherwise hold the album forever. |
+| `PEER_MAX_JOBS`, `PEER_MAX_FILES`, `PEER_MAX_MEGABYTES` | `3`, `100`, `1000` | How much is asked of one peer at once. Sharers cap each user's queue and refuse files past it; jobs beyond these wait here instead. A job is never split, and one is always asked for when the peer has nothing else of ours, however large. |
 | `SEARCHES_PER_HOUR` | `600` | Searches allowed in any rolling hour, 0 for unlimited. Every search is relayed to thousands of peers, and the server temporarily bans accounts that search in floods; past the budget a search is refused with when the next is free. |
 | `MAX_INBOUND_CONNECTIONS`, `MAX_INBOUND_PER_ADDRESS` | `512`, `32` | Connections other peers may hold open to the peer port, in total and from one address. Anyone can connect, so these bound what strangers can hold. Behind a proxy that hides peers' source addresses (Docker's userland proxy, Docker Desktop), every peer arrives from one address: raise the per-address limit to the total. |
 | `DESCRIPTION` | names the client as automated | The user info other peers see, until a description is saved from the Profile tab. The default says this is an automated client that shares back, so sharers can decide for themselves. |

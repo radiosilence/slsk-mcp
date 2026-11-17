@@ -1,0 +1,1 @@
+- **Jobs keep the folder they came from, and the same folder is not fetched twice.** Jobs from a browse or `downloadFiles` now record their folder on the peer, shown as `Job.folder` (derived from the files for older jobs). Asking for a folder already on its way, or imported in the last day, returns that job, and a fallback passes over a copy another job has.

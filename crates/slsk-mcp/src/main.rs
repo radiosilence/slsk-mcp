@@ -10,6 +10,7 @@ mod config;
 mod crypto;
 mod db;
 mod error;
+mod fallback;
 mod folders;
 mod graphql;
 mod jobs;
