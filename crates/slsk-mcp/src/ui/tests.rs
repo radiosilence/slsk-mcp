@@ -616,6 +616,66 @@ mod browse {
         assert_eq!(albums(&dirs, b"").len(), 3);
     }
 
+    fn scans(name: &str) -> Directory {
+        Directory {
+            name: RawStr::from(name.to_string()),
+            files: ["front.jpg", "back.jpg"]
+                .iter()
+                .map(|f| FileEntry {
+                    name: RawStr::from(f.to_string()),
+                    size: 1,
+                    extension: "jpg".into(),
+                    attrs: Vec::new(),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn folders_without_music_go_with_the_album_above_them() {
+        let root = "music\\Recoil (FLAC)\\Albums";
+        let dirs = vec![
+            dir(&format!("{root}\\2000 Liquid (CD)"), 2),
+            scans(&format!("{root}\\2000 Liquid (CD)\\Covers")),
+            scans(&format!("{root}\\2000 Liquid (CD)\\CD-Extra\\Assets")),
+            dir(&format!("{root}\\2007 subHuman (CD)\\CD1"), 3),
+            scans(&format!("{root}\\2007 subHuman (CD)\\CD1\\Scans")),
+            scans(&format!("{root}\\2007 subHuman (CD)\\PICTURES")),
+            // Nothing above it holds music.
+            scans("music\\Recoil (FLAC)\\Xtras"),
+        ];
+        let a = albums(&dirs, b"music");
+        let summary: Vec<(String, Vec<String>)> = a
+            .iter()
+            .map(|(k, v)| {
+                let mut subs: Vec<String> = v.iter().map(|f| f.2.clone()).collect();
+                subs.dedup();
+                (String::from_utf8_lossy(k).into_owned(), subs)
+            })
+            .collect();
+        assert_eq!(
+            summary,
+            vec![
+                (
+                    format!("{root}\\2000 Liquid (CD)"),
+                    vec!["".into(), "Covers".into(), "CD-Extra/Assets".into()]
+                ),
+                (
+                    format!("{root}\\2007 subHuman (CD)"),
+                    vec!["CD1".into(), "CD1/Scans".into(), "PICTURES".into()]
+                ),
+            ]
+        );
+        // A scans folder opened on its own is no album.
+        assert!(
+            albums(
+                &dirs,
+                format!("{root}\\2000 Liquid (CD)\\Covers").as_bytes()
+            )
+            .is_empty()
+        );
+    }
+
     fn place(at: &str, open: &[&str]) -> Place {
         Place {
             username: "u".into(),
