@@ -1738,16 +1738,19 @@ mod tests {
             "the write finished while the index was held"
         );
         drop(held);
-        // The lock is fair: this waits until the write has had it and let go.
-        drop(library.writer.lock().await);
 
+        // The spawned write may not have queued on the index yet on a slow
+        // runner, so wait for its result rather than for the lock.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         for f in &files {
-            assert_eq!(
-                sift::meta::pictures(f).unwrap().len(),
-                1,
-                "{} has no art",
-                f.display()
-            );
+            while sift::meta::pictures(f).unwrap().len() != 1 {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "{} has no art",
+                    f.display()
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
         }
         let _ = std::fs::remove_dir_all(&tmp);
     }
