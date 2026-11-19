@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.18.2
+
+### Security
+
+- **The UPnP port mapper runs as nobody.** miniupnpc is installed by a root init container into a shared volume, so the process that parses UPnP responses from the LAN holds no root and no capabilities.
+- **The UPnP port mapper runs on a supported alpine with a narrower footprint.** It moves from alpine 3.21, which reached end of life on 2026-11-01, to alpine 3.24. The install skips package scripts, the init container states its root user explicitly, the mapper runs on a read-only root filesystem with miniupnpc's libraries loaded for `upnpc` alone, and a failed mapping now logs `upnpc`'s own output.
+
 ## 0.18.1
 
 ### Fixed
