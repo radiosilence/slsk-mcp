@@ -8,5 +8,5 @@ export const APP_VERSION = "0.18.1";
 
 export const VERSIONS = {
   slsk: `ghcr.io/radiosilence/slsk-mcp:v${APP_VERSION}`,
-  alpine: "alpine:3.21@sha256:ee16d92f96db08d9d2d07da48555a27f3a69d8f0759021dbc601195ed0d2b5bd",
+  alpine: "alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf",
 } as const;
