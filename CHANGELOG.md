@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.18.1
+
+### Fixed
+
+- **Album art can be set and removed on Windows.** sift 0.13.1 fixes two bugs that stopped it there: albums were not found by their folder, since sift bounded indexed paths with `/` while Windows stores them with `\`, and every tag write failed with "Access is denied", since sift flushed its finished copy through a read-only handle.
+
 ## 0.18.0
 
 ### Added
