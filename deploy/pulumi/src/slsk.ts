@@ -23,9 +23,15 @@ const secretRef = (key: string) => ({
 /**
  * Keeps a UPnP forward for the peer port on the router, renewed at half the
  * lease so a router that forgets mappings on reboot gets it back.
+ *
+ * `miniupnpc` comes from the stock alpine image's package mirror rather than an
+ * image of our own: it is one binary invoked in a loop. `apk` needs root, but
+ * `upnpc` parses whatever answers on the LAN, which is where miniupnpc's CVEs
+ * lie, so an init container installs it as root into a shared volume
+ * (`DEPS_INSTALL`) and this script runs as nobody with that volume read-only on
+ * its PATH.
  */
 const PORTMAP = `set -eu
-apk add --no-cache miniupnpc >/dev/null
 lan() { ip -4 route get 1.1.1.1 | awk '{for (i = 1; i < NF; i++) if ($i == "src") print $(i + 1)}'; }
 while :; do
   ip=$(lan)
@@ -36,6 +42,32 @@ while :; do
   fi
   sleep $((LEASE / 2))
 done`;
+
+/**
+ * Installs miniupnpc into `/deps` from the image's own keys and repositories,
+ * leaving the image itself untouched; the portmap container reads it through
+ * `DEPS_ENV`.
+ */
+const DEPS_INSTALL = [
+  "apk",
+  "add",
+  "--no-cache",
+  "--root",
+  "/deps",
+  "--initdb",
+  "--keys-dir",
+  "/etc/apk/keys",
+  "--repositories-file",
+  "/etc/apk/repositories",
+  "miniupnpc",
+];
+const DEPS_ENV = [
+  {
+    name: "PATH",
+    value: "/deps/usr/bin:/deps/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+  },
+  { name: "LD_LIBRARY_PATH", value: "/deps/usr/lib:/deps/lib" },
+];
 
 /** Private and link-local space: everything the pod has no business reaching. */
 const PRIVATE = [
@@ -379,26 +411,52 @@ export function createSlsk(
               dnsPolicy: "None",
               dnsConfig: { nameservers: ["1.1.1.1", "9.9.9.9"] },
               nodeSelector: { "kubernetes.io/hostname": opts.node },
+              volumes: [{ name: "deps", emptyDir: {} }],
+              initContainers: [
+                {
+                  name: "deps",
+                  image: VERSIONS.alpine,
+                  command: DEPS_INSTALL,
+                  // Root, because it writes packages into a root-owned
+                  // volume. apk needs no capability to do that, so none is
+                  // kept.
+                  securityContext: {
+                    allowPrivilegeEscalation: false,
+                    capabilities: { drop: ["ALL"] },
+                    seccompProfile: { type: "RuntimeDefault" },
+                  },
+                  volumeMounts: [{ name: "deps", mountPath: "/deps" }],
+                  // Unpacking a package peaks far above what the loop needs.
+                  resources: {
+                    requests: { cpu: "5m", memory: "16Mi" },
+                    limits: { memory: "128Mi" },
+                  },
+                },
+              ],
               containers: [
                 {
                   name: "portmap",
                   image: VERSIONS.alpine,
                   command: ["sh", "-c", PORTMAP],
                   env: [
+                    ...DEPS_ENV,
                     { name: "PORT", value: String(conf.listenPort) },
                     { name: "LEASE", value: String(lease) },
                   ],
-                  // Root only because the script installs miniupnpc as it
-                  // starts; with every capability dropped that is all root
-                  // can do here.
                   securityContext: {
+                    runAsUser: 65534,
+                    runAsGroup: 65534,
+                    runAsNonRoot: true,
                     allowPrivilegeEscalation: false,
                     capabilities: { drop: ["ALL"] },
                     seccompProfile: { type: "RuntimeDefault" },
                   },
+                  volumeMounts: [{ name: "deps", mountPath: "/deps", readOnly: true }],
+                  // A sleeping shell that wakes every half-lease to run
+                  // `upnpc` once.
                   resources: {
-                    requests: { cpu: "5m", memory: "16Mi" },
-                    limits: { memory: "128Mi" },
+                    requests: { cpu: "5m", memory: "8Mi" },
+                    limits: { memory: "32Mi" },
                   },
                 },
               ],
