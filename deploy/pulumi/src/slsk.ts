@@ -25,22 +25,61 @@ const secretRef = (key: string) => ({
  * lease so a router that forgets mappings on reboot gets it back.
  *
  * `miniupnpc` comes from the stock alpine image's package mirror rather than an
- * image of our own: it is one binary invoked in a loop. `apk` needs root, but
+ * image of our own: it is one binary invoked in a loop. The cost is the
+ * hand-bumped alpine digest in `VERSIONS`, which must stay on a supported
+ * branch, 3.24 or later, for miniupnpc fixes to arrive. `apk` needs root, but
  * `upnpc` parses whatever answers on the LAN, which is where miniupnpc's CVEs
  * lie, so an init container installs it as root into a shared volume and this
  * script runs as nobody with that volume read-only, loading the volume's
  * libraries for `upnpc` alone.
+ *
+ * `-a @` has upnpc forward to its own address on the interface it reached the
+ * router through; the success line names it when upnpc reports it as a plain
+ * IPv4 address and port.
+ *
+ * upnpc's output mixes the WAN address with text any LAN device chooses: an
+ * SSDP responder's description URL is printed verbatim, newlines included, so
+ * it can forge whole lines. The log therefore never carries upnpc's text. A
+ * failure is reported as the UPnP error number from an anchored match, as one
+ * of the fixed messages here, or as upnpc's exit status, so a forged line can
+ * at most change a number. Only a zero exit counts as mapped. A mapping renews
+ * at half its lease. A failure is retried after five minutes, or after half a
+ * lease when the router gives the same answer again, so one that will never
+ * accept the mapping is not asked every five minutes. Where several lines
+ * match, the last is taken: upnpc prints its own result after anything a
+ * device sent.
  */
 const PORTMAP = `set -eu
-lan() { ip -4 route get 1.1.1.1 | awk '{for (i = 1; i < NF; i++) if ($i == "src") print $(i + 1)}'; }
+last=
 while :; do
-  ip=$(lan)
-  if out=$(LD_LIBRARY_PATH=/deps/usr/lib:/deps/lib /deps/usr/bin/upnpc -e slsk -a "$ip" "$PORT" "$PORT" TCP "$LEASE" 2>&1); then
-    echo "mapped TCP $PORT -> $ip:$PORT for $LEASE""s"
+  rc=0
+  out=$(LD_LIBRARY_PATH=/deps/usr/lib /deps/usr/bin/upnpc -e slsk -a @ "$PORT" "$PORT" TCP "$LEASE" 2>&1) || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    last=
+    to=$(printf '%s\\n' "$out" | grep -oE '^InternalIP:Port = [0-9]{1,3}(\\.[0-9]{1,3}){3}:[0-9]{1,5}$' | tail -n 1 || true)
+    echo "mapped TCP $PORT for \${LEASE}s\${to:+ ($to)}"
+    sleep $((LEASE / 2))
   else
-    echo "WARNING: could not map TCP $PORT; peers behind their own NAT cannot reach us: $out"
+    code=$(printf '%s\\n' "$out" | sed -nE 's/^(AddPortMapping|GetSpecificPortMappingEntry)\\(.*\\) failed with code (-?[0-9]{1,4}) .*/\\1 error \\2/p' | tail -n 1)
+    case $code in
+      GetSpecific*) why="router took the mapping but would not confirm it ($code); it may still be in place" ;;
+      ?*) why="router answered $code" ;;
+      *)
+        if printf '%s\\n' "$out" | grep -q '^No IGD'; then
+          why="no UPnP gateway answered"
+        elif printf '%s\\n' "$out" | grep -q '^No valid'; then
+          why="no valid UPnP gateway found; UPnP may be off on the router"
+        else
+          why="upnpc exited $rc"
+        fi
+        ;;
+    esac
+    echo "WARNING: could not map TCP $PORT; peers behind their own NAT cannot reach us: $why"
+    # The same answer from the router twice will not change: back off. A
+    # gateway that did not answer at all may be rebooting, so keep trying.
+    if [ -n "$code" ] && [ "$why" = "$last" ]; then sleep $((LEASE / 2)); else sleep 300; fi
+    last=$why
   fi
-  sleep $((LEASE / 2))
 done`;
 
 /** Private and link-local space: everything the pod has no business reaching. */
@@ -275,6 +314,8 @@ export function createSlsk(
                   runAsNonRoot: false,
                   allowPrivilegeEscalation: false,
                   capabilities: { drop: ["ALL"], add: ["CHOWN", "FOWNER", "DAC_OVERRIDE"] },
+                  // It writes only into its mounts.
+                  readOnlyRootFilesystem: true,
                 },
                 resources: { requests: { cpu: "5m", memory: "8Mi" }, limits: { memory: "32Mi" } },
                 volumeMounts: [
@@ -379,10 +420,13 @@ export function createSlsk(
             spec: {
               automountServiceAccountToken: false,
               // SSDP discovery is multicast on the LAN, which the pod network
-              // does not carry. This pod mounts only its own scratch volume,
-              // holds no secret and runs its loop as nobody on a read-only
-              // root, so what leaves the policy's reach can touch the LAN and
-              // nothing else.
+              // does not carry. No NetworkPolicy selects this pod, and on the
+              // host network it shares the node's network namespace, so it can
+              // reach whatever the node can: the LAN, the internet, the
+              // tailnet, the API server and listeners on the node's loopback.
+              // What bounds it is what it holds: only its own scratch volume,
+              // no secret or service-account token, and a loop running as
+              // nobody with no capabilities on a read-only root.
               hostNetwork: true,
               dnsPolicy: "None",
               dnsConfig: { nameservers: ["1.1.1.1", "9.9.9.9"] },
@@ -413,11 +457,13 @@ export function createSlsk(
                   ],
                   // Root, because apk will not initialise its database or set
                   // file ownership as anyone else. It needs no capability for
-                  // either, so none is kept.
+                  // either, so none is kept, and it writes nothing outside
+                  // `/deps`, so the image stays read-only.
                   securityContext: {
                     runAsUser: 0,
                     runAsNonRoot: false,
                     allowPrivilegeEscalation: false,
+                    readOnlyRootFilesystem: true,
                     capabilities: { drop: ["ALL"] },
                   },
                   volumeMounts: [{ name: "deps", mountPath: "/deps" }],
@@ -448,8 +494,8 @@ export function createSlsk(
                     capabilities: { drop: ["ALL"] },
                   },
                   volumeMounts: [{ name: "deps", mountPath: "/deps", readOnly: true }],
-                  // A sleeping shell that wakes every half-lease to run
-                  // `upnpc` once.
+                  // A sleeping shell that runs `upnpc` once per half-lease,
+                  // or every five minutes while it fails.
                   resources: {
                     requests: { cpu: "5m", memory: "8Mi" },
                     limits: { memory: "32Mi" },

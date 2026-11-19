@@ -249,7 +249,11 @@ pick by what the host already runs.
 - **Kubernetes** — `deploy/pulumi` is a Pulumi component
   (`@radiosilence/slsk-mcp-pulumi`, at the image's version): local volumes for
   the library and downloads pinned to the node that holds them, state on the
-  node's own disk, a UPnP mapper for the peer port, and a NetworkPolicy confining it.
+  node's own disk, a NetworkPolicy confining the service, and a UPnP mapper
+  for the peer port. The mapper runs on the host network, which no
+  NetworkPolicy here confines, so it can reach whatever the node can. It holds
+  no secret. Its loop runs as nobody with no capabilities; before it starts, an
+  init container runs as root to install miniupnpc from the alpine mirror.
 - **Windows** — `slsk-mcp-windows-amd64.zip` on each release, built and tested
   in CI but run by its users rather than the maintainer, so Windows-only
   problems need a Windows user to reproduce them. See below.
