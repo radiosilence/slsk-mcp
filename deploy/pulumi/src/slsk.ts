@@ -44,8 +44,10 @@ const secretRef = (key: string) => ({
  * of the fixed messages here, or as upnpc's exit status, so a forged line can
  * at most change a number. Only a zero exit counts as mapped. A mapping renews
  * at half its lease. A failure is retried after five minutes, or after half a
- * lease when the reason repeats, so a router that will never accept the
- * mapping is not asked every five minutes.
+ * lease when the router gives the same answer again, so one that will never
+ * accept the mapping is not asked every five minutes. Where several lines
+ * match, the last is taken: upnpc prints its own result after anything a
+ * device sent.
  */
 const PORTMAP = `set -eu
 last=
@@ -54,26 +56,28 @@ while :; do
   out=$(LD_LIBRARY_PATH=/deps/usr/lib /deps/usr/bin/upnpc -e slsk -a @ "$PORT" "$PORT" TCP "$LEASE" 2>&1) || rc=$?
   if [ "$rc" -eq 0 ]; then
     last=
-    to=$(printf '%s\\n' "$out" | grep -m 1 -oE '^InternalIP:Port = [0-9]{1,3}(\\.[0-9]{1,3}){3}:[0-9]{1,5}$' || true)
+    to=$(printf '%s\\n' "$out" | grep -oE '^InternalIP:Port = [0-9]{1,3}(\\.[0-9]{1,3}){3}:[0-9]{1,5}$' | tail -n 1 || true)
     echo "mapped TCP $PORT for \${LEASE}s\${to:+ ($to)}"
     sleep $((LEASE / 2))
   else
-    code=$(printf '%s\\n' "$out" | sed -nE 's/^(AddPortMapping|GetSpecificPortMappingEntry)\\(.*\\) failed with code (-?[0-9]{1,4}) .*/\\1 error \\2/p' | head -n 1)
-    disc=$(printf '%s\\n' "$out" | sed -nE 's/^upnpDiscover\\(\\) error code=(-?[0-9]{1,4})$/\\1/p' | head -n 1)
-    if [ -n "$code" ]; then
-      why="router answered $code"
-    elif [ -n "$disc" ]; then
-      why="discovery failed with error $disc"
-    elif printf '%s\\n' "$out" | grep -q '^No IGD'; then
-      why="no UPnP gateway answered"
-    elif printf '%s\\n' "$out" | grep -q '^No valid'; then
-      why="no valid UPnP gateway found; UPnP may be off on the router"
-    else
-      why="upnpc exited $rc"
-    fi
+    code=$(printf '%s\\n' "$out" | sed -nE 's/^(AddPortMapping|GetSpecificPortMappingEntry)\\(.*\\) failed with code (-?[0-9]{1,4}) .*/\\1 error \\2/p' | tail -n 1)
+    case $code in
+      GetSpecific*) why="router took the mapping but would not confirm it ($code); it may still be in place" ;;
+      ?*) why="router answered $code" ;;
+      *)
+        if printf '%s\\n' "$out" | grep -q '^No IGD'; then
+          why="no UPnP gateway answered"
+        elif printf '%s\\n' "$out" | grep -q '^No valid'; then
+          why="no valid UPnP gateway found; UPnP may be off on the router"
+        else
+          why="upnpc exited $rc"
+        fi
+        ;;
+    esac
     echo "WARNING: could not map TCP $PORT; peers behind their own NAT cannot reach us: $why"
-    # The same reason twice is a router that will keep refusing: back off.
-    if [ "$why" = "$last" ]; then sleep $((LEASE / 2)); else sleep 300; fi
+    # The same answer from the router twice will not change: back off. A
+    # gateway that did not answer at all may be rebooting, so keep trying.
+    if [ -n "$code" ] && [ "$why" = "$last" ]; then sleep $((LEASE / 2)); else sleep 300; fi
     last=$why
   fi
 done`;
