@@ -25,7 +25,9 @@ const secretRef = (key: string) => ({
  * lease so a router that forgets mappings on reboot gets it back.
  *
  * `miniupnpc` comes from the stock alpine image's package mirror rather than an
- * image of our own: it is one binary invoked in a loop. `apk` needs root, but
+ * image of our own: it is one binary invoked in a loop. The cost is the
+ * hand-bumped alpine digest in `VERSIONS`, which must stay on a supported
+ * branch, 3.24 or later, for miniupnpc fixes to arrive. `apk` needs root, but
  * `upnpc` parses whatever answers on the LAN, which is where miniupnpc's CVEs
  * lie, so an init container installs it as root into a shared volume and this
  * script runs as nobody with that volume read-only, loading the volume's
@@ -35,10 +37,19 @@ const PORTMAP = `set -eu
 lan() { ip -4 route get 1.1.1.1 | awk '{for (i = 1; i < NF; i++) if ($i == "src") print $(i + 1)}'; }
 while :; do
   ip=$(lan)
-  if out=$(LD_LIBRARY_PATH=/deps/usr/lib:/deps/lib /deps/usr/bin/upnpc -e slsk -a "$ip" "$PORT" "$PORT" TCP "$LEASE" 2>&1); then
+  if [ -z "$ip" ]; then
+    echo "WARNING: no route out, so no LAN address to map TCP $PORT to; retrying in 60s"
+    sleep 60
+    continue
+  fi
+  # stderr alone: stdout is a banner and the WAN address.
+  if err=$(LD_LIBRARY_PATH=/deps/usr/lib /deps/usr/bin/upnpc -e slsk -a "$ip" "$PORT" "$PORT" TCP "$LEASE" 2>&1 >/dev/null); then
     echo "mapped TCP $PORT -> $ip:$PORT for $LEASE""s"
   else
-    echo "WARNING: could not map TCP $PORT; peers behind their own NAT cannot reach us: $out"
+    # Its last line, as printable ASCII and capped, because devices on the LAN
+    # choose what upnpc prints. A range rather than [:print:], which busybox tr
+    # reads as literal characters.
+    echo "WARNING: could not map TCP $PORT; peers behind their own NAT cannot reach us: $(printf '%s' "$err" | tail -n 1 | tr -cd ' -~' | head -c 300)"
   fi
   sleep $((LEASE / 2))
 done`;
@@ -379,10 +390,13 @@ export function createSlsk(
             spec: {
               automountServiceAccountToken: false,
               // SSDP discovery is multicast on the LAN, which the pod network
-              // does not carry. This pod mounts only its own scratch volume,
-              // holds no secret and runs its loop as nobody on a read-only
-              // root, so what leaves the policy's reach can touch the LAN and
-              // nothing else.
+              // does not carry. No NetworkPolicy selects this pod, and on the
+              // host network it shares the node's network namespace, so it can
+              // reach whatever the node can: the LAN, the internet, the
+              // tailnet, the API server and listeners on the node's loopback.
+              // What bounds it is what it holds: only its own scratch volume,
+              // no secret or service-account token, and a loop running as
+              // nobody with no capabilities on a read-only root.
               hostNetwork: true,
               dnsPolicy: "None",
               dnsConfig: { nameservers: ["1.1.1.1", "9.9.9.9"] },
@@ -413,11 +427,13 @@ export function createSlsk(
                   ],
                   // Root, because apk will not initialise its database or set
                   // file ownership as anyone else. It needs no capability for
-                  // either, so none is kept.
+                  // either, so none is kept, and it writes nothing outside
+                  // `/deps`, so the image stays read-only.
                   securityContext: {
                     runAsUser: 0,
                     runAsNonRoot: false,
                     allowPrivilegeEscalation: false,
+                    readOnlyRootFilesystem: true,
                     capabilities: { drop: ["ALL"] },
                   },
                   volumeMounts: [{ name: "deps", mountPath: "/deps" }],
