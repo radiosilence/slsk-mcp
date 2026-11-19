@@ -27,47 +27,21 @@ const secretRef = (key: string) => ({
  * `miniupnpc` comes from the stock alpine image's package mirror rather than an
  * image of our own: it is one binary invoked in a loop. `apk` needs root, but
  * `upnpc` parses whatever answers on the LAN, which is where miniupnpc's CVEs
- * lie, so an init container installs it as root into a shared volume
- * (`DEPS_INSTALL`) and this script runs as nobody with that volume read-only on
- * its PATH.
+ * lie, so an init container installs it as root into a shared volume and this
+ * script runs as nobody with that volume read-only, loading the volume's
+ * libraries for `upnpc` alone.
  */
 const PORTMAP = `set -eu
 lan() { ip -4 route get 1.1.1.1 | awk '{for (i = 1; i < NF; i++) if ($i == "src") print $(i + 1)}'; }
 while :; do
   ip=$(lan)
-  if upnpc -e slsk -a "$ip" "$PORT" "$PORT" TCP "$LEASE" >/dev/null 2>&1; then
+  if out=$(LD_LIBRARY_PATH=/deps/usr/lib:/deps/lib /deps/usr/bin/upnpc -e slsk -a "$ip" "$PORT" "$PORT" TCP "$LEASE" 2>&1); then
     echo "mapped TCP $PORT -> $ip:$PORT for $LEASE""s"
   else
-    echo "WARNING: could not map TCP $PORT; peers behind their own NAT cannot reach us"
+    echo "WARNING: could not map TCP $PORT; peers behind their own NAT cannot reach us: $out"
   fi
   sleep $((LEASE / 2))
 done`;
-
-/**
- * Installs miniupnpc into `/deps` from the image's own keys and repositories,
- * leaving the image itself untouched; the portmap container reads it through
- * `DEPS_ENV`.
- */
-const DEPS_INSTALL = [
-  "apk",
-  "add",
-  "--no-cache",
-  "--root",
-  "/deps",
-  "--initdb",
-  "--keys-dir",
-  "/etc/apk/keys",
-  "--repositories-file",
-  "/etc/apk/repositories",
-  "miniupnpc",
-];
-const DEPS_ENV = [
-  {
-    name: "PATH",
-    value: "/deps/usr/bin:/deps/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-  },
-  { name: "LD_LIBRARY_PATH", value: "/deps/usr/lib:/deps/lib" },
-];
 
 /** Private and link-local space: everything the pod has no business reaching. */
 const PRIVATE = [
@@ -405,25 +379,46 @@ export function createSlsk(
             spec: {
               automountServiceAccountToken: false,
               // SSDP discovery is multicast on the LAN, which the pod network
-              // does not carry. This pod mounts nothing and holds no secret, so
-              // leaving the policy's reach costs nothing.
+              // does not carry. This pod mounts only its own scratch volume,
+              // holds no secret and runs its loop as nobody on a read-only
+              // root, so what leaves the policy's reach can touch the LAN and
+              // nothing else.
               hostNetwork: true,
               dnsPolicy: "None",
               dnsConfig: { nameservers: ["1.1.1.1", "9.9.9.9"] },
               nodeSelector: { "kubernetes.io/hostname": opts.node },
+              securityContext: { seccompProfile: { type: "RuntimeDefault" } },
               volumes: [{ name: "deps", emptyDir: {} }],
               initContainers: [
                 {
                   name: "deps",
                   image: VERSIONS.alpine,
-                  command: DEPS_INSTALL,
-                  // Root, because it writes packages into a root-owned
-                  // volume. apk needs no capability to do that, so none is
-                  // kept.
+                  // Into `/deps` from the image's own keys and repositories,
+                  // leaving the image untouched. Package scripts would have to
+                  // chroot into `/deps`, which has no shell and this container
+                  // no CAP_SYS_CHROOT, so they are skipped.
+                  command: [
+                    "apk",
+                    "add",
+                    "--no-cache",
+                    "--no-scripts",
+                    "--root",
+                    "/deps",
+                    "--initdb",
+                    "--keys-dir",
+                    "/etc/apk/keys",
+                    "--repositories-file",
+                    "/etc/apk/repositories",
+                    "miniupnpc",
+                  ],
+                  // Root, because apk will not initialise its database or set
+                  // file ownership as anyone else. It needs no capability for
+                  // either, so none is kept.
                   securityContext: {
+                    runAsUser: 0,
+                    runAsNonRoot: false,
                     allowPrivilegeEscalation: false,
                     capabilities: { drop: ["ALL"] },
-                    seccompProfile: { type: "RuntimeDefault" },
                   },
                   volumeMounts: [{ name: "deps", mountPath: "/deps" }],
                   // Unpacking a package peaks far above what the loop needs.
@@ -436,10 +431,11 @@ export function createSlsk(
               containers: [
                 {
                   name: "portmap",
+                  // The same image as the init container: the libraries in
+                  // `/deps` are loaded by this image's own musl.
                   image: VERSIONS.alpine,
                   command: ["sh", "-c", PORTMAP],
                   env: [
-                    ...DEPS_ENV,
                     { name: "PORT", value: String(conf.listenPort) },
                     { name: "LEASE", value: String(lease) },
                   ],
@@ -448,8 +444,8 @@ export function createSlsk(
                     runAsGroup: 65534,
                     runAsNonRoot: true,
                     allowPrivilegeEscalation: false,
+                    readOnlyRootFilesystem: true,
                     capabilities: { drop: ["ALL"] },
-                    seccompProfile: { type: "RuntimeDefault" },
                   },
                   volumeMounts: [{ name: "deps", mountPath: "/deps", readOnly: true }],
                   // A sleeping shell that wakes every half-lease to run
