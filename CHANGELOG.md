@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.18.2
+
+### Security
+
+- **The UPnP port mapper runs as nobody.** miniupnpc is installed by a root init container into a shared volume, so the process that parses UPnP responses from the LAN holds no root and no capabilities.
+
 ## 0.18.1
 
 ### Fixed
