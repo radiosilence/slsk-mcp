@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.18.2
+
+### Security
+
+- **The UPnP port mapper runs as nobody.** miniupnpc is installed by a root init container into a shared volume, so the process that parses UPnP responses from the LAN holds no root and no capabilities.
+- **The UPnP port mapper runs on a supported alpine with a narrower footprint.** It moves from alpine 3.21, which reached end of life on 2026-11-01, to alpine 3.24. The install skips package scripts, the init container states its root user explicitly, and the mapper runs on a read-only root filesystem with miniupnpc's libraries loaded for `upnpc` alone. The same alpine image runs the main `slsk` Deployment's root `state` init container, so deploying this restarts the Soulseek client, which is replaced rather than rolled (`Recreate`).
+- **The UPnP port mapper logs no text a LAN device chose, and retries sooner.** `upnpc`'s output mixes the WAN address with text any LAN device controls, newlines included, so the log no longer carries it: a failure is reported as the UPnP error number, a fixed message (no gateway, UPnP off) or `upnpc`'s exit status, and a success names the internal address only when it is a plain IPv4 address and port. `upnpc` now picks the LAN address facing the router itself. A failure retries in five minutes, backing off to half a lease when the router gives the same answer again. The mapper's package-install init container and the Soulseek client's `state` init container run with read-only root filesystems.
+
 ## 0.18.1
 
 ### Fixed
