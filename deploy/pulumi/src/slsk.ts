@@ -34,30 +34,47 @@ const secretRef = (key: string) => ({
  * libraries for `upnpc` alone.
  *
  * `-a @` has upnpc forward to its own address on the interface it reached the
- * router through, which the success line logs as `InternalIP:Port`.
+ * router through; the success line names it when upnpc reports it as a plain
+ * IPv4 address and port.
  *
- * upnpc prints the WAN address, every SSDP responder's announcement and the
- * reason for a failure across stdout and stderr together. The log takes only a
- * line that begins with one of upnpc's own fixed prefixes (see the grep): those
- * lines carry the mapping's arguments, a SOAP error code and its name, never
- * text a responder chose, and the WAN address is on none of them. The line is
- * reduced to printable ASCII (a range, because busybox tr reads [:print:] as
- * literal characters) and capped. A router that accepts the mapping but will
- * not confirm it counts as mapped. A mapping renews at half its lease; a
- * failure is retried after five minutes.
+ * upnpc's output mixes the WAN address with text any LAN device chooses: an
+ * SSDP responder's description URL is printed verbatim, newlines included, so
+ * it can forge whole lines. The log therefore never carries upnpc's text. A
+ * failure is reported as the UPnP error number from an anchored match, as one
+ * of the fixed messages here, or as upnpc's exit status, so a forged line can
+ * at most change a number. Only a zero exit counts as mapped. A mapping renews
+ * at half its lease. A failure is retried after five minutes, or after half a
+ * lease when the reason repeats, so a router that will never accept the
+ * mapping is not asked every five minutes.
  */
 const PORTMAP = `set -eu
+last=
 while :; do
-  if out=$(LD_LIBRARY_PATH=/deps/usr/lib /deps/usr/bin/upnpc -e slsk -a @ "$PORT" "$PORT" TCP "$LEASE" 2>&1) ||
-    { printf '%s\\n' "$out" | grep -q '^GetSpecificPortMappingEntry.*failed' &&
-      ! printf '%s\\n' "$out" | grep -q '^AddPortMapping(.*failed'; }; then
-    to=$(printf '%s\\n' "$out" | grep -m 1 '^InternalIP:Port' | tr -cd ' -~' | head -c 80)
-    echo "mapped TCP $PORT for $LEASE""s \${to:+($to)}"
+  rc=0
+  out=$(LD_LIBRARY_PATH=/deps/usr/lib /deps/usr/bin/upnpc -e slsk -a @ "$PORT" "$PORT" TCP "$LEASE" 2>&1) || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    last=
+    to=$(printf '%s\\n' "$out" | grep -m 1 -oE '^InternalIP:Port = [0-9]{1,3}(\\.[0-9]{1,3}){3}:[0-9]{1,5}$' || true)
+    echo "mapped TCP $PORT for \${LEASE}s\${to:+ ($to)}"
     sleep $((LEASE / 2))
   else
-    why=$(printf '%s\\n' "$out" | grep -m 1 -E '^((AddPortMapping|GetSpecificPortMappingEntry)\\(.*failed with code|No IGD|No valid|Command line argument error|Wrong arguments|invalid protocol|Invalid localport)' | tr -cd ' -~' | head -c 300)
-    echo "WARNING: could not map TCP $PORT; peers behind their own NAT cannot reach us: \${why:-upnpc gave no reason}"
-    sleep 300
+    code=$(printf '%s\\n' "$out" | sed -nE 's/^(AddPortMapping|GetSpecificPortMappingEntry)\\(.*\\) failed with code (-?[0-9]{1,4}) .*/\\1 error \\2/p' | head -n 1)
+    disc=$(printf '%s\\n' "$out" | sed -nE 's/^upnpDiscover\\(\\) error code=(-?[0-9]{1,4})$/\\1/p' | head -n 1)
+    if [ -n "$code" ]; then
+      why="router answered $code"
+    elif [ -n "$disc" ]; then
+      why="discovery failed with error $disc"
+    elif printf '%s\\n' "$out" | grep -q '^No IGD'; then
+      why="no UPnP gateway answered"
+    elif printf '%s\\n' "$out" | grep -q '^No valid'; then
+      why="no valid UPnP gateway found; UPnP may be off on the router"
+    else
+      why="upnpc exited $rc"
+    fi
+    echo "WARNING: could not map TCP $PORT; peers behind their own NAT cannot reach us: $why"
+    # The same reason twice is a router that will keep refusing: back off.
+    if [ "$why" = "$last" ]; then sleep $((LEASE / 2)); else sleep 300; fi
+    last=$why
   fi
 done`;
 
