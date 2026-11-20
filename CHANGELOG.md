@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.18.4
+
+### Fixed
+
+- **Imports write the release type.** sift 0.14 tags every import with its release group's type (`RELEASETYPE`), so players list singles and EPs apart from albums; as-is imports keep the original date, label and identifiers their files carry; and Discogs matches file various-artists releases as compilations. `enrichLibrary` adds the type to albums imported before, and skips measuring gain an album already has.
+
 ## 0.18.3
 
 ### Changed
