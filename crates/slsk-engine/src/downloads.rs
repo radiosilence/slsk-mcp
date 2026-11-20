@@ -165,18 +165,14 @@ impl Downloads {
 
     /// Measure each arriving download's speed from the bytes it moved since
     /// the last call (see [`crate::rate::measure`]).
-    pub(crate) fn measure(
-        &self,
-        seen: &mut std::collections::HashMap<u64, u64>,
-        secs: f64,
-    ) -> bool {
+    pub(crate) fn measure(&self, seen: &mut crate::rate::Seen, now: tokio::time::Instant) -> bool {
         let live: Vec<Arc<Download>> = self
             .map
             .iter()
             .filter(|d| d.state() == DownloadState::Transferring)
             .map(|d| d.clone())
             .collect();
-        crate::rate::measure(seen, live.iter().map(|d| (d.id, &d.bytes, &d.speed)), secs)
+        crate::rate::measure(seen, live.iter().map(|d| (d.id, &d.bytes, &d.speed)), now)
     }
 
     pub fn views(&self) -> Vec<TransferView> {
