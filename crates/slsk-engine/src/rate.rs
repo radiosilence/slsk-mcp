@@ -2,7 +2,9 @@
 //! and start constantly (a file ends, the next is negotiated, a peer stalls),
 //! so the sum of what is transferring this second jumps between nothing and
 //! everything. The totals are instead measured from the byte counters once a
-//! second and averaged exponentially, so a gap decays rather than drops.
+//! second and averaged exponentially, so a gap decays rather than drops. A
+//! rising rate is followed quickly, so a short transfer still reads close to
+//! its real speed.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -11,9 +13,10 @@ use std::time::Duration;
 use crate::Metrics;
 
 const TICK: Duration = Duration::from_secs(1);
-/// The averaging time constant: a burst or a gap moves the reading about
-/// two thirds of the way in this long.
-const TAU: f64 = 5.0;
+/// The averaging time constants, rising and falling: a change moves the
+/// reading about two thirds of the way in this long.
+const RISE: f64 = 1.0;
+const FALL: f64 = 5.0;
 /// Below this, with nothing moving, the reading is shown as nothing rather
 /// than decaying through ever smaller numbers.
 const FLOOR: f64 = 1024.0;
@@ -35,7 +38,9 @@ impl Rates {
 
 /// One step of the average: `rate` after `bytes` moved in `secs`.
 fn step(rate: f64, bytes: u64, secs: f64) -> f64 {
-    let next = rate + (1.0 - (-secs / TAU).exp()) * (bytes as f64 / secs - rate);
+    let now = bytes as f64 / secs;
+    let tau = if now > rate { RISE } else { FALL };
+    let next = rate + (1.0 - (-secs / tau).exp()) * (now - rate);
     if bytes == 0 && next < FLOOR {
         0.0
     } else {
@@ -84,6 +89,12 @@ mod tests {
         assert!((steady - 1_000_000.0).abs() < 1_000.0);
         let after_gap = step(steady, 0, 1.0);
         assert!(after_gap > 750_000.0 && after_gap < 850_000.0);
+    }
+
+    #[test]
+    fn a_start_is_followed_quickly() {
+        let r = (0..3).fold(0.0, |r, _| step(r, 1_000_000, 1.0));
+        assert!(r > 900_000.0);
     }
 
     #[test]
