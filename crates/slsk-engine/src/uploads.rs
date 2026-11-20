@@ -181,16 +181,6 @@ impl Uploads {
             .store(q.waiting as u64, Ordering::Relaxed);
     }
 
-    /// Bytes per second across the uploads sending now.
-    pub fn speed(&self) -> u64 {
-        let q = self.queue.lock();
-        q.active
-            .values()
-            .filter(|u| u.state() == UploadState::Transferring)
-            .map(|u| u.speed.load(Ordering::Relaxed))
-            .sum()
-    }
-
     /// Uploads under way or waiting.
     pub fn pending(&self) -> usize {
         let q = self.queue.lock();
