@@ -1,0 +1,1 @@
+- **The total speeds fall away faster.** A drop now fades over about two seconds rather than five, so the status line reaches zero roughly ten seconds after transfers stop rather than half a minute.

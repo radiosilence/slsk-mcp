@@ -19,7 +19,7 @@ const TICK: Duration = Duration::from_secs(1);
 /// The averaging time constants, rising and falling: a change moves the
 /// reading about two thirds of the way in this long.
 const RISE: f64 = 1.0;
-const FALL: f64 = 5.0;
+const FALL: f64 = 2.0;
 /// Below this, with nothing moving, the reading is shown as nothing rather
 /// than decaying through ever smaller numbers.
 const FLOOR: f64 = 1024.0;
@@ -121,7 +121,7 @@ mod tests {
         let steady = (0..60).fold(0.0, |r, _| step(r, 1_000_000, 1.0));
         assert!((steady - 1_000_000.0).abs() < 1_000.0);
         let after_gap = step(steady, 0, 1.0);
-        assert!(after_gap > 750_000.0 && after_gap < 850_000.0);
+        assert!(after_gap > 550_000.0 && after_gap < 650_000.0);
     }
 
     #[test]
