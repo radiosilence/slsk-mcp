@@ -1,0 +1,1 @@
+- **An upload whose last byte is sent no longer shows its old speed.** While the downloader is given up to 30 seconds to close the connection, the upload reads 0 B/s rather than the speed of its final second.

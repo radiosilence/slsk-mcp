@@ -572,6 +572,9 @@ async fn send(inner: &Arc<Inner>, u: &Upload) -> Result<u64, Error> {
             crate::changed();
         }
     }
+    // Every byte is written, so nothing moves while the close is awaited.
+    u.speed.store(0, Ordering::Relaxed);
+    crate::changed();
     // The downloader closes the connection once it has everything. Wait for
     // that rather than closing first, which some clients read as a failure.
     let mut probe = [0u8; 1];
