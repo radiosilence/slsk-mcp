@@ -1,4 +1,6 @@
-//! The total upload and download speeds, smoothed. Soulseek transfers stop
+//! Transfer speeds, measured once a second from bytes moved rather than in
+//! the transfer loops, so a transfer that stalls reads as stalled. Each
+//! transfer's speed is its last second's; the totals are smoothed. Soulseek transfers stop
 //! and start constantly (a file ends, the next is negotiated, a peer stalls),
 //! so the sum of what is transferring this second jumps between nothing and
 //! everything. The totals are instead measured from the byte counters once a
@@ -6,11 +8,12 @@
 //! rising rate is followed quickly, so a short transfer still reads close to
 //! its real speed.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use crate::Metrics;
+use crate::Inner;
 
 const TICK: Duration = Duration::from_secs(1);
 /// The averaging time constants, rising and falling: a change moves the
@@ -48,7 +51,31 @@ fn step(rate: f64, bytes: u64, secs: f64) -> f64 {
     }
 }
 
-pub(crate) async fn sample(metrics: Arc<Metrics>, rates: Arc<Rates>) {
+/// Store each live transfer's speed over the last `secs`, given its byte
+/// count then (`seen`, by id, replaced with the counts now). A transfer seen
+/// for the first time keeps its speed until the next call. True when any
+/// transfer moved or changed speed, which a person watching would see.
+pub(crate) fn measure<'a>(
+    seen: &mut HashMap<u64, u64>,
+    live: impl Iterator<Item = (u64, &'a AtomicU64, &'a AtomicU64)>,
+    secs: f64,
+) -> bool {
+    let mut now = HashMap::new();
+    let mut changed = false;
+    for (id, bytes, speed) in live {
+        let b = bytes.load(Ordering::Relaxed);
+        if let Some(&was) = seen.get(&id) {
+            let s = (b.saturating_sub(was) as f64 / secs) as u64;
+            changed |= speed.swap(s, Ordering::Relaxed) != s || b != was;
+        }
+        now.insert(id, b);
+    }
+    *seen = now;
+    changed
+}
+
+pub(crate) async fn sample(inner: Arc<Inner>) {
+    let (metrics, rates) = (&inner.metrics, &inner.rates);
     let read = || {
         (
             metrics.bytes_uploaded.load(Ordering::Relaxed),
@@ -59,6 +86,7 @@ pub(crate) async fn sample(metrics: Arc<Metrics>, rates: Arc<Rates>) {
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut last = (tokio::time::Instant::now(), read());
     let (mut up, mut down) = (0.0, 0.0);
+    let (mut uploads, mut downloads) = (HashMap::new(), HashMap::new());
     loop {
         tick.tick().await;
         let now = tokio::time::Instant::now();
@@ -70,10 +98,15 @@ pub(crate) async fn sample(metrics: Arc<Metrics>, rates: Arc<Rates>) {
         up = step(up, bytes.0 - last.1.0, secs);
         down = step(down, bytes.1 - last.1.1, secs);
         last = (now, bytes);
+        let mut changed = inner.uploads.measure(&mut uploads, secs);
+        changed |= inner.downloads.measure(&mut downloads, secs);
         let shown = (up as u64, down as u64);
         if shown != rates.get() {
             rates.up.store(shown.0, Ordering::Relaxed);
             rates.down.store(shown.1, Ordering::Relaxed);
+            changed = true;
+        }
+        if changed {
             crate::changed();
         }
     }
@@ -101,6 +134,20 @@ mod tests {
     fn idle_settles_at_nothing() {
         let r = (0..60).fold(1_000_000.0, |r, _| step(r, 0, 1.0));
         assert_eq!(r, 0.0);
+    }
+
+    #[test]
+    fn a_stalled_transfer_reads_nothing() {
+        let (bytes, speed) = (AtomicU64::new(0), AtomicU64::new(0));
+        let mut seen = HashMap::new();
+        let mut tick = |b: u64| {
+            bytes.store(b, Ordering::Relaxed);
+            measure(&mut seen, [(1, &bytes, &speed)].into_iter(), 1.0);
+            speed.load(Ordering::Relaxed)
+        };
+        assert_eq!(tick(0), 0);
+        assert_eq!(tick(500_000), 500_000);
+        assert_eq!(tick(500_000), 0);
     }
 
     #[test]

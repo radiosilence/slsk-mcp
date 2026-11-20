@@ -1,1 +1,1 @@
-- **An upload whose last byte is sent no longer shows its old speed.** While the downloader is given up to 30 seconds to close the connection, the upload reads 0 B/s rather than the speed of its final second.
+- **Each transfer's speed reads what it moved in the last second.** It was measured only when a write or read went through, so a peer that stalled, or an upload waiting up to 30 seconds for its downloader to close, kept showing its last speed and an ETA counted from it. Speeds are now measured once a second from the bytes moved, and a stall reads 0 B/s.

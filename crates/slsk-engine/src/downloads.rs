@@ -163,6 +163,22 @@ impl Downloads {
         self.map.get(&key(username, filename)).map(|d| d.clone())
     }
 
+    /// Measure each arriving download's speed from the bytes it moved since
+    /// the last call (see [`crate::rate::measure`]).
+    pub(crate) fn measure(
+        &self,
+        seen: &mut std::collections::HashMap<u64, u64>,
+        secs: f64,
+    ) -> bool {
+        let live: Vec<Arc<Download>> = self
+            .map
+            .iter()
+            .filter(|d| d.state() == DownloadState::Transferring)
+            .map(|d| d.clone())
+            .collect();
+        crate::rate::measure(seen, live.iter().map(|d| (d.id, &d.bytes, &d.speed)), secs)
+    }
+
     pub fn views(&self) -> Vec<TransferView> {
         let mut v: Vec<_> = self.map.iter().map(|d| d.view()).collect();
         v.sort_unstable_by_key(|t| t.id);
@@ -614,23 +630,13 @@ async fn receive(inner: &Inner, d: &Download, mut conn: Conn) -> Result<(), Erro
     }
     let mut file = tokio::io::BufWriter::with_capacity(READ_CHUNK, file);
     let leftover: Bytes = first.into();
-    let mut window = (Instant::now(), offset);
-    let mut take = |n: usize, offset: &mut u64| {
+    let take = |n: usize, offset: &mut u64| {
         *offset += n as u64;
         d.bytes.store(*offset, Ordering::Relaxed);
         inner
             .metrics
             .bytes_downloaded
             .fetch_add(n as u64, Ordering::Relaxed);
-        let elapsed = window.0.elapsed();
-        if elapsed >= Duration::from_secs(1) {
-            d.speed.store(
-                ((*offset - window.1) as f64 / elapsed.as_secs_f64()) as u64,
-                Ordering::Relaxed,
-            );
-            window = (Instant::now(), *offset);
-            crate::changed();
-        }
     };
     if !leftover.is_empty() {
         let n = leftover.len().min((size - offset) as usize);

@@ -181,6 +181,20 @@ impl Uploads {
             .store(q.waiting as u64, Ordering::Relaxed);
     }
 
+    /// Measure each sending upload's speed from the bytes it moved since the
+    /// last call (see [`crate::rate::measure`]).
+    pub(crate) fn measure(&self, seen: &mut HashMap<u64, u64>, secs: f64) -> bool {
+        let live: Vec<Arc<Upload>> = self
+            .queue
+            .lock()
+            .active
+            .values()
+            .filter(|u| u.state() == UploadState::Transferring)
+            .cloned()
+            .collect();
+        crate::rate::measure(seen, live.iter().map(|u| (u.id, &u.bytes, &u.speed)), secs)
+    }
+
     /// Uploads under way or waiting.
     pub fn pending(&self) -> usize {
         let q = self.queue.lock();
@@ -542,7 +556,6 @@ async fn send(inner: &Arc<Inner>, u: &Upload) -> Result<u64, Error> {
 
     let started = Instant::now();
     let mut sent = offset;
-    let mut window = (Instant::now(), offset);
     let mut buf = vec![0u8; READ_CHUNK];
     while sent < u.size {
         if u.state() == UploadState::Cancelled {
@@ -562,19 +575,7 @@ async fn send(inner: &Arc<Inner>, u: &Upload) -> Result<u64, Error> {
             .metrics
             .bytes_uploaded
             .fetch_add(n as u64, Ordering::Relaxed);
-        let elapsed = window.0.elapsed();
-        if elapsed >= Duration::from_secs(1) {
-            u.speed.store(
-                ((sent - window.1) as f64 / elapsed.as_secs_f64()) as u64,
-                Ordering::Relaxed,
-            );
-            window = (Instant::now(), sent);
-            crate::changed();
-        }
     }
-    // Every byte is written, so nothing moves while the close is awaited.
-    u.speed.store(0, Ordering::Relaxed);
-    crate::changed();
     // The downloader closes the connection once it has everything. Wait for
     // that rather than closing first, which some clients read as a failure.
     let mut probe = [0u8; 1];
