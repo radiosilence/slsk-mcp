@@ -1845,6 +1845,7 @@ impl Jobs {
                             album = %path.display(),
                             gain_db = ?e.gain_db,
                             genres = ?e.genres,
+                            release_types = ?e.release_types,
                             lyrics = e.lyrics,
                             artists = ?e.artists,
                             problems = ?e.problems,

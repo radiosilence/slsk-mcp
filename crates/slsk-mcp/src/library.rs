@@ -177,6 +177,9 @@ pub struct EnrichedAlbum {
     pub path: String,
     pub gain_db: Option<f64>,
     pub genres: Vec<String>,
+    /// Release types given to an album that had none (`album`, `single`,
+    /// `ep`…, primary first).
+    pub release_types: Vec<String>,
     /// Tracks given lyrics.
     pub lyrics: usize,
     /// With `preview`, the files that would be given lyrics.
@@ -201,6 +204,7 @@ impl EnrichedAlbum {
             path,
             gain_db: None,
             genres: p.genres.clone(),
+            release_types: p.release_types.clone(),
             lyrics: p.lyrics.len(),
             lyric_files: p.lyrics.iter().map(|l| file_name(&l.path)).collect(),
             artists,
@@ -760,7 +764,7 @@ impl Library {
         Ok(sift::credits::Known::from_albums(&albums))
     }
 
-    /// Add gain, genres, lyrics and each artist's credit to matching
+    /// Add gain, genres, release types, lyrics and each artist's credit to matching
     /// albums, as every new import gets. Rewrites tags (only those fields)
     /// across what the query matches, so it is for a deliberate backfill.
     pub async fn enrich(&self, query: &[String]) -> anyhow::Result<Vec<EnrichedAlbum>> {
@@ -782,6 +786,7 @@ impl Library {
                 path: a.dir.to_string_lossy().into_owned(),
                 gain_db: e.gain_db,
                 genres: e.genres,
+                release_types: e.release_types,
                 lyrics: e.lyrics,
                 lyric_files: Vec::new(),
                 artists: e.artists,
