@@ -161,6 +161,9 @@ pub(crate) struct Uploads {
 
 const HISTORY: usize = 500;
 
+/// How often, in bytes, a sending upload's progress is counted.
+const COUNT_EVERY: usize = 16 * 1024;
+
 impl Uploads {
     pub fn new(slots: usize, metrics: Arc<Metrics>) -> Self {
         Self {
@@ -179,6 +182,20 @@ impl Uploads {
         self.metrics
             .uploads_queued
             .store(q.waiting as u64, Ordering::Relaxed);
+    }
+
+    /// Measure each sending upload's speed from the bytes it moved since the
+    /// last call (see [`crate::rate::measure`]).
+    pub(crate) fn measure(&self, seen: &mut crate::rate::Seen, now: tokio::time::Instant) -> bool {
+        let live: Vec<Arc<Upload>> = self
+            .queue
+            .lock()
+            .active
+            .values()
+            .filter(|u| u.state() == UploadState::Transferring)
+            .cloned()
+            .collect();
+        crate::rate::measure(seen, live.iter().map(|u| (u.id, &u.bytes, &u.speed)), now)
     }
 
     /// Uploads under way or waiting.
@@ -542,7 +559,6 @@ async fn send(inner: &Arc<Inner>, u: &Upload) -> Result<u64, Error> {
 
     let started = Instant::now();
     let mut sent = offset;
-    let mut window = (Instant::now(), offset);
     let mut buf = vec![0u8; READ_CHUNK];
     while sent < u.size {
         if u.state() == UploadState::Cancelled {
@@ -552,31 +568,26 @@ async fn send(inner: &Arc<Inner>, u: &Upload) -> Result<u64, Error> {
         if n == 0 {
             return Err(std::io::Error::other(reason::READ_ERROR).into());
         }
-        inner.up_limit.take(n).await;
-        tokio::time::timeout(Duration::from_secs(120), conn.stream.write_all(&buf[..n]))
-            .await
-            .map_err(|_| Error::TimedOut)??;
-        sent += n as u64;
-        u.bytes.store(sent, Ordering::Relaxed);
-        inner
-            .metrics
-            .bytes_uploaded
-            .fetch_add(n as u64, Ordering::Relaxed);
-        let elapsed = window.0.elapsed();
-        if elapsed >= Duration::from_secs(1) {
-            u.speed.store(
-                ((sent - window.1) as f64 / elapsed.as_secs_f64()) as u64,
-                Ordering::Relaxed,
-            );
-            window = (Instant::now(), sent);
-            crate::changed();
+        // Counted in small pieces, so a slow peer's progress shows as it
+        // goes rather than a read's worth at a time.
+        for piece in buf[..n].chunks(COUNT_EVERY) {
+            inner.up_limit.take(piece.len()).await;
+            tokio::time::timeout(Duration::from_secs(120), conn.stream.write_all(piece))
+                .await
+                .map_err(|_| Error::TimedOut)??;
+            sent += piece.len() as u64;
+            u.bytes.store(sent, Ordering::Relaxed);
+            inner
+                .metrics
+                .bytes_uploaded
+                .fetch_add(piece.len() as u64, Ordering::Relaxed);
         }
     }
+    let secs = started.elapsed().as_secs_f64().max(0.001);
     // The downloader closes the connection once it has everything. Wait for
     // that rather than closing first, which some clients read as a failure.
     let mut probe = [0u8; 1];
     let _ = tokio::time::timeout(Duration::from_secs(30), conn.stream.read(&mut probe)).await;
-    let secs = started.elapsed().as_secs_f64().max(0.001);
     Ok(((sent - offset) as f64 / secs) as u64)
 }
 

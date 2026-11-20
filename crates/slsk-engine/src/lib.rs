@@ -400,7 +400,7 @@ impl Engine {
             cfg,
         });
         tokio::spawn(uploads::schedule(inner.clone()));
-        tokio::spawn(rate::sample(inner.metrics.clone(), inner.rates.clone()));
+        tokio::spawn(rate::sample(inner.clone()));
         let engine = Self(inner);
         let starting = engine.clone();
         tokio::spawn(async move {
