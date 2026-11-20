@@ -1,0 +1,1 @@
+- **The total speeds at the top of the page are smoothed.** They are measured from the bytes moved each second and averaged over about five seconds, so the gap between one file ending and the next starting no longer reads as nothing moving.
