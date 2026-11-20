@@ -13,6 +13,7 @@ mod limit;
 mod metrics;
 mod net;
 mod peers;
+mod rate;
 mod server;
 pub mod shares;
 mod uploads;
@@ -244,6 +245,7 @@ pub(crate) struct Inner {
     /// Large peer messages being inflated and parsed at once.
     decoders: Arc<Semaphore>,
     pub(crate) metrics: Arc<Metrics>,
+    rates: Arc<rate::Rates>,
     up_limit: limit::Bucket,
     down_limit: limit::Bucket,
     /// When searches may go out (see [`SearchPace`]), and when each search
@@ -381,6 +383,7 @@ impl Engine {
             decoders: Arc::new(Semaphore::new(4)),
             up_limit: limit::Bucket::new(cfg.upload_limit),
             down_limit: limit::Bucket::new(cfg.download_limit),
+            rates: Arc::default(),
             metrics,
             next_search: Mutex::new((
                 SearchPace::new(tokio::time::Instant::now()),
@@ -396,6 +399,7 @@ impl Engine {
             cfg,
         });
         tokio::spawn(uploads::schedule(inner.clone()));
+        tokio::spawn(rate::sample(inner.metrics.clone(), inner.rates.clone()));
         let engine = Self(inner);
         let starting = engine.clone();
         tokio::spawn(async move {
@@ -749,11 +753,11 @@ impl Engine {
         (used, self.0.cfg.searches_per_hour, frees)
     }
 
-    /// Upload and download speeds in bytes per second, summed: what
-    /// [`Engine::uploads`] and [`Engine::downloads`] would add up to,
-    /// without building either list.
+    /// Total upload and download speeds in bytes per second, averaged over
+    /// the last several seconds so the gaps between files do not read as
+    /// nothing moving.
     pub fn speeds(&self) -> (u64, u64) {
-        (self.0.uploads.speed(), self.0.downloads.speed())
+        self.0.rates.get()
     }
 
     /// Uploads sending or waiting to.
