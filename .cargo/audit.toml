@@ -9,4 +9,7 @@ ignore = [
     # paste, unmaintained. A proc-macro held by lofty, through slsk-engine and
     # sift-music.
     "RUSTSEC-2024-0436",
+    # chrono, unmaintained. Held by async-graphql, rmcp and schemars as well
+    # as used directly; leaving it means moving those off it too.
+    "RUSTSEC-2026-0543",
 ]
