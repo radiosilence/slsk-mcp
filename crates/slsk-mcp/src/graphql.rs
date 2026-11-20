@@ -1709,13 +1709,15 @@ impl Mutation {
         Ok(out)
     }
 
-    /// Add ReplayGain, MusicBrainz genres (where an album has none), lyrics
-    /// and each artist's credit to matching albums, as every new import gets. Writes only
+    /// Add ReplayGain (where a file has none), MusicBrainz genres and the
+    /// release type (where an album has none), lyrics and each artist's
+    /// credit to matching albums, as every new import gets. Writes only
     /// those tags, but across everything the query matches: a query is
     /// required, and a large one takes a long time. `preview: true` writes
-    /// nothing: `genres` and `artists` are what would be added, `lyrics`
-    /// how many tracks would get lyrics (`lyricFiles` names them), and
-    /// `gainDb` is absent, since gain is measured only when it is written.
+    /// nothing: `genres`, `releaseTypes` and `artists` are what would be
+    /// added, `lyrics` how many tracks would get lyrics (`lyricFiles` names
+    /// them), and `gainDb` is absent, since gain is measured only when it is
+    /// written.
     /// A call that times out still finishes; `libraryTracks` shows the result.
     async fn enrich_library(
         &self,
@@ -1744,6 +1746,7 @@ impl Mutation {
                     path: a.path,
                     gain_db: None,
                     genres: Vec::new(),
+                    release_types: Vec::new(),
                     lyrics: 0,
                     lyric_files: Vec::new(),
                     artists: Vec::new(),

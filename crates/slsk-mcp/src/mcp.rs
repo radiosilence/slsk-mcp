@@ -197,7 +197,7 @@ impl ServerHandler for SlskMcp {
                  no longer wants, after a `preview: true` shown to them. `refilePlan` lists albums not where the current naming \
                  rules would put them; `refile(query)` moves them. Show the user a plan before acting on more than \
                  a handful of albums: moving files can cost the player its play counts. Every import gets \
-                 ReplayGain, genres and lyrics automatically; `enrichLibrary(query)` adds them to albums \
+                 ReplayGain, genres, its release type (album, single, EP…) and lyrics automatically; `enrichLibrary(query)` adds them to albums \
                  imported before, one artist or album at a time, since each takes seconds. Every import also \
                  credits each artist on a collaboration in its own tags; `creditArtists(query)` does that \
                  alone for albums filed before, reading no audio but asking MusicBrainz once per album with a \
