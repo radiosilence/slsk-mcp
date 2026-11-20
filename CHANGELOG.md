@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.18.3
+
+### Changed
+
+- **The total speeds fall away faster.** A drop now fades over about two seconds rather than five, so the status line reaches zero roughly ten seconds after transfers stop rather than half a minute.
+
+### Fixed
+
+- **The upload speed reported to the server and to peers leaves out the wait for the downloader to close.** It was the file's size over the whole send including that wait of up to 30 seconds, which understated our speed for any client slow to close.
+- **Each transfer's speed reads what it has moved lately.** It was measured only when a write or read went through, so a peer that stalled, or an upload waiting up to 30 seconds for its downloader to close, kept showing its last speed and an ETA counted from it. Speeds are now measured once a second from the bytes moved over the last three seconds, with uploads counted every 16 KiB, so a stall reads 0 B/s within three seconds and a slow peer reads steadily.
+
 ## 0.18.2
 
 ### Security
