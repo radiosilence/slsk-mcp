@@ -1684,7 +1684,14 @@ impl Mutation {
                         release: Some((&c.release).into()),
                         review: None,
                         to: None,
-                        problems: Vec::new(),
+                        problems: if c.release.tracks == 0 {
+                            vec![
+                                "the release has no tracklist, so there is nothing to tag from"
+                                    .into(),
+                            ]
+                        } else {
+                            Vec::new()
+                        },
                     })
             } else {
                 library

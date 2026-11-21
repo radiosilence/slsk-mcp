@@ -1,0 +1,1 @@
+- **Re-tagging from a release with no tracklist says so.** MusicBrainz holds some releases with a title but no tracks. Picking one in the web UI matched none of the album's files, and the preview reported that the files already carried the release's tags. It now says the release has no tracklist, and `reimportAlbums` with `preview` lists that as a problem.
