@@ -1,0 +1,1 @@
+- **The web UI's enrich preview shows the release type.** Enrich has written a missing release type since 0.18.4, but the preview listed only genres, lyrics and credits, so the type it would write could not be seen before applying.

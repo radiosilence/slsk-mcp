@@ -8,7 +8,7 @@
       {% when Body::Nothing %}nothing to do
       {% when Body::Refile with { change, into, moves } %}{% if let Some(d) = into %}→ {{ d }} · {% endif %}{{ moves.len() }} file{% if moves.len() != 1 %}s{% endif %}{% if !change.is_empty() %} · {{ change }}{% endif %}
       {% when Body::Credit with (credits) %}{{ credits.len() }} file{% if credits.len() != 1 %}s{% endif %} credited
-      {% when Body::Enrich with { credits, genres, lyrics } %}{% if genres.is_empty() %}no new genres{% else %}{{ genres.join(", ") }}{% endif %} · lyrics for {{ lyrics.len() }}{% if !credits.is_empty() %} · credits for {{ credits.len() }}{% endif %} · gain measured on apply
+      {% when Body::Enrich with { credits, genres, types, lyrics } %}{% if !types.is_empty() %}{{ types.join(", ") }} · {% endif %}{% if genres.is_empty() %}no new genres{% else %}{{ genres.join(", ") }}{% endif %} · lyrics for {{ lyrics.len() }}{% if !credits.is_empty() %} · credits for {{ credits.len() }}{% endif %} · gain measured on apply
       {% when Body::Reimport with { release, files, missing, untouched, cover, companions } %}{{ release.artist }} — {{ release.title }}{% if let Some(d) = release.date %} ({{ d }}){% endif %} · distance {{ release.distance }} · {{ self.changed(files) }} of {{ files.len() }} files change{% if self.moving(files) %} · moves{% endif %}{% if !missing.is_empty() %} · {{ missing.len() }} missing{% endif %}
       {% when Body::Edit with { files, into } %}{{ self.changed(files) }} of {{ files.len() }} files change{% if let Some(d) = into %} · → {{ d }}{% endif %}
       {% when Body::Bin with { to, keep, reason } %}→ {{ to }}
@@ -29,7 +29,8 @@
     </ul>
     {% when Body::Credit with (credits) %}
     {% include "library_credits.html" %}
-    {% when Body::Enrich with { credits, genres, lyrics } %}
+    {% when Body::Enrich with { credits, genres, types, lyrics } %}
+    <p class="text-meta text-muted wrap-anywhere">Release type: {% if types.is_empty() %}none added (the album has one){% else %}<strong>{{ types.join("; ") }}</strong>{% endif %}</p>
     <p class="text-meta text-muted wrap-anywhere">Genres: {% if genres.is_empty() %}none added (the album has some, or MusicBrainz has none){% else %}<strong>{{ genres.join("; ") }}</strong> on every track{% endif %}</p>
     <p class="text-meta text-muted wrap-anywhere">Lyrics: {% if lyrics.is_empty() %}none found for tracks without them{% endif %}</p>
     {% if !lyrics.is_empty() %}
@@ -40,7 +41,7 @@
     </ul>
     {% endif %}
     {% if !credits.is_empty() %}<p class="text-meta text-muted wrap-anywhere">Artist credits:</p>{% include "library_credits.html" %}{% endif %}
-    <p class="text-meta text-muted wrap-anywhere">ReplayGain: measured on apply.</p>
+    <p class="text-meta text-muted wrap-anywhere">ReplayGain: measured on apply, unless every file has it.</p>
     {% when Body::Reimport with { release, files, missing, untouched, cover, companions } %}
     <p class="text-meta text-muted wrap-anywhere">{% let (site, href) = crate::library::release_link(release.id) %}<a href="{{ href }}" target="_blank" rel="noopener">{{ site }} release</a>{% if let Some(m) = release.media %} · {{ m }}{% endif %}{% if let Some(co) = release.country %} · {{ co }}{% endif %} · {{ release.tracks }} tracks</p>
     {% include "library_changes.html" %}

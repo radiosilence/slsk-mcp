@@ -1276,6 +1276,7 @@ enum Body {
     Enrich {
         credits: Vec<CreditWrite>,
         genres: Vec<String>,
+        types: Vec<String>,
         lyrics: Vec<Lyric>,
     },
     Reimport {
@@ -1550,6 +1551,7 @@ async fn plan_one(
                 p.body = Body::Enrich {
                     credits: plan.credits.files.iter().map(CreditWrite::from).collect(),
                     genres: plan.genres.clone(),
+                    types: plan.release_types.clone(),
                     lyrics: plan.lyrics.iter().map(Lyric::of).collect(),
                 };
             }
@@ -1573,6 +1575,10 @@ async fn plan_one(
                 p.ticked = p.applicable && review.is_none();
                 p.note = match (&plan.refused, review, changes) {
                     (Some(why), _, _) => Some(format!("Would be refused: {}", why.replace(&format!("{root}/"), ""))),
+                    _ if plan.comparison.release.tracks == 0 => {
+                        Some("This release has no tracklist on its site, so there is nothing to tag these files from. Add its tracks there, or pick another release.".into())
+                    }
+                    _ if plan.files.is_empty() => Some("None of these files match a track of this release.".into()),
                     (None, _, 0) => Some("The files already carry this release's tags, where it files them.".into()),
                     (None, Some(why), _) => Some(format!("The tagger would not match this on its own: {why}.")),
                     (None, None, _) => None,
