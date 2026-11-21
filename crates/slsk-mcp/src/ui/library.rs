@@ -1276,6 +1276,7 @@ enum Body {
     Enrich {
         credits: Vec<CreditWrite>,
         genres: Vec<String>,
+        types: Vec<String>,
         lyrics: Vec<Lyric>,
     },
     Reimport {
@@ -1550,6 +1551,7 @@ async fn plan_one(
                 p.body = Body::Enrich {
                     credits: plan.credits.files.iter().map(CreditWrite::from).collect(),
                     genres: plan.genres.clone(),
+                    types: plan.release_types.clone(),
                     lyrics: plan.lyrics.iter().map(Lyric::of).collect(),
                 };
             }
