@@ -2,6 +2,10 @@
 
 ## 0.18.6
 
+### Security
+
+- **url 2.5.9.** Fixes RUSTSEC-2026-0592, a stack overflow in `Url::origin()` on nested `blob:` URLs.
+
 ### Changed
 
 - **Browsing a user's shares draws every row.** A peer sends its whole listing in one message, so folders open in full rather than a hundred rows at a time behind Show more.
