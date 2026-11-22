@@ -532,8 +532,6 @@ mod library {
 }
 
 mod browse {
-    use std::collections::BTreeMap;
-
     use axum_extra::extract::Query;
     use base64::Engine as _;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -681,7 +679,6 @@ mod browse {
             username: "u".into(),
             at: at.as_bytes().to_vec(),
             open: open.iter().map(|o| o.as_bytes().to_vec()).collect(),
-            more: BTreeMap::new(),
         }
     }
 
@@ -695,11 +692,9 @@ mod browse {
 
     #[test]
     fn the_address_names_expanded_folders_relative_to_the_open_one() {
-        let mut p = place("@@music\\A", &["@@music\\A\\One", "@@music\\A\\One\\CD1"]);
-        p.more.insert(b"@@music\\A".to_vec(), 2);
+        let p = place("@@music\\A", &["@@music\\A\\One", "@@music\\A\\One\\CD1"]);
         let q = query(&p.href());
         assert_eq!(q.open, vec!["One", "One/CD1"]);
-        assert_eq!(q.more, vec![".", "."]);
         assert_eq!(Place::from_query(&q).unwrap(), p);
     }
 
@@ -710,20 +705,6 @@ mod browse {
         let q = query(&p.href());
         assert!(q.open.iter().all(|o| o.starts_with(RAW)));
         assert_eq!(Place::from_query(&q).unwrap(), p);
-    }
-
-    #[test]
-    fn expanded_folders_share_one_budget_of_rows() {
-        let page = crate::ui::PAGE as usize;
-        let dirs: Vec<Directory> = (0..3)
-            .flat_map(|a| (0..page).map(move |i| dir(&format!("{a}\\{i:05}"), 1)))
-            .collect();
-        let p = place("", &["0", "1", "2"]);
-        let mut left = 3 + 2 * page;
-        let html = tree(&p, &dirs, b"", false, &mut left);
-        assert_eq!(left, 0);
-        assert_eq!(html.matches("aria-expanded=").count(), 3 + 2 * page);
-        assert!(html.contains("Collapse other folders"));
     }
 
     #[test]
@@ -750,20 +731,14 @@ mod browse {
     }
 
     #[test]
-    fn a_long_folder_is_drawn_a_page_at_a_time() {
-        let page = crate::ui::PAGE as usize;
-        let dirs: Vec<Directory> = (0..page + 3)
+    fn a_long_folder_is_drawn_whole() {
+        let dirs: Vec<Directory> = (0..2000)
             .map(|i| dir(&format!("@@m\\{i:05}"), 1))
+            .chain([dir("@@m", 3000)])
             .collect();
-        let p = place("@@m", &[]);
-        let html = tree(&p, &dirs, b"@@m", false, &mut { MOST_ROWS });
-        assert_eq!(html.matches("aria-expanded=").count(), page);
-        assert!(html.contains("Show more"));
-        let mut p = p;
-        p.more.insert(b"@@m".to_vec(), 1);
-        let html = tree(&p, &dirs, b"@@m", false, &mut { MOST_ROWS });
-        assert_eq!(html.matches("aria-expanded=").count(), page + 3);
-        assert!(!html.contains("Show more"));
+        let html = tree(&place("@@m", &[]), &dirs, b"@@m", false);
+        assert_eq!(html.matches("aria-expanded=").count(), 2000);
+        assert_eq!(html.matches("type=\"checkbox\"").count(), 3000);
     }
 
     #[test]
