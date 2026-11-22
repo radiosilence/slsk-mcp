@@ -170,18 +170,16 @@ struct Info {
     free: bool,
 }
 
-/// Where a user's tree is: the open folder, the folders expanded under it
-/// and how many extra pages of a folder's rows are shown. All of it is in
-/// the address, so a reload, a link, or back and forward draw the same tree.
-/// Expanded folders are named relative to the open one (`open=A&open=A/B`,
-/// `.` for the open folder itself in `more`), which keeps the address
-/// readable and lets it survive a move up or down.
+/// Where a user's tree is: the open folder and the folders expanded under
+/// it. All of it is in the address, so a reload, a link, or back and
+/// forward draw the same tree. Expanded folders are named relative to the
+/// open one (`open=A&open=A/B`), which keeps the address readable and lets
+/// it survive a move up or down.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct Place {
     pub(super) username: String,
     pub(super) at: Vec<u8>,
     pub(super) open: BTreeSet<Vec<u8>>,
-    pub(super) more: BTreeMap<Vec<u8>, usize>,
 }
 
 /// `path` lies below `dir`, at any depth.
@@ -207,16 +205,7 @@ impl Place {
             .decode(&q.key)
             .map_err(|_| anyhow::anyhow!("not a folder key"))?;
         let open = q.open.iter().map(|r| join(&at, r)).collect();
-        let mut more = BTreeMap::new();
-        for r in &q.more {
-            *more.entry(join(&at, r)).or_default() += 1;
-        }
-        Ok(Self {
-            username,
-            at,
-            open,
-            more,
-        })
+        Ok(Self { username, at, open })
     }
 
     fn rel(&self, path: &[u8]) -> String {
@@ -239,36 +228,25 @@ impl Place {
         let key = key(&self.at);
         let mut params = vec![("username", self.username.clone()), ("key", key)];
         params.extend(self.open.iter().map(|p| ("open", self.rel(p))));
-        for (p, n) in &self.more {
-            params.extend(std::iter::repeat_n(("more", self.rel(p)), *n));
-        }
         let params: Vec<(&str, &str)> = params.iter().map(|(k, v)| (*k, v.as_str())).collect();
         super::place_url("/browse", &params)
     }
 
     /// The same tree with `path` expanded, or collapsed along with every
-    /// folder and page under it.
+    /// folder under it.
     pub(super) fn toggle(&self, path: &[u8]) -> String {
         let mut p = self.clone();
         if !p.open.remove(path) {
             p.open.insert(path.to_vec());
         } else {
             p.open.retain(|o| !under(o, path));
-            p.more.retain(|m, _| m != path && !under(m, path));
         }
-        p.href()
-    }
-
-    /// The same tree with a page more of `path`'s rows.
-    fn show_more(&self, path: &[u8]) -> String {
-        let mut p = self.clone();
-        *p.more.entry(path.to_vec()).or_default() += 1;
         p.href()
     }
 
     /// `target` as the open folder. What was expanded below it stays
     /// expanded, and going up leaves the way back down expanded, as Finder
-    /// does; pages shown start again.
+    /// does.
     pub(super) fn go(&self, target: &[u8]) -> String {
         let mut open: BTreeSet<Vec<u8>> = self.open.clone();
         if under(&self.at, target) {
@@ -286,7 +264,6 @@ impl Place {
             username: self.username.clone(),
             at: target.to_vec(),
             open,
-            more: BTreeMap::new(),
         }
         .href()
     }
@@ -329,18 +306,13 @@ pub(super) enum Node {
     File(FileRow),
 }
 
-/// The rows of one folder in the tree: its folders, then its files, a page
-/// at a time so a folder of thousands stays light to draw. Folders expanded
-/// in the address are drawn with their own rows beneath them.
+/// The rows of one folder in the tree: its folders, then its files, all of
+/// them, since the peer sent the whole listing at once. Folders expanded in
+/// the address are drawn with their own rows beneath them.
 #[derive(Template)]
 #[template(path = "browse_nodes.html")]
 struct Nodes {
     nodes: Vec<Node>,
-    /// The address with another page of them, when there is one.
-    more: Option<String>,
-    /// Fewer drawn than the page holds, as the tree's other open folders
-    /// used up [`MOST_ROWS`].
-    crowded: bool,
     /// They are the open folder's own, whose files can be ticked.
     top: bool,
     /// This client's own shares, which there is nothing to download from.
@@ -360,17 +332,7 @@ impl Nodes {
     }
 }
 
-/// The most rows one tree draws, however many folders are expanded: past
-/// it, an expanded folder asks for others to be collapsed.
-pub(super) const MOST_ROWS: usize = 5000;
-
-pub(super) fn tree(
-    p: &Place,
-    dirs: &[Directory],
-    at: &[u8],
-    mine: bool,
-    left: &mut usize,
-) -> String {
+pub(super) fn tree(p: &Place, dirs: &[Directory], at: &[u8], mine: bool) -> String {
     let (children, here) = level(dirs, at);
     let files = here.into_iter().flat_map(|d| {
         d.files.iter().map(|f| {
@@ -385,14 +347,8 @@ pub(super) fn tree(
             })
         })
     });
-    let paged = super::PAGE as usize * (1 + p.more.get(at).copied().unwrap_or(0));
-    let total = children.len() + here.map_or(0, |d| d.files.len());
-    let shown = paged.min(total).min(*left);
-    *left -= shown;
-    let folders = children.len();
     let mut nodes: Vec<Node> = children
         .into_iter()
-        .take(shown)
         .map(|c| {
             Node::Folder(FolderRow {
                 go: p.go(&c.path),
@@ -400,18 +356,16 @@ pub(super) fn tree(
                 inner: p
                     .open
                     .contains(&c.path)
-                    .then(|| tree(p, dirs, &c.path, mine, left)),
+                    .then(|| tree(p, dirs, &c.path, mine)),
                 name: c.name,
                 key: c.key,
                 files: c.files,
             })
         })
         .collect();
-    nodes.extend(files.take(shown.saturating_sub(folders)));
+    nodes.extend(files);
     Nodes {
         nodes,
-        crowded: shown < paged.min(total),
-        more: (shown == paged && total > paged).then(|| p.show_more(at)),
         top: at == p.at.as_slice(),
         mine,
     }
@@ -486,7 +440,7 @@ fn render(p: &Place, dirs: &[Directory], info: Option<Info>, mine: bool) -> Stri
         has_files: dirs
             .iter()
             .any(|d| d.name.as_bytes() == p.at.as_slice() && !d.files.is_empty()),
-        rows: tree(p, dirs, &p.at, mine, &mut { MOST_ROWS }),
+        rows: tree(p, dirs, &p.at, mine),
         info,
         error: None,
     }
@@ -542,8 +496,6 @@ pub(super) struct BrowseQuery {
     key: String,
     #[serde(default)]
     pub(super) open: Vec<String>,
-    #[serde(default)]
-    pub(super) more: Vec<String>,
     #[serde(default)]
     fresh: Option<String>,
 }
