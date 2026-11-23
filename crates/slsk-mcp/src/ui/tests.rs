@@ -20,6 +20,42 @@ fn only_hashed_asset_urls_are_cached_for_good() {
     assert!(!cache(None).contains("immutable"));
 }
 
+/// Datastar's `data-show` acts only once Datastar has loaded, so an element
+/// that starts hidden flashes until then; such elements carry `hidden` and
+/// `data-attr:hidden`. Nothing else may use the name either, since Datastar
+/// would run its value as script.
+#[test]
+fn nothing_waits_for_datastar_to_be_hidden() {
+    let attr = concat!("data-", "show");
+    let mut files = vec![std::path::PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/assets/live.js"
+    ))];
+    let mut dirs = vec![std::path::PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/templates"
+    ))];
+    dirs.push(concat!(env!("CARGO_MANIFEST_DIR"), "/src").into());
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else {
+                files.push(path);
+            }
+        }
+    }
+    for path in files {
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !text.contains(&format!("{attr}=")) && !text.contains(&format!("{attr}:")),
+            "{} uses {attr}",
+            path.display()
+        );
+    }
+}
+
 #[test]
 fn a_job_page_is_named_by_its_id_alone() {
     let id = Uuid::new_v4();

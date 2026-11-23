@@ -1,0 +1,1 @@
+- **Hidden controls no longer flash while the page loads.** The library's selection bar, Bin spares, the date field and the art form waited for Datastar's `data-show` to hide them; they now start `hidden`. Transfer counters used `data-show` for their own purpose, which Datastar ran as script; they use `data-draw`.

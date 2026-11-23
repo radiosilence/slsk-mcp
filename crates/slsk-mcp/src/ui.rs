@@ -118,7 +118,7 @@ pub fn router(app: Arc<App>) -> Router {
         ));
     Router::new()
         .merge(protected)
-        .merge(crate::auth::routes::router())
+        .merge(crate::auth::routes::router(state.sessions.clone()))
         .route("/healthz", get(|| async { "ok" }))
         .route(
             "/assets/datastar.js",

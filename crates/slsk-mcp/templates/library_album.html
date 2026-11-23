@@ -27,7 +27,7 @@
     <button type="button" data-on:click="$_{{ slot }}_artform = !$_{{ slot }}_artform">Set art</button>
     <button type="button" data-indicator="_{{ slot }}_bin" data-attr:disabled="$_{{ slot }}_bin" data-class:busy="$_{{ slot }}_bin" data-on:click="@post('/library/preview/bin', {contentType: 'form', selector: '#{{ slot }}-one'})">{% if row.spare().is_some() %}Bin this copy{% else %}Bin{% endif %}</button>
   </div>
-  <form id="{{ slot }}-art" class="my-2.5 flex flex-col gap-2" enctype="multipart/form-data" data-signals="{_{{ slot }}_artform: false}" data-show="$_{{ slot }}_artform">
+  <form id="{{ slot }}-art" class="my-2.5 flex flex-col gap-2" enctype="multipart/form-data" data-signals="{_{{ slot }}_artform: false}" hidden data-attr:hidden="!$_{{ slot }}_artform">
     <input type="hidden" name="path" value="{{ row.album.path }}">
     <input type="hidden" name="slot" value="{{ slot }}">
     {% include "library_filter.html" %}

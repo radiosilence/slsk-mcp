@@ -517,6 +517,8 @@ fn unselected() -> axum::response::sse::Event {
 #[template(path = "pages/library.html")]
 struct Page {
     q: String,
+    /// The date field is in use, so it starts shown.
+    dated: bool,
     run: String,
 }
 
@@ -524,6 +526,7 @@ struct Page {
 pub(super) fn page(s: &UiState, filter: &Filter) -> String {
     Page {
         q: filter.q.clone(),
+        dated: filter.since == "date",
         run: run_html(s),
     }
     .render()
