@@ -887,7 +887,7 @@ impl Wish {
 /// Confirmation tokens for messages previewed and not yet sent: each names
 /// one message, to one target, and is good once.
 #[derive(Default)]
-struct Nonces(Mutex<HashMap<String, (u64, Instant)>>);
+struct Nonces(Mutex<HashMap<String, ([u8; 32], Instant)>>);
 
 impl Nonces {
     fn preview(&self, kind: &str, target: &str, body: &str) -> String {
@@ -917,11 +917,19 @@ impl Nonces {
     }
 }
 
-fn fingerprint(kind: &str, target: &str, body: &str) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    (kind, target, body).hash(&mut h);
-    h.finish()
+/// SHA-256 rather than the std hasher: a peer's message can steer the model
+/// that chooses both sets of arguments, and could otherwise search for a
+/// 64-bit collision and confirm a message the preview never showed. Each part
+/// is length-prefixed, so moving text from one part to the next changes the
+/// digest.
+fn fingerprint(kind: &str, target: &str, body: &str) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    for part in [kind, target, body] {
+        h.update((part.len() as u64).to_le_bytes());
+        h.update(part.as_bytes());
+    }
+    h.finalize().into()
 }
 
 #[cfg(test)]
@@ -972,5 +980,29 @@ mod tests {
         nonces.confirm(&token, "pm", "bob", "hi").unwrap();
         assert!(nonces.confirm(&token, "pm", "bob", "hi").is_err());
         assert!(nonces.confirm("made-up", "pm", "bob", "hi").is_err());
+    }
+
+    #[test]
+    fn a_fingerprint_is_the_sha256_of_the_length_prefixed_arguments() {
+        use sha2::{Digest, Sha256};
+        let mut want = Vec::new();
+        for part in ["pm", "bob", "hi"] {
+            want.extend((part.len() as u64).to_le_bytes());
+            want.extend(part.as_bytes());
+        }
+        let want: [u8; 32] = Sha256::digest(&want).into();
+        assert_eq!(fingerprint("pm", "bob", "hi"), want);
+        assert_ne!(
+            fingerprint("pm", "bo", "bhi"),
+            fingerprint("pm", "bob", "hi")
+        );
+    }
+
+    #[test]
+    fn a_token_is_spent_even_when_the_arguments_do_not_match() {
+        let nonces = Nonces::default();
+        let token = nonces.preview("pm", "bob", "hi");
+        assert!(nonces.confirm(&token, "pm", "bob", "other").is_err());
+        assert!(nonces.confirm(&token, "pm", "bob", "hi").is_err());
     }
 }

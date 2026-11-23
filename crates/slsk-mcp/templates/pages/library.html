@@ -8,7 +8,7 @@
       <option value="month">Imported this month</option>
       <option value="date">Imported since…</option>
     </select>
-    <input class="flex-auto" type="date" name="from" aria-label="Imported since" data-bind:_libfrom data-show="$_libsince == 'date'" data-on:change="@post('/library/find', {contentType: 'form', selector: '#lib-find'})">
+    <input class="flex-auto" type="date" name="from" aria-label="Imported since" data-bind:_libfrom{% if !dated %} hidden{% endif %} data-attr:hidden="$_libsince != 'date'" data-on:change="@post('/library/find', {contentType: 'form', selector: '#lib-find'})">
     <select class="flex-auto" name="show" aria-label="Which albums" data-bind:_libshow data-on:change="@post('/library/find', {contentType: 'form', selector: '#lib-find'})">
       <option value="">Every album</option>
       <option value="dups">Held more than once</option>

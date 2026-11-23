@@ -6,7 +6,8 @@
 //
 //   data-bytes, data-total, data-rate (bytes a second), data-at (ms since the
 //   epoch, 0 while it does not move): a transfer. On a <progress> it sets
-//   the value; elsewhere data-show says what to write: "bytes" or "eta".
+//   the value; elsewhere data-draw says what to write: "bytes" or "eta". Not
+//   data-show, which is Datastar's own and would run the word as script.
 //   data-since (ms since the epoch): time on the current stage.
 //   data-until (ms since the epoch): time left until a deadline.
 //
@@ -75,7 +76,7 @@ function frame() {
     if (rate > 0 && since < HOLD && at_now < total) moving = true;
     if (el.tagName === "PROGRESS") {
       el.value = at_now;
-    } else if (d.show === "eta") {
+    } else if (d.draw === "eta") {
       write(el, rate > 0 && at_now < total ? `${span(((total - at_now) / rate) * 1000)} left` : "");
     } else {
       write(el, human(at_now));
