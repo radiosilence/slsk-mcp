@@ -25,7 +25,7 @@ use slsk_engine::slsk_proto::RawStr;
 use slsk_engine::{Engine, EngineConfig, Status};
 use slsk_testserver::TestServer;
 
-use super::{StreamQuery, UiState, stream};
+use super::{Shown, StreamQuery, UiState, stream};
 use crate::folders::{File, Folder};
 
 const JOBS: usize = 15;
@@ -193,7 +193,11 @@ async fn read_stream(state: UiState, window: Duration) -> (u64, u64, u64) {
         State(state),
         Query(StreamQuery {
             page: "albums".into(),
-            datastar: r#"{"jobs":100,"files":""}"#.into(),
+        }),
+        askama_datastar::Signals(Shown {
+            jobs: 100,
+            files: String::new(),
+            ..Shown::default()
         }),
     )
     .await

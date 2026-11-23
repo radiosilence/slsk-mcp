@@ -151,7 +151,7 @@ fn signout() -> Router<Sessions> {
 /// form is known by the browser's `Sec-Fetch-Site`, or else by an `Origin`
 /// naming the host it was sent to. A request carrying none of them is refused.
 fn from_this_site(headers: &HeaderMap) -> bool {
-    if headers.contains_key("datastar-request") {
+    if askama_datastar::is_datastar(headers) {
         return true;
     }
     let text = |name| headers.get(name).and_then(|v| v.to_str().ok());

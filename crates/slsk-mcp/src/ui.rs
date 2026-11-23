@@ -8,22 +8,21 @@
 //! session layer, which wraps the router whole so a route added later is
 //! protected by construction.
 
-use std::convert::Infallible;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use askama::Template;
+use askama_datastar::{ElementPatchMode, PatchSignals, Signals};
 use axum::Router;
 use axum::body::Bytes;
 use axum::extract::{Path, Query, RawQuery, Request, State};
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::middleware::Next;
-use axum::response::sse::{Event, KeepAlive, Sse};
+use axum::response::sse::Event;
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use futures_util::Stream;
 use slsk_engine::slsk_proto::RawStr;
 use uuid::Uuid;
 
@@ -110,7 +109,9 @@ pub fn router(app: Arc<App>) -> Router {
         .merge(profile::routes())
         .merge(chat::routes())
         .merge(admin::routes())
-        .layer(axum::middleware::from_fn(require_datastar_on_post))
+        .layer(axum::middleware::from_fn(
+            askama_datastar::require_datastar_on_post,
+        ))
         .layer(axum::middleware::from_fn_with_state(state.clone(), pages))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
@@ -120,10 +121,7 @@ pub fn router(app: Arc<App>) -> Router {
         .merge(protected)
         .merge(crate::auth::routes::router(state.sessions.clone()))
         .route("/healthz", get(|| async { "ok" }))
-        .route(
-            "/assets/datastar.js",
-            get(|q: RawQuery| async { asset(DATASTAR_JS, "text/javascript; charset=utf-8", q) }),
-        )
+        .route("/assets/datastar.js", get(askama_datastar::script::serve))
         .route(
             "/assets/live.js",
             get(|q: RawQuery| async { asset(LIVE_JS, "text/javascript; charset=utf-8", q) }),
@@ -208,7 +206,6 @@ async fn compress_events(request: Request, next: Next) -> Response {
 }
 
 const APP_CSS: &str = include_str!("../assets/app.css");
-const DATASTAR_JS: &str = include_str!("../assets/datastar.js");
 const LIVE_JS: &str = include_str!("../assets/live.js");
 /// The typeface @radiosilence/theme sets; app.css names it by a URL relative to itself.
 const GEIST_MONO: &[u8] = include_bytes!("../assets/geist-mono.woff2");
@@ -230,7 +227,7 @@ fn fingerprint(bytes: &[u8]) -> String {
 
 static CSS_URL: LazyLock<String> = LazyLock::new(|| versioned("/assets/app.css", APP_CSS));
 static DATASTAR_URL: LazyLock<String> =
-    LazyLock::new(|| versioned("/assets/datastar.js", DATASTAR_JS));
+    LazyLock::new(|| askama_datastar::script::url("/assets/datastar.js"));
 static LIVE_URL: LazyLock<String> = LazyLock::new(|| versioned("/assets/live.js", LIVE_JS));
 
 /// A text asset. Requested by its hashed URL (`?v=`), it never changes, so it
@@ -283,75 +280,39 @@ async fn security_headers(request: Request, next: Next) -> Response {
     response
 }
 
-/// Every state change arrives from Datastar, which marks its requests with a
-/// header a cross-site form cannot set. Refusing POSTs without it closes
-/// cross-site request forgery independently of the cookie's SameSite.
-async fn require_datastar_on_post(request: Request, next: Next) -> Response {
-    if request.method() == http::Method::POST && !request.headers().contains_key("datastar-request")
-    {
-        return StatusCode::FORBIDDEN.into_response();
-    }
-    next.run(request).await
-}
-
-/// A bare `\r` would start an SSE data line of its own, outside the
-/// `elements` prefix, so it is dropped before the split.
+/// Markup this server built, as a patch of the elements with its ids.
 fn patch(html: &str) -> Event {
-    Event::default().event("datastar-patch-elements").data(
-        html.replace('\r', "")
-            .lines()
-            .map(|l| format!("elements {l}"))
-            .collect::<Vec<_>>()
-            .join("\n"),
-    )
+    askama_datastar::Html::trusted(html).patch().into()
 }
 
-fn sse(
-    events: impl Stream<Item = Result<Event, Infallible>> + Send + 'static,
-) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    Sse::new(events).keep_alive(KeepAlive::new().interval(Duration::from_secs(5)))
-}
-
+/// One patch as the whole answer.
 fn one(html: String) -> Response {
-    sse(futures_util::stream::once(async move { Ok(patch(&html)) })).into_response()
+    askama_datastar::events([patch(&html)])
 }
 
 /// Elements added at the end of the one `selector` names: rows streamed
 /// into a list as each is worked out.
 fn append(selector: &str, html: &str) -> Event {
-    insert(selector, "append", html)
+    insert(selector, ElementPatchMode::Append, html)
 }
 
 /// Elements added at the start of the one `selector` names.
 fn prepend(selector: &str, html: &str) -> Event {
-    insert(selector, "prepend", html)
+    insert(selector, ElementPatchMode::Prepend, html)
 }
 
-fn insert(selector: &str, mode: &str, html: &str) -> Event {
-    Event::default().event("datastar-patch-elements").data(
-        [format!("selector {selector}"), format!("mode {mode}")]
-            .into_iter()
-            .chain(
-                html.replace('\r', "")
-                    .lines()
-                    .map(|l| format!("elements {l}")),
-            )
-            .collect::<Vec<_>>()
-            .join("\n"),
-    )
-}
-
-/// Several events in one response: fragments, then signals to reset.
-fn many(events: Vec<Event>) -> Response {
-    sse(futures_util::stream::iter(events.into_iter().map(Ok))).into_response()
+fn insert(selector: &str, mode: ElementPatchMode, html: &str) -> Event {
+    askama_datastar::Html::trusted(html)
+        .patch()
+        .selector(selector)
+        .mode(mode)
+        .into()
 }
 
 /// Set signals from the server, as JSON: how a form is cleared once what it
 /// sent has been accepted.
 fn signals(json: &str) -> Event {
-    Event::default()
-        .event("datastar-patch-signals")
-        .data(format!("signals {json}"))
+    PatchSignals::new(json).into()
 }
 
 /// A confirmation that fades by itself; tapping it dismisses it sooner.
@@ -513,7 +474,7 @@ struct AlbumsPage {
 /// it, and goes on to its own handler.
 async fn pages(State(s): State<UiState>, request: Request, next: Next) -> Response {
     if request.method() == http::Method::GET
-        && !request.headers().contains_key("datastar-request")
+        && !askama_datastar::is_datastar(request.headers())
         && let Some(tab) = PAGES
             .iter()
             .find(|p| request.uri().path() == p.1)
@@ -1632,13 +1593,12 @@ async fn upload_history_html(app: &App, shown: i64) -> String {
     .unwrap_or_default()
 }
 
-/// The stream's request: the page it serves, as `PAGES` names it, and the
-/// page's signals as Datastar sends them.
+/// The stream's request: the page it serves, as `PAGES` names it. The page's
+/// signals come with it, read as [`Shown`].
 #[derive(serde::Deserialize, Default)]
 #[serde(default)]
 struct StreamQuery {
     page: String,
-    datastar: String,
 }
 
 /// How many rows of the long lists the page shows, from the signals
@@ -1697,11 +1657,11 @@ const LIFETIME: Duration = Duration::from_secs(60);
 /// a page can sit showing stale state.
 async fn stream(
     State(s): State<UiState>,
-    Query(StreamQuery { page, datastar }): Query<StreamQuery>,
+    Query(StreamQuery { page }): Query<StreamQuery>,
+    Signals(shown): Signals<Shown>,
 ) -> impl IntoResponse {
     use crate::live::Topic;
     let app = s.app.clone();
-    let shown: Shown = serde_json::from_str(&datastar).unwrap_or_default();
     let events = async_stream::stream! {
         let mut changes = crate::live::subscribe();
         let mut transfers = slsk_engine::changes();
@@ -1770,7 +1730,7 @@ async fn stream(
                                     recheck = Some(recheck.map_or(due, |r| r.min(due)));
                                     continue;
                                 }
-                                yield Ok(patch(&html));
+                                yield patch(&html);
                                 cards_sent.insert(id, (html, now));
                             }
                         }
@@ -1813,7 +1773,7 @@ async fn stream(
                 }
                 "library" if topics[Topic::Library as usize] => {
                     for e in library::run_events(&s, &mut run_sent) {
-                        yield Ok(e);
+                        yield e;
                     }
                 }
                 _ => {}
@@ -1823,7 +1783,7 @@ async fn stream(
                     && !html.is_empty()
                     && html != *last
                 {
-                    yield Ok(patch(&html));
+                    yield patch(&html);
                     *last = html;
                 }
             }
@@ -1868,7 +1828,7 @@ async fn stream(
             }
         }
     };
-    sse(events)
+    askama_datastar::stream(events)
 }
 
 #[derive(serde::Deserialize)]
@@ -1991,7 +1951,7 @@ async fn download(State(s): State<UiState>, body: Bytes) -> Response {
 async fn job_action(
     State(s): State<UiState>,
     Path((id, action)): Path<(Uuid, String)>,
-    body: Bytes,
+    Signals(shown): Signals<Shown>,
 ) -> Response {
     let jobs = &s.app.jobs;
     let result = match action.as_str() {
@@ -2012,7 +1972,7 @@ async fn job_action(
         Ok(()) => {
             done(
                 &s.app,
-                &shown_of(&body),
+                &shown,
                 matches!(action.as_str(), "retry" | "cancel" | "remove"),
             )
             .await
@@ -2050,11 +2010,6 @@ async fn done_with(app: &App, shown: &Shown, settled: bool, extra: String) -> Re
     one(format!("{html}\n{extra}\n<div id=\"flash\"></div>"))
 }
 
-/// What the page shows, from the signals a JSON request carries.
-fn shown_of(body: &[u8]) -> Shown {
-    serde_json::from_slice(body).unwrap_or_default()
-}
-
 fn failed(e: &anyhow::Error) -> Response {
     one(flash_err(&format!("{e:#}")))
 }
@@ -2062,13 +2017,13 @@ fn failed(e: &anyhow::Error) -> Response {
 async fn resolve(
     State(s): State<UiState>,
     Path((id, release)): Path<(Uuid, String)>,
-    body: Bytes,
+    Signals(shown): Signals<Shown>,
 ) -> Response {
     let Some(release) = crate::library::release_id(&release) else {
         return StatusCode::BAD_REQUEST.into_response();
     };
     match s.app.jobs.import_soon(id, false, Some(release)).await {
-        Ok(()) => done(&s.app, &shown_of(&body), false).await,
+        Ok(()) => done(&s.app, &shown, false).await,
         Err(e) => failed(&e),
     }
 }
@@ -2209,7 +2164,11 @@ async fn job_files(State(s): State<UiState>, Path(id): Path<Uuid>) -> Response {
     }
     .render()
     .unwrap_or_default();
-    many(vec![insert(&format!("#files-{id}"), "replace", &html)])
+    askama_datastar::events([insert(
+        &format!("#files-{id}"),
+        ElementPatchMode::Replace,
+        &html,
+    )])
 }
 
 /// The files of a downloading job, each ticked to fetch or not.
@@ -2319,7 +2278,11 @@ async fn job_compare(
     }
     .render()
     .unwrap_or_default();
-    many(vec![insert(&format!("#cmp-{id}"), "replace", &html)])
+    askama_datastar::events([insert(
+        &format!("#cmp-{id}"),
+        ElementPatchMode::Replace,
+        &html,
+    )])
 }
 
 #[derive(serde::Deserialize)]
