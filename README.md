@@ -281,9 +281,9 @@ Whatever runs it, three things matter:
    internet. Two peers both behind NAT cannot connect at all, so an
    unreachable client can only download from the half of the network that is
    reachable, and uploads to the other half never happen.
-2. **The internal port** (`INTERNAL_ADDR`) trusts `X-Slsk-*` credential
-   headers. Bind it to loopback or firewall it to the MCP gateway; never
-   publish it. Metrics have a port of their own (`METRICS_ADDR`) so the
+2. **The internal port** (`INTERNAL_ADDR`) serves MCP and GraphQL without
+   authentication. Bind it to loopback or firewall it to the MCP gateway;
+   never publish it. Metrics have a port of their own (`METRICS_ADDR`) so the
    scraper never needs this one.
 3. **The library and downloads on one filesystem**, so an import is a rename
    rather than a copy of every album.
@@ -349,10 +349,10 @@ startup.
 
 ## Three listeners
 
-The UI listens on one port behind OIDC. MCP and GraphQL listen on another,
-where `X-Slsk-Username`/`X-Slsk-Password` headers are trusted without
-question — that is how the MCP gateway passes the signed-in user's account —
-so it must be reachable from the gateway only. `/metrics` has a third port
+The UI listens on one port behind OIDC. MCP and GraphQL listen on another
+without authentication: the Soulseek account is the one configured, or set
+in the UI, and nothing a request carries changes it. Anyone reaching that
+port drives the client, so it must be reachable from the gateway only. `/metrics` has a third port
 to itself, so a scraper can be admitted without being admitted to the second.
 The chart's NetworkPolicy admits the gateway to one and the metrics agent to
 the other, and nothing else to either.
