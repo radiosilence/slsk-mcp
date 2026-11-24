@@ -662,6 +662,7 @@ impl AlbumView<'_> {
             ("catalogue number", o(&t.catalog_number)),
             ("country", o(&t.country)),
             ("media", o(&t.media)),
+            ("release type", list(&t.release_types)),
             (
                 "compilation",
                 if t.compilation {
@@ -1449,6 +1450,7 @@ fn field_label(field: &str) -> &str {
         "country" => "country",
         "media" => "media",
         "comp" => "compilation",
+        "albumtypes" => "release type",
         "mb_albumid" => "MusicBrainz release",
         "mb_releasegroupid" => "MusicBrainz release group",
         "mb_trackid" => "MusicBrainz recording",
@@ -1841,6 +1843,7 @@ const ALBUM_FIELDS: &[(&str, &str)] = &[
     ("genre", "genre"),
     ("label", "label"),
     ("catalognum", "catalogue number"),
+    ("albumtypes", "release type"),
 ];
 
 /// The album-wide fields offered for several albums at once: all but the
@@ -1854,6 +1857,22 @@ const TRACK_FIELDS: &[&str] = &["disc", "track", "title", "artist"];
 
 /// Of those, the ones that hold a number.
 const NUMBERS: &[&str] = &["disc", "track"];
+
+/// A value typed into the form as sift will write it, so one that differs
+/// only in spelling from what the files hold is not taken for a change.
+/// Release types are lower case, "; " between them.
+fn typed_as_written(field: &str, typed: String) -> String {
+    if field != "albumtypes" {
+        return typed;
+    }
+    typed
+        .split(';')
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map(str::to_lowercase)
+        .collect::<Vec<_>>()
+        .join("; ")
+}
 
 /// What every file has for `field`, and whether they disagree.
 fn consensus(tracks: &[sift::meta::Track], field: &str) -> (Option<String>, bool) {
@@ -1879,7 +1898,7 @@ pub(super) fn edits_from(
     };
     let mut edits = TagEdits::default();
     for (field, _) in ALBUM_FIELDS {
-        let Some(typed) = raw(&format!("a-{field}")) else {
+        let Some(typed) = raw(&format!("a-{field}")).map(|v| typed_as_written(field, v)) else {
             continue;
         };
         let (now, varies) = consensus(tracks, field);
@@ -1932,8 +1951,9 @@ pub(super) fn batch_edits_from(
     let mut asked = false;
     for (field, label) in batch_fields() {
         let typed = super::field(form, &format!("a-{field}"))
-            .map(str::trim)
+            .map(|v| typed_as_written(field, v.trim().to_string()))
             .unwrap_or_default();
+        let typed = typed.as_str();
         let clear = super::field(form, &format!("clear-{field}")).is_some();
         let value = match (typed.is_empty(), clear) {
             (true, false) => continue,

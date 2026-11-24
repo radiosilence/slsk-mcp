@@ -617,7 +617,9 @@ impl Jobs {
             let _ = tokio::fs::remove_file(jobs.fetch_file(id)).await;
             let reason = outcome.as_ref().err().map(|e| format!("{e:#}"));
             let moved = match &reason {
-                None => db::claim_import(&jobs.db, id, &["downloading"], &How::Match(None)).await,
+                None => {
+                    db::claim_import(&jobs.db, id, &["downloading"], &How::Match(None), false).await
+                }
                 Some(r) => db::move_status(&jobs.db, id, &["downloading"], "failed", Some(r)).await,
             };
             match (reason, moved) {
@@ -1056,7 +1058,7 @@ impl Jobs {
     async fn import_due(self: &Arc<Self>) -> Result<()> {
         for job in db::due_waiting(&self.db).await? {
             let how = job.import_how.unwrap_or(How::Match(None));
-            if db::claim_import(&self.db, job.id, &["waiting"], &how).await? {
+            if db::claim_import(&self.db, job.id, &["waiting"], &how, false).await? {
                 self.import_in_background(job.id, how);
             }
         }
@@ -1431,7 +1433,7 @@ impl Jobs {
             }
             // Cancelled or removed since this tick read it: left so.
             let how = How::Match(None);
-            if db::claim_import(&self.db, job.id, &["downloading"], &how).await? {
+            if db::claim_import(&self.db, job.id, &["downloading"], &how, false).await? {
                 // Every file is recorded completed above, and nothing reads
                 // the engine's entries for a job past downloading. Left, the
                 // engine would hold every file ever fetched until restart,
@@ -2109,9 +2111,9 @@ impl Jobs {
     /// A job waiting on a metadata service can be taken too, so a person
     /// need not wait out an outage to file it by its tags or name its
     /// release.
-    async fn claim(&self, id: Uuid, how: &How) -> Result<()> {
+    async fn claim(&self, id: Uuid, how: &How, approve: bool) -> Result<()> {
         let from = [db::DECIDED, &["waiting"]].concat();
-        if db::claim_import(&self.db, id, &from, how).await? {
+        if db::claim_import(&self.db, id, &from, how, approve).await? {
             return Ok(());
         }
         let job = db::job(&self.db, id).await?.context("no such job")?;
@@ -2121,27 +2123,22 @@ impl Jobs {
         )
     }
 
-    /// Import a suspect job despite its analysis, waiting for the outcome.
-    pub async fn approve(self: &Arc<Self>, id: Uuid) -> Result<()> {
-        self.claim(id, &How::Match(None)).await?;
-        db::set_approved(&self.db, id).await?;
-        self.import(id, None).await
-    }
-
-    /// File a job by its own tags, for a release MusicBrainz does not have,
-    /// waiting for the outcome.
-    pub async fn import_as_is(self: &Arc<Self>, id: Uuid, edits: sift::Edits) -> Result<()> {
-        let how = How::AsIs(edits);
-        self.claim(id, &how).await?;
-        self.run_import(id, how).await
-    }
-
-    /// [`Self::import_as_is`] without waiting behind other imports: the job
-    /// is claimed now and filed in the background. A refusal returns it to
-    /// review with the reason, which its card then shows.
+    /// File a job by its own tags, for a release MusicBrainz does not have:
+    /// the job is claimed now and filed in the background. A refusal found
+    /// only while filing returns it to review with the reason, which its card
+    /// then shows.
     pub async fn import_as_is_soon(self: &Arc<Self>, id: Uuid, edits: sift::Edits) -> Result<()> {
+        // Unedited tags that cannot be filed are refused here, while the
+        // caller is still listening; edited ones are checked as they are filed.
+        let unedited = edits.album.is_none()
+            && edits.album_artist.is_none()
+            && edits.date.is_none()
+            && edits.tracks.is_empty();
+        if unedited {
+            self.tagger.check_as_is(&self.files_dir(id).await?).await?;
+        }
         let how = How::AsIs(edits);
-        self.claim(id, &how).await?;
+        self.claim(id, &how, false).await?;
         self.import_in_background(id, how);
         Ok(())
     }
@@ -2191,16 +2188,10 @@ impl Jobs {
             .await?)
     }
 
-    /// Import a job as the given release, waiting for the outcome.
-    pub async fn resolve(self: &Arc<Self>, id: Uuid, release: String) -> Result<()> {
-        self.check_release(&release)?;
-        let how = How::Match(Some(release));
-        self.claim(id, &how).await?;
-        self.run_import(id, how).await
-    }
-
-    /// `approve` or `resolve` without waiting: the job reads `importing` as
-    /// soon as this returns, which is what a person tapping a button sees.
+    /// Import a job waiting on a decision, approved despite its analysis or
+    /// as a named release. The job reads `importing` as soon as this
+    /// returns and is filed in the background, so neither a tapped button
+    /// nor an API call waits behind other imports.
     pub async fn import_soon(
         self: &Arc<Self>,
         id: Uuid,
@@ -2211,10 +2202,7 @@ impl Jobs {
             self.check_release(r)?;
         }
         let how = How::Match(release);
-        self.claim(id, &how).await?;
-        if approve {
-            db::set_approved(&self.db, id).await?;
-        }
+        self.claim(id, &how, approve).await?;
         self.import_in_background(id, how);
         Ok(())
     }

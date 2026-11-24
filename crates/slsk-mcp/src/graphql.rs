@@ -2062,11 +2062,14 @@ impl Mutation {
     }
 
     /// Import a job in review as the given release: a MusicBrainz id,
-    /// `discogs:<number>`, or a link to either.
+    /// `discogs:<number>`, or a link to either. Answers at once with the job
+    /// `importing`; poll `job(id)` for the outcome.
     async fn resolve_job(&self, ctx: &Context<'_>, id: ID, release_id: String) -> Result<Job> {
         let app = app(ctx);
         let id = parse_id(&id)?;
-        app.jobs.resolve(id, release_arg(&release_id)?).await?;
+        app.jobs
+            .import_soon(id, false, Some(release_arg(&release_id)?))
+            .await?;
         job_view(
             app,
             db::job(&app.db, id)
@@ -2079,8 +2082,10 @@ impl Mutation {
 
     /// File a job in review by its files' own tags, without MusicBrainz: for
     /// a release MusicBrainz does not have, or for a job waiting out a
-    /// MusicBrainz outage whose tags are good. Refused, and left in review
-    /// with the reason, unless the tags describe one album.
+    /// MusicBrainz outage whose tags are good. Refused, with the reason,
+    /// when the files' own tags do not describe one album; otherwise answers
+    /// at once with the job `importing`, and one whose `edits` still leave
+    /// it short goes back to review with the reason in `error`.
     async fn import_as_is(
         &self,
         ctx: &Context<'_>,
@@ -2090,7 +2095,7 @@ impl Mutation {
         let app = app(ctx);
         let id = parse_id(&id)?;
         app.jobs
-            .import_as_is(id, edits.map(Into::into).unwrap_or_default())
+            .import_as_is_soon(id, edits.map(Into::into).unwrap_or_default())
             .await?;
         job_view(
             app,
@@ -2102,11 +2107,12 @@ impl Mutation {
         .await
     }
 
-    /// Import a job held as `suspect` despite its analysis.
+    /// Import a job held as `suspect` despite its analysis. Answers at once
+    /// with the job `importing`; poll `job(id)` for the outcome.
     async fn approve_job(&self, ctx: &Context<'_>, id: ID) -> Result<Job> {
         let app = app(ctx);
         let id = parse_id(&id)?;
-        app.jobs.approve(id).await?;
+        app.jobs.import_soon(id, true, None).await?;
         job_view(
             app,
             db::job(&app.db, id)

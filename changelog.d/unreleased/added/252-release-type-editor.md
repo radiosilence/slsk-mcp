@@ -1,0 +1,1 @@
+- **Release type in the library editor.** The album and batch edit forms set the release type (`albumtypes`), so a DJ mix or mixtape can be marked `compilation; dj-mix`.

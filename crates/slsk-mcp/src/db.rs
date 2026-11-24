@@ -1258,22 +1258,25 @@ pub const DECIDED: &[&str] = &["review", "suspect", "failed"];
 /// cannot both succeed, and a restart finds the decision with the status.
 /// The count of put-off tries carries over only from `waiting`: a person's
 /// retry or decision starts it again.
+/// `approve` marks it approved in the same write, so a job is never left
+/// `importing` without the approval its import needs.
 pub async fn claim_import(
     db: &Db,
     id: Uuid,
     from: &[&str],
     how: &crate::jobs::How,
+    approve: bool,
 ) -> Result<bool> {
     let (from, how) = (serde_json::to_string(from).unwrap_or_default(), how.clone());
     db.run(move |c| {
         Ok(c.query_row(
             concat!(
                 "UPDATE jobs SET status = 'importing', error = NULL, import_how = ?3, \
-                 defer_tries = CASE WHEN status = 'waiting' THEN defer_tries ELSE 0 END, updated_at = ",
+                 approved = approved OR ?4, defer_tries = CASE WHEN status = 'waiting' THEN defer_tries ELSE 0 END, updated_at = ",
                 now!(),
                 " WHERE id = ?1 AND status IN (SELECT value FROM json_each(?2)) RETURNING id"
             ),
-            params![id, from, Json(&how)],
+            params![id, from, Json(&how), approve],
             |_| Ok(()),
         )
         .optional()?
@@ -1386,21 +1389,6 @@ pub async fn set_as_is_blocker(db: &Db, id: Uuid, blocker: &str) -> Result<()> {
         c.execute(
             "UPDATE jobs SET as_is_blocker = ?2 WHERE id = ?1",
             params![id, blocker],
-        )?;
-        Ok(())
-    })
-    .await
-}
-
-pub async fn set_approved(db: &Db, id: Uuid) -> Result<()> {
-    db.run(move |c| {
-        c.execute(
-            concat!(
-                "UPDATE jobs SET approved = TRUE, updated_at = ",
-                now!(),
-                " WHERE id = ?1"
-            ),
-            params![id],
         )?;
         Ok(())
     })
@@ -1760,14 +1748,22 @@ mod tests {
         assert!((295..=300).contains(&ahead), "{ahead}");
         // Back to importing from waiting keeps the count.
         let how = crate::jobs::How::Match(None);
-        assert!(claim_import(&db, job.id, &["waiting"], &how).await.unwrap());
+        assert!(
+            claim_import(&db, job.id, &["waiting"], &how, false)
+                .await
+                .unwrap()
+        );
         assert_eq!(
             defer_import(&db, job.id, "down", 2, std::time::Duration::ZERO)
                 .await
                 .unwrap(),
             Some(2)
         );
-        assert!(claim_import(&db, job.id, &["waiting"], &how).await.unwrap());
+        assert!(
+            claim_import(&db, job.id, &["waiting"], &how, false)
+                .await
+                .unwrap()
+        );
         assert_eq!(
             defer_import(&db, job.id, "down", 2, std::time::Duration::ZERO)
                 .await
@@ -1776,7 +1772,11 @@ mod tests {
         );
         // A person's retry from failed starts the count again.
         set_status(&db, job.id, "failed", None).await.unwrap();
-        assert!(claim_import(&db, job.id, &["failed"], &how).await.unwrap());
+        assert!(
+            claim_import(&db, job.id, &["failed"], &how, false)
+                .await
+                .unwrap()
+        );
         assert_eq!(
             defer_import(&db, job.id, "down", 2, std::time::Duration::ZERO)
                 .await
@@ -1797,10 +1797,10 @@ mod tests {
         assert_eq!(importing.len(), 1);
         assert_eq!(importing[0].id, a.id);
         let (from, how) = (DECIDED, &crate::jobs::How::Match(None));
-        assert!(!claim_import(&db, a.id, from, how).await.unwrap());
+        assert!(!claim_import(&db, a.id, from, how, false).await.unwrap());
         set_status(&db, a.id, "review", None).await.unwrap();
-        assert!(claim_import(&db, a.id, from, how).await.unwrap());
-        assert!(!claim_import(&db, a.id, from, how).await.unwrap());
+        assert!(claim_import(&db, a.id, from, how, false).await.unwrap());
+        assert!(!claim_import(&db, a.id, from, how, false).await.unwrap());
     }
 
     #[tokio::test]
@@ -2023,7 +2023,7 @@ mod tests {
         let j = job("a", "review");
         insert_job(&db, &j, &[]).await.unwrap();
         let how = crate::jobs::How::Match(Some("release".into()));
-        assert!(claim_import(&db, j.id, DECIDED, &how).await.unwrap());
+        assert!(claim_import(&db, j.id, DECIDED, &how, false).await.unwrap());
         let read = super::job(&db, j.id).await.unwrap().unwrap().import_how;
         assert!(matches!(read, Some(crate::jobs::How::Match(Some(r))) if r == "release"));
         // A decision written by a build whose `How` differed reads as none,
