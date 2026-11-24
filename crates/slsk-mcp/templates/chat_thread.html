@@ -1,10 +1,10 @@
 <div id="thread">
   <form id="thread-form"><input type="hidden" name="kind" value="{{ kind }}"><input type="hidden" name="name" value="{{ name }}"></form>
 {% if !kind.is_empty() %}
-  <article class="card">
+  <article class="panel mb-3">
     <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
       <strong class="min-w-0 flex-auto wrap-anywhere">{% if kind == "pm" %}<a href="{{ crate::ui::profile_href(name) }}">{{ name }}</a>{% else %}{{ name }}{% endif %}</strong>
-      <span class="pill">{% if kind == "room" %}room{% else %}private{% endif %}</span>
+      <span class="text-meta text-muted">{% if kind == "room" %}room{% else %}private{% endif %}</span>
     </div>
     {% if kind == "pm" %}
     <form id="thread-peer"><input type="hidden" name="username" value="{{ name }}"></form>

@@ -1,6 +1,6 @@
-<li class="{% if r.ok %}moved{% else %}left{% endif %}">
+<li>
   <span class="min-w-0 flex-[1_1_60%] wrap-anywhere">{{ self::rel(root, r.path) }}</span>
-  <span class="pill flex-none">{% if r.ok %}done{% else %}failed{% endif %}</span>
+  <span class="status flex-none {% if r.ok %}ok{% else %}warn{% endif %}">{% if r.ok %}done{% else %}failed{% endif %}</span>
   <span class="text-meta text-muted wrap-anywhere">{{ r.detail }}</span>
   {% for p in r.problems %}<span class="text-meta text-bad wrap-anywhere">{{ p }}</span>{% endfor %}
 </li>

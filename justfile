@@ -21,7 +21,7 @@ fast:
     cargo fmt --all -- --check
 
 # Fail when the committed stylesheet or typeface is not what the sources and the installed theme give.
-css-fresh: theme
+css-fresh: theme kit-check
     #!/usr/bin/env bash
     set -euo pipefail
     css=$(mktemp)
@@ -29,6 +29,11 @@ css-fresh: theme
     tailwindcss --optimize --input crates/slsk-mcp/styles/app.css --output "$css"
     cmp -s "$css" crates/slsk-mcp/assets/app.css || { echo 'assets/app.css is stale: run `just css`'; exit 1; }
     cmp -s node_modules/@radiosilence/theme/geist-mono.woff2 crates/slsk-mcp/assets/geist-mono.woff2 || { echo 'assets/geist-mono.woff2 is stale: run `just css`'; exit 1; }
+
+# Fail on markup outside the kōan web kit: rounded corners, shadows, Tailwind's palette and type sizes, inline styles.
+# Most compile to nothing, so a leftover silently loses its look. A deliberate exception carries `kit: raw` and why.
+kit-check: theme
+    node node_modules/@radiosilence/theme/kit-check.mjs crates/slsk-mcp/templates crates/slsk-mcp/src
 
 # Install the shared theme (@radiosilence/theme) the stylesheet imports, writing the registry token first if missing.
 theme:
@@ -59,7 +64,7 @@ versions:
 # Compile the web UI's stylesheet from crates/slsk-mcp/styles/ and copy the theme's typeface beside it, where the
 # stylesheet's relative font URL points. Both are committed because the server embeds them; CI fails a build where
 # either is stale.
-css: theme
+css: theme kit-check
     tailwindcss --optimize --input crates/slsk-mcp/styles/app.css --output crates/slsk-mcp/assets/app.css
     cp node_modules/@radiosilence/theme/geist-mono.woff2 crates/slsk-mcp/assets/geist-mono.woff2
 

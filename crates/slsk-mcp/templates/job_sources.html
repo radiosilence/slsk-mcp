@@ -2,18 +2,18 @@
 <div id="{{ target }}" class="mt-1.5 grid min-w-0 gap-3">
   {% if let Some(c) = current %}
   <section class="min-w-0">
-    <h3 class="m-0 text-meta text-muted">Source</h3>
+    <h3 class="m-0">Source</h3>
     <ul class="rows tight">{% call line(c) %}{% endcall %}</ul>
   </section>
   {% endif %}
   {% if !others.is_empty() %}
   <section class="min-w-0">
-    <h3 class="m-0 text-meta text-muted">Other copies found</h3>
+    <h3 class="m-0">Other copies found</h3>
     <ul class="rows tight">{% for o in others %}{% call line(o) %}{% endcall %}{% endfor %}</ul>
   </section>
   {% endif %}
   <section class="min-w-0">
-    <h3 class="m-0 text-meta text-muted">History</h3>
+    <h3 class="m-0">History</h3>
     {% if events.is_empty() %}<p class="my-0.5 text-meta text-muted">Nothing has happened to it yet.</p>{% else %}
     <ul class="rows tight">
     {% for e in events %}

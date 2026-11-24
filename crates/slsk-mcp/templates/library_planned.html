@@ -1,7 +1,7 @@
 <li id="{{ slot }}-pv-{{ p.key }}" class="items-start">
-  {% if p.applicable %}<input class="mx-0.5 mt-0.5 size-[18px] flex-none" type="checkbox" name="path" value="{{ p.path }}" aria-label="Apply to {{ p.title }}"{% if p.ticked %} checked{% endif %}>{% if let Some(w) = p.with %}<input type="hidden" name="with-{{ p.key }}" value="{{ w }}">{% endif %}{% endif %}
+  {% if p.applicable %}<input class="mx-0.5 mt-1 flex-none" type="checkbox" name="path" value="{{ p.path }}" aria-label="Apply to {{ p.title }}"{% if p.ticked %} checked{% endif %}>{% if let Some(w) = p.with %}<input type="hidden" name="with-{{ p.key }}" value="{{ w }}">{% endif %}{% endif %}
   <details class="min-w-0 flex-1{% if !p.applicable %} pl-6{% endif %}">
-    <summary class="flex cursor-pointer list-none flex-wrap gap-x-2.5 gap-y-0.5 [&::-webkit-details-marker]:hidden">
+    <summary class="flex list-none flex-wrap gap-x-2.5 gap-y-0.5 [&::-webkit-details-marker]:hidden">
       <span class="min-w-0 flex-[1_1_60%] wrap-anywhere{% if !p.applicable %} text-muted{% endif %}">{{ p.title }}</span>
       <span class="text-meta text-muted wrap-anywhere">
       {% match p.body %}
@@ -62,7 +62,7 @@
     {% when Body::RemoveArt with (r) %}
     {% if !r.files.is_empty() %}<p class="text-meta text-muted wrap-anywhere">Pictures taken out of: {{ r.files.join(", ") }}</p>{% endif %}
     {% when Body::SetArt with { set, token } %}
-    <img src="/library/art/pending/{{ token }}" alt="The new art" class="my-1.5 size-32 rounded border border-rule object-cover">
+    <img src="/library/art/pending/{{ token }}" alt="The new art" class="my-1.5 size-32 border border-rule object-cover">
     <p class="text-meta text-muted wrap-anywhere">{{ set.mime }}, {{ set.width }}×{{ set.height }}, {{ set.bytes }} bytes{% if set.resized %}, scaled down to the width imports embed{% endif %}</p>
     {% if !set.embedded.is_empty() %}<p class="text-meta text-muted wrap-anywhere">The only picture embedded in: {{ set.embedded.join(", ") }}</p>{% endif %}
     {% if let Some(f) = set.cover_file %}<p class="text-meta text-muted wrap-anywhere">Written beside them as {{ f }}{% if !set.binned.is_empty() %}; to the bin: {{ set.binned.join(", ") }}{% endif %}</p>{% endif %}

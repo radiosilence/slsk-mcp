@@ -5,7 +5,7 @@
   <p class="text-meta text-muted">Change what needs changing; the preview lists each field as it is and as it would be. A field the files disagree on is left alone unless typed. Changing an artist clears that file's list of artists and their MusicBrainz ids; Credit artists splits it again.</p>
   <div class="my-2 grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2">
   {% for (field, label) in self.fields() %}
-    <label class="grid gap-0.5 text-meta text-muted">{{ label }}<input name="a-{{ field }}" value="{{ self.now(field) }}"{% if self.varies(field) %} placeholder="(differs between files)"{% endif %} autocomplete="off"></label>
+    <label class="field"><span>{{ label }}</span><input name="a-{{ field }}" value="{{ self.now(field) }}"{% if self.varies(field) %} placeholder="(differs between files)"{% endif %} autocomplete="off"></label>
   {% endfor %}
   </div>
   <table class="my-2 w-full">
