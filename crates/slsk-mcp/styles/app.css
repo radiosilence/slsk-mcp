@@ -30,12 +30,21 @@
     --tone: var(--ok);
   }
 
-  .status:is(.displaced, .rejected, .failed, .suspect) {
+  .status:is(.displaced, .disconnected, .rejected, .failed, .suspect) {
     --tone: var(--bad);
   }
 
   .status:is(.spare, .away, .review, .downloading, .importing, .waiting) {
     --tone: var(--warn);
+  }
+
+  /* Still being found out: the waiting tone, breathing. */
+  .status.connecting {
+    --tone: var(--muted);
+  }
+
+  .status.connecting::before {
+    @apply animate-pulse motion-reduce:animate-none;
   }
 
   /* Rows inside a panel's detail: closer together than a page's list. */

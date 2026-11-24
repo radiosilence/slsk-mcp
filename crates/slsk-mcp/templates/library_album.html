@@ -34,8 +34,8 @@
     <label class="field"><span>image url</span><input type="url" name="url" placeholder="https://…" autocomplete="off"></label>
     <label class="field"><span>or a file</span><input type="file" name="image" accept="image/jpeg,image/png"><small>A JPEG or PNG.</small></label>
     <div class="flex flex-wrap items-center gap-x-4 gap-y-1">
-      <label class="flex items-center gap-1.5 text-muted"><input type="checkbox" name="embed" value="1" checked> Embedded in the files</label>
-      <label class="flex items-center gap-1.5 text-muted"><input type="checkbox" name="file" value="1"> Cover file</label>
+      <label class="flex items-center gap-1.5 text-muted"><input type="checkbox" name="embed" value="1" checked> embedded in the files</label>
+      <label class="flex items-center gap-1.5 text-muted"><input type="checkbox" name="file" value="1"> cover file</label>
       <button type="button" data-indicator="_{{ slot }}_art" data-attr:disabled="$_{{ slot }}_art" data-class:busy="$_{{ slot }}_art" data-on:click="@post('/library/art/preview', {contentType: 'form', selector: '#{{ slot }}-art'})">Preview</button>
     </div>
   </form>
@@ -45,11 +45,11 @@
   <ul class="rows tight mt-2">
   {% for t in tracks %}
     <li>
-      <details class="min-w-0 flex-1">
-        <summary class="flex list-none flex-wrap gap-x-2.5 gap-y-0.5 [&::-webkit-details-marker]:hidden"><span class="min-w-0 flex-[1_1_60%] wrap-anywhere">{% if let Some(d) = t.disc %}{% if t.disc_total.unwrap_or(1) > 1 %}{{ d }}-{% endif %}{% endif %}{% if let Some(n) = t.track %}{{ n }}. {% endif %}{% if let Some(title) = t.title %}{{ title }}{% else %}{{ self.file(t) }}{% endif %}</span><span class="text-meta text-muted wrap-anywhere">{% if let Some(a) = t.artist %}{{ a }} · {% endif %}{{ self.length(t) }}</span></summary>
+      <details class="disclosure min-w-0 flex-1">
+        <summary class="flex flex-wrap gap-x-2.5 gap-y-0.5"><span class="min-w-0 flex-[1_1_60%] wrap-anywhere">{% if let Some(d) = t.disc %}{% if t.disc_total.unwrap_or(1) > 1 %}{{ d }}-{% endif %}{% endif %}{% if let Some(n) = t.track %}{{ n }}. {% endif %}{% if let Some(title) = t.title %}{{ title }}{% else %}{{ self.file(t) }}{% endif %}</span><span class="text-meta text-muted wrap-anywhere">{% if let Some(a) = t.artist %}{{ a }} · {% endif %}{{ self.length(t) }}</span></summary>
         <p class="text-fine text-muted wrap-anywhere">{{ self.file(t) }}</p>
-        <table class="mt-1 mb-2 w-full text-meta">
-        {% for (name, value) in self.tags(t) %}<tr><th class="w-[1%] py-0.5 pr-2.5 text-left align-top font-normal whitespace-nowrap text-muted">{{ name }}</th><td class="px-1.5 py-0.5 wrap-anywhere">{{ value }}</td></tr>{% endfor %}
+        <table class="dense mt-1 mb-2">
+        {% for (name, value) in self.tags(t) %}<tr><td class="w-[1%] align-top whitespace-nowrap text-muted">{{ name }}</td><td class="wrap-anywhere">{{ value }}</td></tr>{% endfor %}
         </table>
       </details>
     </li>

@@ -542,8 +542,7 @@ To run the service locally: a `SEAL_KEY`, and
 The web UI is drawn with the kōan web kit from
 [@radiosilence/theme](https://github.com/radiosilence/theme), shared with koan
 and the other web UIs so they look and read alike: its element defaults, button
-weights, panels, statuses, meter and toast, on square corners with no shadows and
-seven type roles. The palette is dark unless the device asks for light. Layout is
+weights, panels, statuses, meter and toast, on square corners with no shadows. The palette is dark unless the device asks for light. Layout is
 Tailwind v4 utilities in the templates and in the HTML the Rust code writes.
 `crates/slsk-mcp/styles/` holds only what is slsk-mcp's own: its accent and the
 tones of the statuses the server writes into the markup. The theme removes

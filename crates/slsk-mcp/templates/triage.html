@@ -4,8 +4,9 @@
   </div>
 {% match error %}{% when Some with (e) %}<p class="text-meta text-bad wrap-anywhere">{{ e }}</p>{% when None %}
   {% if causes.is_empty() %}<p class="text-meta text-muted">Everything in the last {{ days }} days landed cleanly.</p>{% endif %}
+  <div class="grid gap-3">
   {% for c in causes %}
-  <article class="panel mb-3">
+  <article class="panel">
     <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5"><strong class="min-w-0 flex-auto wrap-anywhere">{{ self.label(c.cause) }}</strong><span class="text-ink">{{ c.count }}</span></div>
     <ul class="rows tight">
     {% for e in c.examples %}
@@ -15,5 +16,6 @@
     </ul>
   </article>
   {% endfor %}
+  </div>
 {% endmatch %}
 </div>

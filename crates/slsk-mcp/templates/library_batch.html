@@ -1,4 +1,4 @@
-<div id="lib-preview" class="panel mb-3">
+<div id="lib-preview" class="panel">
   <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5"><strong class="min-w-0 flex-auto wrap-anywhere">Edit tags: {{ rows.len() }} album{% if rows.len() != 1 %}s{% endif %}</strong></div>
   <form id="lib-batch" data-on:submit__prevent="@post('/library/preview/edit', {contentType: 'form', selector: '#lib-batch'})">
     <input type="hidden" name="batch" value="1">
@@ -9,7 +9,7 @@
     {% for (field, label) in self.fields() %}
       <div class="field">
         <label for="be-{{ field }}">{{ label }}</label>
-        <div class="flex items-center gap-2"><input id="be-{{ field }}" class="min-w-0 flex-1" name="a-{{ field }}" placeholder="leave as is" autocomplete="off"><label class="flex items-center gap-1.5 text-meta text-muted"><input type="checkbox" name="clear-{{ field }}" value="1" data-on:change="document.getElementById('be-{{ field }}').disabled = el.checked"> Clear</label></div>
+        <div class="flex items-center gap-2"><input id="be-{{ field }}" class="min-w-0 flex-1" name="a-{{ field }}" placeholder="leave as is" autocomplete="off"><label class="flex items-center gap-1.5 text-meta text-muted"><input type="checkbox" name="clear-{{ field }}" value="1" data-on:change="document.getElementById('be-{{ field }}').disabled = el.checked"> clear</label></div>
       </div>
     {% endfor %}
     </div>

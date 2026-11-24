@@ -1,4 +1,4 @@
-<article id="job-{{ j.id.as_str() }}" class="panel mb-3{% if warn %} border-warn{% endif %}">
+<article id="job-{{ j.id.as_str() }}" class="panel{% if warn %} border-warn{% endif %}">
   <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
     <strong class="min-w-0 flex-auto wrap-anywhere" title="{% match j.folder %}{% when Some with (f) %}{{ f }}{% when None %}{% endmatch %}">{% if full %}{{ self.heading(j) }}{% else %}<a class="text-ink" href="/jobs/{{ j.id.as_str() }}">{{ self.heading(j) }}</a>{% endif %}</strong>
     <span class="status {{ j.status }}" data-class:busy="${{ self.sig(j) }}">{{ self.label(j.status) }}</span>
@@ -31,8 +31,8 @@
   {% match self.ask(j) %}{% when Some with (a) %}<p class="mt-2 mb-0.5">{{ a }}</p>{% when None %}{% endmatch %}
   {% match j.error %}{% when Some with (e) %}<p class="my-0.5 text-meta {% if j.status == "failed" %}text-bad{% else %}text-muted{% endif %} wrap-anywhere">{{ e }}</p>{% when None %}{% endmatch %}
   {% if !j.analysis.is_empty() && (full || j.status == "suspect" || j.status == "review") %}
-  <details class="mt-2" data-ignore-morph>
-    <summary class="text-muted">Spectral analysis</summary>
+  <details class="disclosure mt-2" data-ignore-morph>
+    <summary class="text-muted">spectral analysis</summary>
     <ul class="mt-1.5 grid gap-1">
     {% for t in j.analysis %}
       <li class="flex flex-wrap items-baseline gap-2">
@@ -46,20 +46,20 @@
   </details>
   {% endif %}
   {% if warn && !full %}
-  <details class="mt-2" data-ignore-morph data-on:toggle="el.open && @get('/jobs/{{ j.id.as_str() }}/sources')">
-    <summary class="text-muted">Sources and history{% if j.alternates > 0 %} · {{ j.alternates }} other {% if j.alternates == 1 %}copy{% else %}copies{% endif %}{% endif %}</summary>
+  <details class="disclosure mt-2" data-ignore-morph data-on:toggle="el.open && @get('/jobs/{{ j.id.as_str() }}/sources')">
+    <summary class="text-muted">sources and history{% if j.alternates > 0 %} · {{ j.alternates }} other {% if j.alternates == 1 %}copy{% else %}copies{% endif %}{% endif %}</summary>
     <div id="sources-{{ j.id.as_str() }}" class="mt-1.5 text-meta text-muted">Reading history…</div>
   </details>
   {% endif %}
   {% if j.status == "downloading" && j.username.is_some() %}
-  <details class="mt-2" data-ignore-morph data-on:toggle="el.open && @get('/jobs/{{ j.id.as_str() }}/pick')">
-    <summary class="text-muted">Choose files</summary>
+  <details class="disclosure mt-2" data-ignore-morph data-on:toggle="el.open && @get('/jobs/{{ j.id.as_str() }}/pick')">
+    <summary class="text-muted">choose files</summary>
     <div id="pick-{{ j.id.as_str() }}" class="mt-1.5 text-meta text-muted">Reading files…</div>
   </details>
   {% endif %}
   {% if j.status == "review" || j.status == "suspect" %}
-  <details class="mt-2" data-ignore-morph data-on:toggle="el.open && @get('/jobs/{{ j.id.as_str() }}/files')">
-    <summary class="text-muted">Files and their tags</summary>
+  <details class="disclosure mt-2" data-ignore-morph data-on:toggle="el.open && @get('/jobs/{{ j.id.as_str() }}/files')">
+    <summary class="text-muted">files and their tags</summary>
     <div id="files-{{ j.id.as_str() }}" class="mt-1.5 text-meta text-muted">Reading tags…</div>
   </details>
   {% endif %}
@@ -71,8 +71,8 @@
       <span>{{ c.artist }} — {{ c.title }}</span>
       <span class="text-meta text-muted wrap-anywhere">{% match c.date %}{% when Some with (d) %}{{ d }}{% when None %}{% endmatch %} {% match c.country %}{% when Some with (x) %}{{ x }}{% when None %}{% endmatch %} {% match c.media %}{% when Some with (m) %}{{ m }}{% when None %}{% endmatch %} · {{ c.tracks }} tracks · distance {{ c.distance }}{% if c.missing > 0 %} · {{ c.missing }} missing{% endif %}{% if c.extra > 0 %} · {{ c.extra }} extra{% endif %}</span>
       {% let (site, href) = crate::library::release_link(c.release_id) %}<a class="text-meta" href="{{ href }}" target="_blank" rel="noopener">{{ site }}</a>
-      <details class="basis-full" data-ignore-morph data-on:toggle="el.open && @get('/jobs/{{ j.id.as_str() }}/compare/{{ c.release_id }}')">
-        <summary class="text-meta text-muted">Compare track by track</summary>
+      <details class="disclosure basis-full" data-ignore-morph data-on:toggle="el.open && @get('/jobs/{{ j.id.as_str() }}/compare/{{ c.release_id }}')">
+        <summary class="text-meta text-muted">compare track by track</summary>
         <div id="cmp-{{ crate::ui::compare_id(j.id.as_str(), c.release_id) }}" class="mt-1.5 text-meta text-muted">Fetching the release…</div>
       </details>
     </li>
@@ -86,7 +86,7 @@
     <button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}">Use release</button>
   </form>
   {% endif %}
-  {% match self.advice(j) %}{% when Some with (a) %}<p class="notice mt-2.5 mb-0"><strong>Suggested:</strong> {{ a.why }}</p>{% when None %}{% endmatch %}
+  {% match self.advice(j) %}{% when Some with (a) %}<p class="notice mt-2.5 mb-0"><span><strong>suggested:</strong> {{ a.why }}</span></p>{% when None %}{% endmatch %}
   {% match self.as_is_blocker_line(j) %}{% when Some with (b) %}{% if j.status == "review" %}<p class="my-0.5 text-meta text-muted">Import as-is won't work: {{ b }}</p>{% endif %}{% when None %}{% endmatch %}
   <div class="mt-2.5 flex flex-wrap items-center gap-2">
     {% match self.advice(j) %}{% when Some with (a) %}<button{% if full %} class="primary"{% endif %} data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/{{ a.action }}')">{{ a.label }}</button>{% when None %}{% endmatch %}

@@ -1057,12 +1057,26 @@
     --tone: var(--ok);
   }
 
-  .status:is(.displaced, .rejected, .failed, .suspect) {
+  .status:is(.displaced, .disconnected, .rejected, .failed, .suspect) {
     --tone: var(--bad);
   }
 
   .status:is(.spare, .away, .review, .downloading, .importing, .waiting) {
     --tone: var(--warn);
+  }
+
+  .status.connecting {
+    --tone: var(--muted);
+  }
+
+  .status.connecting:before {
+    animation: var(--animate-pulse);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .status.connecting:before {
+      animation: none;
+    }
   }
 
   .rows.tight > li {
@@ -1187,10 +1201,6 @@
     margin-bottom: calc(var(--spacing) * 2);
   }
 
-  .mb-3 {
-    margin-bottom: calc(var(--spacing) * 3);
-  }
-
   .ml-\[30px\] {
     margin-left: 30px;
   }
@@ -1302,10 +1312,6 @@
 
   .\[scrollbar-width\:none\] {
     scrollbar-width: none;
-  }
-
-  .list-none {
-    list-style-type: none;
   }
 
   .grid-cols-\[auto_minmax\(0\,1fr\)\] {
@@ -1503,10 +1509,6 @@
     padding-inline: var(--spacing);
   }
 
-  .px-1\.5 {
-    padding-inline: calc(var(--spacing) * 1.5);
-  }
-
   .px-2 {
     padding-inline: calc(var(--spacing) * 2);
   }
@@ -1517,10 +1519,6 @@
 
   .px-4 {
     padding-inline: calc(var(--spacing) * 4);
-  }
-
-  .py-0\.5 {
-    padding-block: calc(var(--spacing) * .5);
   }
 
   .py-1 {
@@ -1571,10 +1569,6 @@
     padding-top: max(10px, env(safe-area-inset-top));
   }
 
-  .pr-2\.5 {
-    padding-right: calc(var(--spacing) * 2.5);
-  }
-
   .pb-1 {
     padding-bottom: var(--spacing);
   }
@@ -1603,10 +1597,6 @@
     text-align: center;
   }
 
-  .text-left {
-    text-align: left;
-  }
-
   .align-top {
     vertical-align: top;
   }
@@ -1629,11 +1619,6 @@
   .leading-none {
     --tw-leading: 1;
     line-height: 1;
-  }
-
-  .font-normal {
-    --tw-font-weight: var(--font-weight-normal);
-    font-weight: var(--font-weight-normal);
   }
 
   .font-semibold {
@@ -1737,34 +1722,8 @@
     gap: 0;
   }
 
-  :is(.\*\:px-1 > *) {
-    padding-inline: var(--spacing);
-  }
-
-  :is(.\*\:py-0\.5 > *) {
-    padding-block: calc(var(--spacing) * .5);
-  }
-
-  :is(.\*\:text-left > *) {
-    text-align: left;
-  }
-
-  :is(.\*\:text-meta > *) {
-    font-size: var(--text-meta);
-    line-height: var(--tw-leading, var(--text-meta--line-height));
-  }
-
-  :is(.\*\:font-normal > *) {
-    --tw-font-weight: var(--font-weight-normal);
-    font-weight: var(--font-weight-normal);
-  }
-
   :is(.\*\:wrap-anywhere > *) {
     overflow-wrap: anywhere;
-  }
-
-  :is(.\*\:text-muted > *) {
-    color: var(--muted);
   }
 
   :is(.\*\:first\:w-\[4\.5em\] > *):first-child {
@@ -1838,10 +1797,6 @@
 
   .\[\&\.busy\]\:opacity-70.busy {
     opacity: .7;
-  }
-
-  .\[\&\:\:-webkit-details-marker\]\:hidden::-webkit-details-marker {
-    display: none;
   }
 
   .\[\&\:\:-webkit-scrollbar\]\:hidden::-webkit-scrollbar {

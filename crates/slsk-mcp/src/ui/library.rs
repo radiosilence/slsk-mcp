@@ -1834,13 +1834,13 @@ async fn previewed(s: UiState, action: Action, form: Vec<(String, String)>) -> R
 
 /// Album-wide fields the edit form offers, by beets name, with their labels.
 const ALBUM_FIELDS: &[(&str, &str)] = &[
-    ("album", "Album"),
-    ("albumartist", "Album artist"),
-    ("date", "Date"),
-    ("original_date", "Original date"),
-    ("genre", "Genre"),
-    ("label", "Label"),
-    ("catalognum", "Catalogue number"),
+    ("album", "album"),
+    ("albumartist", "album artist"),
+    ("date", "date"),
+    ("original_date", "original date"),
+    ("genre", "genre"),
+    ("label", "label"),
+    ("catalognum", "catalogue number"),
 ];
 
 /// The album-wide fields offered for several albums at once: all but the
