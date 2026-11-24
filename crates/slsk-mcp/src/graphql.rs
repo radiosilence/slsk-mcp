@@ -2082,9 +2082,10 @@ impl Mutation {
 
     /// File a job in review by its files' own tags, without MusicBrainz: for
     /// a release MusicBrainz does not have, or for a job waiting out a
-    /// MusicBrainz outage whose tags are good. Answers at once with the job
-    /// `importing`; unless the tags describe one album it goes back to
-    /// review with the reason in `error`.
+    /// MusicBrainz outage whose tags are good. Refused, with the reason,
+    /// when the files' own tags do not describe one album; otherwise answers
+    /// at once with the job `importing`, and one whose `edits` still leave
+    /// it short goes back to review with the reason in `error`.
     async fn import_as_is(
         &self,
         ctx: &Context<'_>,

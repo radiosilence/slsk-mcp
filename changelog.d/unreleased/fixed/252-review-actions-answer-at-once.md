@@ -1,1 +1,1 @@
-- **Review actions answer at once.** `resolveJob`, `importAsIs` and `approveJob` file the job in the background and return it as `importing`, as the web UI does, instead of waiting behind every other import and timing out. A refused `importAsIs` now shows as the job back in review with the reason in `error`.
+- **Review actions answer at once.** `resolveJob`, `importAsIs` and `approveJob` file the job in the background and return it as `importing`, as the web UI does, instead of waiting behind every other import and timing out.
