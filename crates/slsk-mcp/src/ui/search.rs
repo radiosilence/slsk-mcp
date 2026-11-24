@@ -225,6 +225,9 @@ async fn kept(app: &App, tab: &SearchTab, shown: usize) -> String {
             Vec::new()
         }
     };
+    if let Some(engine) = app.session.engine() {
+        folders.retain(|f| !engine.is_banned(&f.username));
+    }
     let more = folders.len().saturating_sub(shown);
     folders.truncate(shown);
     ResultsView {
@@ -426,6 +429,7 @@ pub(super) async fn results(State(s): State<UiState>, Query(view): Query<SearchQ
         let mut heard = graphql::listen(&engine, &tab.query, LISTEN);
         loop {
             let graphql::Heard { responses, done, error } = heard.borrow_and_update().clone();
+            let responses = graphql::unbanned(&engine, &responses);
             let mut folders = best(&responses, &tab.query, tab.lossless);
             let found = folders.len();
             folders.truncate(KEEP);
@@ -475,6 +479,7 @@ async fn peers(
     let mut folders = db::search_tab_folders(&s.app.db, id)
         .await
         .unwrap_or_default();
+    folders.retain(|f| !engine.is_banned(&f.username));
     folders.truncate(shown(&view));
     let mut by_user: HashMap<String, Vec<u64>> = HashMap::new();
     for f in &folders {

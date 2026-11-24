@@ -100,6 +100,8 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/jobs/{id}/compare/{release}", get(job_compare))
         .route("/uploads/cancel", post(cancel_upload))
         .route("/ban", post(ban))
+        .route("/peer/ban", post(peer_ban))
+        .route("/peer/unban", post(peer_unban))
         .route("/account", post(account))
         .route("/reconnect", post(reconnect))
         .merge(search::routes())
@@ -838,6 +840,8 @@ struct CardView {
     discogs: bool,
     /// The list of files is open, so it is drawn.
     open: bool,
+    /// The job's peer is banned.
+    banned: bool,
 }
 
 impl CardView {
@@ -1101,6 +1105,9 @@ impl CardView {
             "match" => j.status == "review",
             "cancel" => matches!(j.status.as_str(), "downloading" | "waiting"),
             "finish" => j.finishable && j.username.is_some(),
+            "scam" => {
+                j.username.is_some() && !matches!(j.status.as_str(), "importing" | "imported")
+            }
             _ => false,
         };
         applies && self.advice(j).is_none_or(|a| a.action != action)
@@ -1133,6 +1140,11 @@ fn card(app: &App, j: Job, full: bool, open: bool) -> CardView {
     let place = Uuid::parse_str(j.id.as_str())
         .ok()
         .and_then(|id| app.jobs.place(id));
+    let banned = j
+        .username
+        .as_deref()
+        .zip(app.session.engine())
+        .is_some_and(|(u, e)| e.is_banned(u));
     CardView {
         j,
         warn,
@@ -1140,6 +1152,7 @@ fn card(app: &App, j: Job, full: bool, open: bool) -> CardView {
         place,
         discogs: app.jobs.discogs(),
         open: full || open,
+        banned,
     }
 }
 
@@ -1963,6 +1976,20 @@ async fn job_action(
     Signals(shown): Signals<Shown>,
 ) -> Response {
     let jobs = &s.app.jobs;
+    if action == "scam" {
+        return match graphql::mark_scam(&s.app, id).await {
+            Ok(scam) => {
+                let moved = scam.jobs.iter().filter(|j| j.moved_to.is_some()).count();
+                let msg = format!(
+                    "Banned {}; {moved} of {} albums moved to another peer",
+                    scam.peer,
+                    scam.jobs.len()
+                );
+                done_with(&s.app, &shown, true, flash_ok(&msg)).await
+            }
+            Err(e) => one(flash_err(&e.message)),
+        };
+    }
     let result = match action.as_str() {
         "retry" => jobs.retry(id).await,
         "cancel" => jobs.cancel(id).await,
@@ -2016,7 +2043,7 @@ async fn done_with(app: &App, shown: &Shown, settled: bool, extra: String) -> Re
             html
         }
     };
-    one(format!("{html}\n{extra}\n<div id=\"flash\"></div>"))
+    one(format!("{html}\n<div id=\"flash\"></div>\n{extra}"))
 }
 
 fn failed(e: &anyhow::Error) -> Response {
@@ -2344,6 +2371,58 @@ async fn reconnect(State(s): State<UiState>) -> Response {
         e.reconnect();
     }
     one(status_html(&s.app).await)
+}
+
+/// The key a peer's Ban button carries, so one press redraws every copy of
+/// it on the page whatever characters the name holds.
+fn peer_key(username: &str) -> String {
+    username.bytes().map(|b| format!("{b:02x}")).collect()
+}
+
+/// A Ban button for a peer, or Unban once banned. Banning asks first: it
+/// refuses the peer everything and stops them being downloaded from.
+fn ban_button(username: &str, banned: bool) -> String {
+    let key = peer_key(username);
+    let (label, action, ask) = if banned {
+        ("Unban", "/peer/unban", "")
+    } else {
+        (
+            "Ban",
+            "/peer/ban",
+            "confirm('Ban this user? They get nothing more from you, and nothing is downloaded from them.') && ",
+        )
+    };
+    format!(
+        r#"<span data-peer-ban="{key}"><form id="pb-{key}" hidden><input type="hidden" name="username" value="{user}"></form><button type="button" class="quiet" data-indicator="_pb_{key}" data-attr:disabled="$_pb_{key}" data-class:busy="$_pb_{key}" data-on:click="{ask}@post('{action}', {{contentType: 'form', selector: '#pb-{key}'}})">{label}</button></span>"#,
+        user = escape(username),
+    )
+}
+
+async fn peer_ban(State(s): State<UiState>, axum::Form(f): axum::Form<UserFileForm>) -> Response {
+    set_peer_ban(&s, &f.username, true).await
+}
+
+async fn peer_unban(State(s): State<UiState>, axum::Form(f): axum::Form<UserFileForm>) -> Response {
+    set_peer_ban(&s, &f.username, false).await
+}
+
+async fn set_peer_ban(s: &UiState, username: &str, banned: bool) -> Response {
+    if let Err(e) = graphql::set_ban(&s.app, username, banned).await {
+        return one(flash_err(&e.message));
+    }
+    let msg = if banned {
+        format!("Banned {username}")
+    } else {
+        format!("Unbanned {username}")
+    };
+    askama_datastar::events([
+        insert(
+            &format!("[data-peer-ban=\"{}\"]", peer_key(username)),
+            ElementPatchMode::Replace,
+            &ban_button(username, banned),
+        ),
+        patch(&flash_ok(&msg)),
+    ])
 }
 
 fn escape(s: &str) -> String {

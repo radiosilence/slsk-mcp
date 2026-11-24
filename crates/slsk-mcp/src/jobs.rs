@@ -69,6 +69,25 @@ pub mod cause {
     pub const IMPORT_ERROR: &str = "import_error";
     /// Import as-is refused: the files' tags do not describe one album.
     pub const UNTAGGED: &str = "untagged";
+    /// The peer was marked as a scammer: banned, and everything from it
+    /// dropped.
+    pub const SCAM: &str = "scam";
+}
+
+/// What became of a job taken off a peer marked as a scammer: the peer it
+/// now fetches from, or why it fetches from nobody.
+pub struct Rehomed {
+    pub id: Uuid,
+    pub to: Option<String>,
+    pub why: Option<String>,
+}
+
+/// The peer a job fetches from, if it fetches from one.
+pub(crate) fn peer_of(job: &Job) -> Option<&str> {
+    match &job.source.0 {
+        Source::Soulseek { username, .. } | Source::Files { username, .. } => Some(username),
+        Source::Url { .. } => None,
+    }
 }
 
 /// How an import decides what the album is. Kept on the job, so a restart
@@ -512,6 +531,9 @@ impl Jobs {
         title: String,
     ) -> Result<Job> {
         let engine = self.session.require()?.clone();
+        if engine.is_banned(username) {
+            bail!("{username} is banned; nothing is fetched from them");
+        }
         ensure_audio(&listing, folder.as_deref().unwrap_or(&title))?;
         let _creating = self.creating.lock().await;
         if !picked
@@ -707,6 +729,9 @@ impl Jobs {
         folder: &RawStr,
         fallback: &[(RawStr, u64)],
     ) -> Result<Vec<(RawStr, u64, String)>> {
+        if engine.is_banned(username) {
+            bail!("{username} is banned; nothing is fetched from them");
+        }
         let root = folder.to_string_lossy();
         let from_dirs = |dirs: Vec<Directory>| -> Vec<(RawStr, u64, String)> {
             dirs.into_iter()
@@ -1492,6 +1517,8 @@ impl Jobs {
         note: Option<&str>,
     ) -> Result<()> {
         let mut alternates = job.alternates.0.clone();
+        // Fallbacks were found before any ban made since.
+        alternates.retain(|a| !engine.is_banned(&a.username));
         // A peer that stalled us recently goes last here as it does in grab:
         // the order was fixed when the job began, before it was known.
         let stalled = self.recently_stalled();
@@ -2220,6 +2247,117 @@ impl Jobs {
         // a retry starts the file again.
         let _ = tokio::fs::remove_file(self.fetch_file(id)).await;
         Ok(())
+    }
+
+    /// Take everything off `peer`, already banned for sending something
+    /// other than what it listed: the job `id`, and every other job holding
+    /// or fetching files from it. What each downloaded is deleted, as
+    /// [`Self::remove`] deletes it, and each fetches its album from another
+    /// peer: its own fallbacks first, else what a fresh search finds.
+    /// Transfers from the peer that no job owns are cancelled and their files
+    /// deleted too.
+    pub async fn leave_peer(self: &Arc<Self>, peer: &str, id: Uuid) -> Result<Vec<Rehomed>> {
+        const HOLDING: &[&str] = &["downloading", "waiting", "review", "suspect"];
+        const NOTE: &str = "the peer was marked as a scammer";
+        let engine = self.session.require()?.clone();
+        let jobs: Vec<Job> = db::active_jobs(&self.db, i64::MAX)
+            .await?
+            .into_iter()
+            .chain(db::job(&self.db, id).await?)
+            .filter(|j| {
+                j.id == id
+                    || (HOLDING.contains(&j.status.as_str())
+                        && peer_of(j).is_some_and(|p| p.eq_ignore_ascii_case(peer)))
+            })
+            .collect();
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for mut job in jobs {
+            if !seen.insert(job.id) {
+                continue;
+            }
+            let leaving = [HOLDING, &["failed", "cancelled"]].concat();
+            if !db::move_status(&self.db, job.id, &leaving, "failed", Some(NOTE)).await? {
+                out.push(Rehomed {
+                    id: job.id,
+                    to: None,
+                    why: Some(format!("it is {}; left as it is", job.status)),
+                });
+                continue;
+            }
+            self.forget(job.id);
+            let rows = db::job_files(&self.db, job.id).await?;
+            for f in &rows {
+                engine.remove_download(&f.peer, &RawStr(f.remote.clone().into()));
+            }
+            let _ = tokio::fs::remove_dir_all(self.dir(job.id)).await;
+            let _ = tokio::fs::remove_dir_all(self.complete_dir(&job)).await;
+            let _ = tokio::fs::remove_file(self.fetch_file(job.id)).await;
+            let _ = tokio::fs::remove_dir_all(self.spectrograms.join(job.id.to_string())).await;
+            self.event(&job, "scam", Some(cause::SCAM), Some(peer))
+                .await;
+            job.status = "failed".into();
+            job.alternates.0.retain(|a| !engine.is_banned(&a.username));
+            if !job.alternates.0.is_empty() {
+                self.fall_back(&engine, &job, &rows, cause::SCAM, None)
+                    .await?;
+            }
+            let moved = async |id| -> Result<Option<String>> {
+                let now = db::job(&self.db, id).await?;
+                Ok(now
+                    .filter(|j| j.status == "downloading")
+                    .and_then(|j| peer_of(&j).map(str::to_string)))
+            };
+            if let Some(to) = moved(job.id).await? {
+                out.push(Rehomed {
+                    id: job.id,
+                    to: Some(to),
+                    why: None,
+                });
+                continue;
+            }
+            job.alternates.0.clear();
+            let why = match self.search_again(&engine, &job, cause::SCAM).await {
+                Ok(Searched::Moved) => "no copy found on another peer could be fetched".to_string(),
+                Ok(Searched::NotFound) => "no copy was found on another peer".to_string(),
+                Ok(Searched::NothingToSearch) => NOTHING_TO_SEARCH.to_string(),
+                Err(e) => format!("searching again failed: {e:#}"),
+            };
+            if let Some(to) = moved(job.id).await? {
+                out.push(Rehomed {
+                    id: job.id,
+                    to: Some(to),
+                    why: None,
+                });
+                continue;
+            }
+            db::move_status(
+                &self.db,
+                job.id,
+                &["failed"],
+                "failed",
+                Some(&format!("{NOTE}; {why}")),
+            )
+            .await?;
+            out.push(Rehomed {
+                id: job.id,
+                to: None,
+                why: Some(why),
+            });
+        }
+        for t in engine.downloads() {
+            if !t.username.eq_ignore_ascii_case(peer) {
+                continue;
+            }
+            engine.remove_download(&t.username, &t.filename);
+            if let Some(path) = t.path {
+                let mut part = path.clone().into_os_string();
+                part.push(".part");
+                let _ = tokio::fs::remove_file(&path).await;
+                let _ = tokio::fs::remove_file(&part).await;
+            }
+        }
+        Ok(out)
     }
 
     /// Drop what this process remembers about a job between ticks.

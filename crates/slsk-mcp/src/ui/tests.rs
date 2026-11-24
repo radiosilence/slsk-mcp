@@ -824,6 +824,7 @@ mod profile {
         };
         let html = peer(
             "ann",
+            false,
             &server,
             Some(&info(Some(b"\x89PNG\r\n\x1a\nxx"))),
             None,
@@ -845,6 +846,7 @@ mod profile {
     fn a_picture_that_is_not_an_image_is_not_shown() {
         let html = peer(
             "ann",
+            false,
             &Server::default(),
             Some(&info(Some(b"<svg/>"))),
             None,
@@ -863,6 +865,7 @@ mod profile {
         };
         let html = peer(
             "ann",
+            false,
             &server,
             None,
             Some("ann did not send their profile".into()),

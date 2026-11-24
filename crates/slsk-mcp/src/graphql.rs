@@ -1264,8 +1264,26 @@ pub(crate) async fn responses(
     let heard = heard.wait_for(|h| h.done).await?;
     match &heard.error {
         Some(e) => Err(anyhow::anyhow!("{e}")),
-        None => Ok(heard.responses.clone()),
+        None => Ok(unbanned(engine, &heard.responses)),
     }
+}
+
+/// The answers without those from peers banned since they arrived: answers
+/// are reused for minutes, and a ban made meanwhile still counts.
+pub(crate) fn unbanned(
+    engine: &slsk_engine::Engine,
+    responses: &Arc<Vec<Arc<SearchResponse>>>,
+) -> Arc<Vec<Arc<SearchResponse>>> {
+    if responses.iter().all(|r| !engine.is_banned(&r.username)) {
+        return responses.clone();
+    }
+    Arc::new(
+        responses
+            .iter()
+            .filter(|r| !engine.is_banned(&r.username))
+            .cloned()
+            .collect(),
+    )
 }
 
 /// A search: when it was asked for, how long it listens, and what it has
@@ -2203,13 +2221,29 @@ impl Mutation {
     }
 
     /// Refuse uploads, browsing and search results to a user, and drop what
-    /// they have queued.
+    /// they have queued. A banned user is never taken as a source: not by
+    /// `grab`, a job's fallbacks, `nextSource` or the wishlist, and their
+    /// folders are left out of `search`.
     async fn ban(&self, ctx: &Context<'_>, username: String) -> Result<bool> {
         set_ban(app(ctx), &username, true).await
     }
 
     async fn unban(&self, ctx: &Context<'_>, username: String) -> Result<bool> {
         set_ban(app(ctx), &username, false).await
+    }
+
+    /// Mark a job's download as a scam: its peer listed an album and sent
+    /// something else. This bans the peer, as `ban` does; stops every job
+    /// holding or fetching files from that peer, this one included, and
+    /// deletes what they downloaded, as `removeJob` would; then fetches each
+    /// of those albums from another peer, trying the job's fallbacks first
+    /// and searching again for the same album when none can be fetched. The
+    /// banned peer is never chosen again. Returns the peer and, for each job,
+    /// the peer it now downloads from (`movedTo`) or why it could not move
+    /// (`reason`; the job is then `failed`). Refused for a job being filed or
+    /// already filed, and for one fetched from a URL.
+    async fn mark_scam(&self, ctx: &Context<'_>, id: ID) -> Result<Scam> {
+        mark_scam(app(ctx), parse_id(&id)?).await
     }
 
     async fn rescan_shares(&self, ctx: &Context<'_>) -> Result<bool> {
@@ -2364,6 +2398,51 @@ impl Mutation {
         app(ctx).session.require()?.reconnect();
         Ok(true)
     }
+}
+
+/// What `markScam` did.
+#[derive(SimpleObject)]
+pub(crate) struct Scam {
+    /// The peer now banned.
+    pub(crate) peer: String,
+    /// Every job taken off the peer, as each now stands.
+    pub(crate) jobs: Vec<ScamJob>,
+}
+
+#[derive(SimpleObject)]
+pub(crate) struct ScamJob {
+    job: Job,
+    /// The peer the album now downloads from, when another copy was found.
+    pub(crate) moved_to: Option<String>,
+    /// Why it was not moved, when it was not.
+    pub(crate) reason: Option<String>,
+}
+
+pub(crate) async fn mark_scam(app: &App, id: Uuid) -> Result<Scam> {
+    let job = db::job(&app.db, id)
+        .await?
+        .ok_or_else(|| Error::new("no such job"))?;
+    let Some(peer) = crate::jobs::peer_of(&job).map(str::to_string) else {
+        return Err(Error::new("an album fetched from a URL has no peer to ban"));
+    };
+    if matches!(job.status.as_str(), "importing" | "imported") {
+        return Err(Error::new(format!(
+            "job is {}; what it downloaded is being or has been filed, so bin the album from the library and ban {peer} instead",
+            job.status
+        )));
+    }
+    set_ban(app, &peer, true).await?;
+    let mut jobs = Vec::new();
+    for r in app.jobs.leave_peer(&peer, id).await? {
+        if let Some(j) = db::job(&app.db, r.id).await? {
+            jobs.push(ScamJob {
+                job: job_view(app, j, false).await?,
+                moved_to: r.to,
+                reason: r.why,
+            });
+        }
+    }
+    Ok(Scam { peer, jobs })
 }
 
 pub(crate) async fn set_ban(app: &App, username: &str, banned: bool) -> Result<bool> {

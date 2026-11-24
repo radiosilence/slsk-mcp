@@ -478,6 +478,12 @@ impl Engine {
         *self.0.banned.write() = set;
     }
 
+    /// Whether `username` is banned: refused our shares, and never taken as
+    /// a source, so their search results are dropped as they arrive.
+    pub fn is_banned(&self, username: &str) -> bool {
+        self.0.is_banned(username)
+    }
+
     pub fn set_upload_slots(&self, slots: usize) {
         self.0.uploads.set_slots(slots);
     }

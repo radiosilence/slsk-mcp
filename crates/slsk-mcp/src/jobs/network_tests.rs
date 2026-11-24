@@ -196,3 +196,43 @@ async fn a_peer_is_asked_for_no_more_jobs_at_once_than_the_limit() {
     assert!(saw_held, "albums past the limit waited here");
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_banned_peer_is_never_a_source() {
+    let root = std::env::temp_dir().join(format!("slsk-banned-{}", uuid::Uuid::new_v4()));
+    let server = TestServer::start().await;
+    let _sharer = sharer(&server, &root).await;
+    let jobs = jobs(config(&server, &root, PeerLimits::default()), &root).await;
+    let engine = jobs.session.engine().unwrap().clone();
+
+    let job = jobs.from_folder(&album(0), None, Vec::new()).await.unwrap();
+    engine.set_banned(["Sharer".to_string()]);
+
+    let refused = jobs.from_folder(&album(1), None, Vec::new()).await;
+    assert!(
+        refused
+            .as_ref()
+            .is_err_and(|e| e.to_string().contains("banned")),
+        "a banned peer's folder became a job: {refused:?}"
+    );
+    let heard = crate::graphql::responses(&engine, "sharer album", 3)
+        .await
+        .unwrap();
+    assert!(heard.is_empty(), "a banned peer answered a search");
+
+    // Nobody else has the album, so the job is left failed, with the reason.
+    let moved = jobs.leave_peer("sharer", job.id).await.unwrap();
+    assert_eq!(moved.len(), 1);
+    assert_eq!(moved[0].to, None);
+    assert!(moved[0].why.is_some());
+    let job = crate::db::job(&jobs.db, job.id).await.unwrap().unwrap();
+    assert_eq!(job.status, "failed");
+    assert!(
+        engine
+            .downloads()
+            .iter()
+            .all(|d| d.state == "cancelled" || !d.username.eq_ignore_ascii_case("sharer")),
+        "a transfer from the banned peer is still going"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
