@@ -11,6 +11,18 @@
 @source "../src";
 @import "@radiosilence/theme";
 
+/* The accent is Soulseek's: its bird's highlight on dark, and the bird's deepest blue on light, where the highlight
+ * would be too pale to read. Both are over 5:1 on --surface. */
+:root {
+  --brand: #9999ff;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --brand: #3838cf;
+  }
+}
+
 @custom-variant light (@media (prefers-color-scheme: light));
 
 @theme {
