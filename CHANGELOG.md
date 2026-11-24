@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.18.7
+
+### Security
+
+- **A confirmed message is the one previewed.** PREVIEW bound its confirmation token to a 64-bit non-cryptographic hash of the arguments, which a chosen pair could collide; it is now a SHA-256 of the length-prefixed arguments, still single use and good for 15 minutes.
+- **Another site cannot sign you out.** `/auth/logout` signed out on a GET, so any page could do it with an image tag; it is now a POST that must come from Datastar or carry a same-origin `Sec-Fetch-Site` or `Origin`.
+
+### Changed
+
+- **Datastar 1.0.5, through askama_datastar.** The web UI's patches, event streams, POST guard and Datastar's script come from the shared crate rather than code of slsk-mcp's own. Datastar moves from 1.0.2 to 1.0.5, which fixes reconnecting after a tab returns to the foreground, and a quiet stream is kept open by a comment every 15 seconds rather than every 5.
+
+### Fixed
+
+- **Hidden controls no longer flash while the page loads.** The library's selection bar, Bin spares, the date field and the art form waited for Datastar's `data-show` to hide them; they now start `hidden`. Transfer counters used `data-show` for their own purpose, which Datastar ran as script; they use `data-draw`.
+
+### Internal
+
+- **The advisory audit runs `cargo audit` directly.** `rustsec/audit-check` reported through a check run it created and then updated, and the update sometimes came back 404, failing the job after a clean audit; `cargo audit`'s exit code is now the gate, as in koan.
+
 ## 0.18.6
 
 ### Security
