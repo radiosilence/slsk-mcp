@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.21.0
+
+### Changed
+
+- **The web UI is drawn with the kōan web kit.** It takes its controls from @radiosilence/theme 0.2.4, so it matches koan and the other web UIs: square panels in place of rounded cards, statuses in place of pills, one primary action a page, and lowercase headings, buttons and labels. CI now fails on a class outside the kit.
+
 ## 0.20.2
 
 ### Security
