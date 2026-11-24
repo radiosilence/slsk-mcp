@@ -1536,6 +1536,16 @@
   }
 }
 
+:root {
+  --brand: #99f;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --brand: #3838cf;
+  }
+}
+
 @property --tw-border-style {
   syntax: "*";
   inherits: false;

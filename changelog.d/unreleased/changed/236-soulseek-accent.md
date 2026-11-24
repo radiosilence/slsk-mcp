@@ -1,0 +1,1 @@
+- **The accent is Soulseek's blue.** The web UI's accent comes from Soulseek's bird logo instead of the shared theme's green, in both colour schemes.
