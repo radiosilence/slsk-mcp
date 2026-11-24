@@ -1,4 +1,4 @@
-<article id="job-{{ j.id.as_str() }}" class="panel{% if warn %} border-warn{% endif %}">
+<article id="job-{{ j.id.as_str() }}" class="panel{% if warn %} border-l-2 border-l-warn{% endif %}">
   <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
     <strong class="min-w-0 flex-auto wrap-anywhere" title="{% match j.folder %}{% when Some with (f) %}{{ f }}{% when None %}{% endmatch %}">{% if full %}{{ self.heading(j) }}{% else %}<a class="text-ink" href="/jobs/{{ j.id.as_str() }}">{{ self.heading(j) }}</a>{% endif %}</strong>
     <span class="status {{ j.status }}" data-class:busy="${{ self.sig(j) }}">{{ self.label(j.status) }}</span>

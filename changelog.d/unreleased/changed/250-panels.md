@@ -1,0 +1,1 @@
+- **koan's accent, lighter panels and a filled primary.** koan's mint replaces the Soulseek blue, panels are the kit's lighter ground, the primary action is filled, and a job needing attention has a warn rule on its leading edge rather than a yellow outline.
