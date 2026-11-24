@@ -495,7 +495,11 @@
     height: calc(var(--spacing) * 3.5);
     cursor: pointer;
     appearance: none;
+    border-style: var(--tw-border-style);
+    border-width: 1px;
+    border-color: var(--muted);
     vertical-align: -2px;
+    background-color: #0000;
     flex: none;
     margin: 0;
     padding: 0;
