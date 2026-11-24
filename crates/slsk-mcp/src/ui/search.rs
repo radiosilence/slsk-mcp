@@ -14,7 +14,7 @@ use askama::Template;
 use axum::Router;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -514,13 +514,13 @@ async fn peers(
                 UserStatus::Offline => "offline",
             };
             for id in ids {
-                yield Ok(patch(&format!(
+                yield patch(&format!(
                     r#"<span id="peer-{id}" class="pill {word}">{word}</span>"#
-                )));
+                ));
             }
         }
     };
-    sse(stream).into_response()
+    askama_datastar::stream(stream)
 }
 
 /// How long the server is given to say who is online.
