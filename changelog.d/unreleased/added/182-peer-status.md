@@ -1,0 +1,1 @@
+- **Peers' status on search results.** Kept results can be hours old, so each folder shows whether its peer is online, away or offline.

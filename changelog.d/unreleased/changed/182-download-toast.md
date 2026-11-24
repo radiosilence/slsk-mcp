@@ -1,0 +1,1 @@
+- **The download toast names the folder.** It read the search words; it now names the folder and peer being downloaded.
