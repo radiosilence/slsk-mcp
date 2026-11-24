@@ -159,6 +159,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "askama_datastar"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2e5cd2f874d2d2450e68be63cd87a3ede3b67454adf6e39c326a63c23611ecde"
+dependencies = [
+ "askama",
+ "axum",
+ "datastar",
+ "form_urlencoded",
+ "futures-util",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "askama_derive"
 version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -979,6 +994,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4583a4551df46e2792f82ceeac45e850d2e2d5debba0b91f102385cda5b11f06"
 
 [[package]]
+name = "datastar"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "49a2209ee5f8954be4d6d90f253630d2be400965e604e7f8df446a75400a4ca8"
+dependencies = [
+ "axum",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "derive_builder"
 version = "0.20.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1200,9 +1226,9 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
 name = "form_urlencoded"
-version = "1.2.2"
+version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
+checksum = "afa489199eaffb1211795df1c6236ce1ad0d41a6fa45250add73e3b02420f06e"
 dependencies = [
  "percent-encoding",
 ]
@@ -2569,9 +2595,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp"
-version = "3.8.0"
+version = "3.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8be15815186873ea063bf005011d16c356804973489e40c39116ae3a2878d1f"
+checksum = "b5949e504d5ab9944a168259afc0c39ac0230627b6ec5367ace194c59bcbe163"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -2590,6 +2616,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "sha2",
  "sse-stream",
  "thiserror",
  "tokio",
@@ -2602,9 +2629,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp-macros"
-version = "3.8.0"
+version = "3.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8b0748e054a5f5598b3213cf72099ae6b2745ba4d996c59ccf455150a7dbb839"
+checksum = "b98a686693ee91b665c6f89f182fca6e141c8a63dc113b11b38c1bf3491606b7"
 dependencies = [
  "darling 0.24.1",
  "proc-macro2",
@@ -3003,9 +3030,9 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
 name = "sift-music"
-version = "0.10.2"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac845baf237d540038b21bf5d9dc65c5aacf8a18db5d1c7f132c2967573da915"
+checksum = "9705608d1ad6e8e3798319141d746d13d337952b12f4ac83c6fcdfccc32ed6e4"
 dependencies = [
  "anyhow",
  "bytes",
@@ -3096,10 +3123,11 @@ dependencies = [
 
 [[package]]
 name = "slsk-mcp"
-version = "0.13.4"
+version = "0.18.7"
 dependencies = [
  "anyhow",
  "askama",
+ "askama_datastar",
  "async-graphql",
  "async-stream",
  "axum",
@@ -3113,6 +3141,7 @@ dependencies = [
  "futures-util",
  "http",
  "image",
+ "libc",
  "parking_lot 0.13.0",
  "percent-encoding",
  "png",
@@ -3128,6 +3157,7 @@ dependencies = [
  "sha2",
  "sift-music",
  "slsk-engine",
+ "slsk-testserver",
  "soulseek-rs-lib",
  "symphonia",
  "thiserror",
@@ -3835,9 +3865,9 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "url"
-version = "2.5.8"
+version = "2.5.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff67a8a4397373c3ef660812acab3268222035010ab8680ec4215f38ba3d0eed"
+checksum = "f00cd2407bb42c0ef17be88d4cf020f5cceffd121665bac9b8b9493a369b3b1a"
 dependencies = [
  "form_urlencoded",
  "idna",

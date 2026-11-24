@@ -31,6 +31,9 @@ use crate::db::{self, Alternate, Job, JobFile, Json, Source};
 use crate::folders::Folder;
 use crate::session::Session;
 
+#[cfg(test)]
+mod network_tests;
+
 /// Why a job did not land cleanly: a fixed set, so outcomes can be counted
 /// and a cause traced to a fix.
 pub mod cause {
@@ -40,6 +43,10 @@ pub mod cause {
     pub const URL_FAILED: &str = "url_failed";
     /// Queued with the peer, nothing received for the stall limit.
     pub const STALLED_PEER: &str = "stalled_peer";
+    /// The peer refused files for holding too many of ours already ("Too
+    /// many files", "Too many megabytes"): asked again as what it is
+    /// sending arrives, and only left once that has gone on too long.
+    pub const PEER_QUEUE_FULL: &str = "peer_queue_full";
     /// Files that do not parse as audio.
     pub const CORRUPT_COPY: &str = "corrupt_copy";
     /// No audio files where the download should be: the peer's folder held
@@ -74,6 +81,28 @@ pub enum How {
     AsIs(sift::Edits),
 }
 
+/// What an import is doing now, as it reported it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Stage {
+    /// "searching MusicBrainz", "checking the audio", …
+    pub label: String,
+    pub since: chrono::DateTime<chrono::Utc>,
+    /// The end of a wait, when the stage is one.
+    pub until: Option<chrono::DateTime<chrono::Utc>>,
+    /// Bytes of the work done and in all, when it is counted.
+    pub progress: Option<(u64, u64)>,
+    /// MusicBrainz requests made since the import began, retries included,
+    /// and the service's budget (remaining, limit) as it last reported it.
+    /// Filled in by [`Jobs::stage`].
+    pub mb_requests: u64,
+    pub mb_budget: Option<(u64, u64)>,
+    /// MusicBrainz's request count when the import began.
+    mb_base: u64,
+    /// The stage a wait interrupted and when it began, restored when the
+    /// importer reports it again.
+    before_wait: Option<(String, chrono::DateTime<chrono::Utc>)>,
+}
+
 /// The states a job leaves its source from: downloading, or waiting on a
 /// decision. A job cancelled, removed or imported meanwhile stays as it is.
 const LEAVING: &[&str] = &["downloading", "review", "suspect", "failed"];
@@ -82,14 +111,144 @@ const LEAVING: &[&str] = &["downloading", "review", "suspect", "failed"];
 /// another source is tried.
 const RETRY_ROUNDS: u32 = 2;
 
-/// How long an import waits for MusicBrainz or Discogs to come back, and how
-/// many times, before the job fails for a person to retry.
-const DEFER: Duration = Duration::from_secs(300);
+/// How long an import waits for MusicBrainz or Discogs to come back after
+/// each put-off in a row, the last repeating, and how many times before the
+/// job fails for a person to retry. Most refusals pass within a minute, so
+/// the first tries come soon. Each try goes through sift's one shared
+/// MusicBrainz gate, at most a request a second; a refused request gives up
+/// within 45 seconds and the client then rests without asking, for at least
+/// the `Retry-After` and from sift 0.12.1 for half a minute doubling with each
+/// give-up in a row, so an early try during an outage costs MusicBrainz a
+/// request or none.
+const DEFER: [Duration; 4] = [
+    Duration::from_secs(30),
+    Duration::from_secs(60),
+    Duration::from_secs(120),
+    Duration::from_secs(300),
+];
 const DEFER_TRIES: u32 = 24;
+/// Put-offs after which a purchase is filed by its own tags if MusicBrainz
+/// is unavailable again. See [`Jobs::file`].
+const AS_IS_AFTER: u32 = 2;
+
+/// How long a job put off `tries` times in a row waits before the next try:
+/// [`DEFER`], give or take a fifth, the same for a job each time it is asked,
+/// so jobs put off together do not all return together.
+fn defer_wait(id: Uuid, tries: u32) -> Duration {
+    let base = DEFER[(tries.max(1) as usize - 1).min(DEFER.len() - 1)];
+    let spread =
+        ((id.as_u128() as u64) ^ u64::from(tries)).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 54;
+    base.mul_f64(0.8 + spread as f64 / 1024.0 * 0.4)
+}
+
+/// How long a job may wait on a peer refusing files for a full queue before
+/// another source is tried, and the waits between asking it again: the
+/// first, doubled each round up to the last.
+const QUEUE_FULL_PATIENCE: Duration = Duration::from_secs(6 * 3600);
+const QUEUE_FULL_FIRST: Duration = Duration::from_secs(60);
+const QUEUE_FULL_MAX: Duration = Duration::from_secs(30 * 60);
+
+/// Whether a peer refused a file because its queue for us is full, which
+/// passes as what it is sending us arrives, rather than for good.
+pub(crate) fn queue_full(reason: &str) -> bool {
+    let reason = reason.to_ascii_lowercase();
+    [
+        "too many files",
+        "too many megabytes",
+        "queue full",
+        "queue limit",
+    ]
+    .iter()
+    .any(|r| reason.contains(r))
+}
+
+/// The most of a job's error or history detail kept.
+const SUMMARY_MAX: usize = 500;
+
+/// Reasons as one line, each said once with how often it was given, in the
+/// order first given: "Too many files (×312); File not shared". Hundreds of
+/// files refused for one reason would otherwise repeat it hundreds of times.
+pub(crate) fn summarise<'a>(reasons: impl IntoIterator<Item = &'a str>) -> String {
+    let mut counted: Vec<(&str, usize)> = Vec::new();
+    for r in reasons.into_iter().map(str::trim).filter(|r| !r.is_empty()) {
+        match counted.iter_mut().find(|(seen, _)| *seen == r) {
+            Some((_, n)) => *n += 1,
+            None => counted.push((r, 1)),
+        }
+    }
+    let line = counted
+        .iter()
+        .map(|(r, n)| match n {
+            1 => r.to_string(),
+            n => format!("{r} (×{n})"),
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    match line.char_indices().nth(SUMMARY_MAX) {
+        Some((cut, _)) => format!("{}…", &line[..cut]),
+        None => line,
+    }
+}
+
+/// A job whose peer refused files for a full queue: since when, and when it
+/// may be asked again.
+struct Refused {
+    peer: String,
+    since: tokio::time::Instant,
+    next: tokio::time::Instant,
+    rounds: u32,
+    /// The job's bytes received when it was last refused: it is settled
+    /// only once more arrive, since files asked for again sit queued for a
+    /// while before the peer accepts or refuses them.
+    received: u64,
+}
+
+/// What to do about a job's files refused for a full queue.
+#[derive(Debug, PartialEq)]
+enum Refusal {
+    /// Leave them until the peer has sent what it accepted.
+    Wait,
+    /// Ask for them again.
+    Ask,
+    /// Waited long enough: try another source.
+    GiveUp,
+}
+
+/// Why a job with no fallbacks and nothing to search for was given up.
+const NOTHING_TO_SEARCH: &str =
+    "no other copy was looked for: nothing it came from names an album to search for";
+
+/// [`Jobs::refusal`]'s decision for one job, as of `now`.
+fn refusal_due(r: &mut Refused, now: tokio::time::Instant, peer_busy: usize) -> Refusal {
+    if now.duration_since(r.since) >= QUEUE_FULL_PATIENCE {
+        Refusal::GiveUp
+    } else if now >= r.next && peer_busy == 0 {
+        r.rounds += 1;
+        r.next = now
+            + QUEUE_FULL_FIRST
+                .saturating_mul(1 << r.rounds.min(5))
+                .min(QUEUE_FULL_MAX);
+        Refusal::Ask
+    } else {
+        Refusal::Wait
+    }
+}
+
+/// What looking for another copy came to.
+#[derive(Debug, PartialEq)]
+enum Searched {
+    Moved,
+    NotFound,
+    /// Nothing the job came from names an album to search for.
+    NothingToSearch,
+}
 
 /// How long a download may go without a single byte before another source
 /// is tried.
 const STALL: Duration = Duration::from_secs(20 * 60);
+/// How long an optional file part way through may go without a byte once
+/// the music has arrived, before the album is imported without it.
+const EXTRA_WAIT: Duration = Duration::from_secs(2 * 60);
 /// How long a search for another copy collects responses.
 const SEARCH_WAIT: Duration = Duration::from_secs(15);
 
@@ -113,6 +272,9 @@ const URL_TIMEOUT: Duration = Duration::from_secs(2 * 3600);
 struct Fetched {
     received: std::sync::atomic::AtomicU64,
     size: std::sync::atomic::AtomicU64,
+    /// Bytes a second over the last second, as the engine measures a
+    /// transfer.
+    rate: std::sync::atomic::AtomicU64,
 }
 
 pub struct Jobs {
@@ -150,29 +312,50 @@ pub struct Jobs {
     /// their folders last for a day, since cancelling our queue with them
     /// makes them look idle again.
     stalled_peers: parking_lot::Mutex<HashMap<String, tokio::time::Instant>>,
+    /// What each import is doing now. Kept in memory: it is only true
+    /// while this process is the one doing it.
+    stages: parking_lot::Mutex<HashMap<Uuid, Stage>>,
     /// Fetches from URLs in progress, to follow and to stop.
     fetches: parking_lot::Mutex<HashMap<Uuid, (tokio::task::AbortHandle, Arc<Fetched>)>>,
     http: reqwest::Client,
     wake: Notify,
+    /// Extensions (lower case) of the files an album can do without: asked
+    /// for with the rest, but dropped rather than waited on once the music
+    /// has arrived. Sharers often leave an `.nfo` unshared or at the back
+    /// of a long queue, and it would otherwise hold the album forever.
+    optional: Vec<String>,
+    /// How much is asked of one peer at once; jobs past it are held here.
+    limits: crate::config::PeerLimits,
+    /// Downloading jobs not yet asked of their peer, which has as much of
+    /// ours as `limits` allow.
+    held: parking_lot::Mutex<std::collections::HashSet<Uuid>>,
+    /// Downloading jobs whose peer refused files for a full queue.
+    refused: parking_lot::Mutex<HashMap<Uuid, Refused>>,
+    /// Held from checking that a folder is not already in hand to making
+    /// its job, so two requests at once make one.
+    creating: Mutex<()>,
 }
 
 impl Jobs {
     pub fn new(
         db: crate::db::Db,
         session: Arc<Session>,
-        staging: PathBuf,
-        complete: PathBuf,
-        spectrograms: PathBuf,
+        cfg: &crate::config::Config,
         tagger: Arc<sift::Importer>,
         library: Arc<crate::library::Library>,
     ) -> Arc<Self> {
         Arc::new(Self {
+            optional: cfg.optional_extensions.clone(),
+            limits: cfg.peer_limits,
+            held: Default::default(),
+            refused: Default::default(),
+            creating: Mutex::new(()),
             library,
             db,
             session,
-            staging,
-            complete,
-            spectrograms,
+            staging: cfg.staging_dir.clone(),
+            complete: cfg.complete_dir.clone(),
+            spectrograms: cfg.state_dir.join("spectrograms"),
             tagger,
             import_lock: Mutex::new(()),
             resumed: Default::default(),
@@ -182,6 +365,7 @@ impl Jobs {
             places: Default::default(),
             started: tokio::time::Instant::now(),
             stalled_peers: Default::default(),
+            stages: Default::default(),
             fetches: Default::default(),
             http: web_client()
                 .read_timeout(URL_IDLE)
@@ -226,6 +410,9 @@ impl Jobs {
     /// Queue `folder` and everything under it. The peer is asked for the
     /// complete listing, since search results only carry files whose paths
     /// matched the query — a cover image or a second disc can be missing.
+    /// A folder already on its way is that job; a folder holding no audio is
+    /// refused, since there is no album in it to import. One already
+    /// imported is fetched again, as `grab(refetch)` asks.
     pub async fn from_folder(
         self: &Arc<Self>,
         folder: &Folder,
@@ -233,6 +420,9 @@ impl Jobs {
         alternates: Vec<Alternate>,
     ) -> Result<Job> {
         let engine = self.session.require()?.clone();
+        if let Some(job) = self.in_hand(&folder.username, &folder.path).await? {
+            return Ok(job);
+        }
         let files = self
             .listing(
                 &engine,
@@ -245,6 +435,7 @@ impl Jobs {
                     .collect::<Vec<_>>(),
             )
             .await?;
+        ensure_audio(&files, &folder.path)?;
         let title = title.unwrap_or_else(|| {
             folder
                 .path
@@ -263,49 +454,84 @@ impl Jobs {
             },
             alternates,
         );
-        let id = job.id;
-        let rows = self.rows(id, &folder.username, &files);
+        let rows = Self::rows(job.id, &folder.username, &files);
+        // Checked again under the lock, so two requests at once make one job.
+        let _creating = self.creating.lock().await;
+        if let Some(job) = self.in_hand(&folder.username, &folder.path).await? {
+            return Ok(job);
+        }
         db::insert_job(&self.db, &job, &rows).await?;
-        self.start(&engine, id, &rows);
+        // The next tick asks the peer, once it has room for the job.
         self.wake.notify_one();
         Ok(job)
     }
 
-    /// Individual files from one user, as a job of their own.
+    /// A job already fetching this folder from this peer.
+    async fn in_hand(&self, username: &str, folder: &str) -> Result<Option<Job>> {
+        Ok(db::job_of_source(&self.db, username, folder, None, false).await?)
+    }
+
+    /// Individual files from one user, as a job of their own, from the
+    /// folder that holds them all, if one does. Picked files are not the
+    /// whole folder, so they neither find nor stand for a job fetching it.
     pub async fn from_files(
         self: &Arc<Self>,
         username: &str,
         files: Vec<(RawStr, u64)>,
         title: String,
     ) -> Result<Job> {
+        let folder = common_folder(files.iter().map(|(r, _)| r.to_string_lossy()));
         let listing = files
             .into_iter()
             .map(|(r, s)| (r, s, String::new()))
             .collect();
-        self.from_listing(username, listing, title).await
+        self.listed(username, folder, true, listing, title).await
     }
 
     /// Files already known from a share listing, each with its
     /// subdirectory relative to the album, so disc folders stay apart.
+    /// `folder` is the album's folder on the peer, kept as where the job came
+    /// from. As for [`Self::from_folder`], a folder already on its way is
+    /// that job, and files with no audio among them are refused.
     pub async fn from_listing(
         self: &Arc<Self>,
         username: &str,
+        folder: Option<String>,
+        listing: Vec<(RawStr, u64, String)>,
+        title: String,
+    ) -> Result<Job> {
+        self.listed(username, folder, false, listing, title).await
+    }
+
+    async fn listed(
+        self: &Arc<Self>,
+        username: &str,
+        folder: Option<String>,
+        picked: bool,
         listing: Vec<(RawStr, u64, String)>,
         title: String,
     ) -> Result<Job> {
         let engine = self.session.require()?.clone();
+        ensure_audio(&listing, folder.as_deref().unwrap_or(&title))?;
+        let _creating = self.creating.lock().await;
+        if !picked
+            && let Some(folder) = &folder
+            && let Some(job) = self.in_hand(username, folder).await?
+        {
+            return Ok(job);
+        }
         let job = Job::new(
             engine.username(),
             title,
             Source::Files {
                 username: username.to_string(),
+                folder,
+                picked,
             },
             Vec::new(),
         );
-        let id = job.id;
-        let rows = self.rows(id, username, &listing);
+        let rows = Self::rows(job.id, username, &listing);
         db::insert_job(&self.db, &job, &rows).await?;
-        self.start(&engine, id, &rows);
         self.wake.notify_one();
         Ok(job)
     }
@@ -339,12 +565,17 @@ impl Jobs {
     }
 
     /// Bytes received and announced by a fetch from a URL in progress.
-    pub fn fetched(&self, id: Uuid) -> Option<(u64, u64)> {
+    /// A URL fetch's bytes received, its size (0 when the server did not
+    /// say) and its rate.
+    pub fn fetched(&self, id: Uuid) -> Option<(u64, u64, u64)> {
         use std::sync::atomic::Ordering::Relaxed;
-        self.fetches
-            .lock()
-            .get(&id)
-            .map(|(_, f)| (f.received.load(Relaxed), f.size.load(Relaxed)))
+        self.fetches.lock().get(&id).map(|(_, f)| {
+            (
+                f.received.load(Relaxed),
+                f.size.load(Relaxed),
+                f.rate.load(Relaxed),
+            )
+        })
     }
 
     /// Fetch a URL job's file in the background, then import it. A job
@@ -432,6 +663,7 @@ impl Jobs {
         let part = self.fetch_file(id);
         let mut file = tokio::fs::File::create(&part).await?;
         let mut received = 0u64;
+        let mut window = (tokio::time::Instant::now(), 0u64);
         let mut head = Vec::<u8>::with_capacity(4);
         while let Some(chunk) = resp
             .chunk()
@@ -447,6 +679,14 @@ impl Jobs {
             }
             file.write_all(&chunk).await?;
             fetched.received.store(received, Relaxed);
+            // Measured, and the pages told, once a second, like a transfer.
+            let elapsed = window.0.elapsed();
+            if elapsed >= Duration::from_secs(1) {
+                let rate = ((received - window.1) as f64 / elapsed.as_secs_f64()) as u64;
+                fetched.rate.store(rate, Relaxed);
+                window = (tokio::time::Instant::now(), received);
+                crate::live::changed(crate::live::Topic::Jobs);
+            }
         }
         file.flush().await?;
         drop(file);
@@ -470,52 +710,60 @@ impl Jobs {
         let root = folder.to_string_lossy();
         let from_dirs = |dirs: Vec<Directory>| -> Vec<(RawStr, u64, String)> {
             dirs.into_iter()
-                .flat_map(|d| {
+                .filter_map(|d| {
                     let dir = d.name.to_string_lossy();
-                    let sub = dir
-                        .strip_prefix(&root)
-                        .unwrap_or("")
-                        .trim_start_matches('\\')
-                        .replace('\\', "/");
+                    let Some(sub) = subdir(&dir, &root) else {
+                        tracing::info!(%username, %dir, "peer listed a sibling folder; left out");
+                        return None;
+                    };
                     let prefix = d.name.clone();
-                    d.files.into_iter().map(move |f| {
+                    Some(d.files.into_iter().map(move |f| {
                         let mut full = prefix.as_bytes().to_vec();
                         full.push(b'\\');
                         full.extend_from_slice(f.name.as_bytes());
                         (RawStr(full.into()), f.size, sub.clone())
-                    })
+                    }))
                 })
+                .flatten()
                 .collect()
         };
-        match engine.folder_contents(username, folder).await {
-            Ok(dirs) if dirs.iter().any(|d| !d.files.is_empty()) => Ok(from_dirs(dirs)),
-            other => {
-                if let Err(e) = other {
-                    tracing::debug!(%username, error = %e, "folder listing failed; using search results");
-                }
-                anyhow::ensure!(!fallback.is_empty(), "the peer did not list the folder");
-                // Disc folders are grouped under their album, so each file's
-                // own directory still decides where it lands.
-                Ok(fallback
-                    .iter()
-                    .map(|(remote, size)| {
-                        let path = remote.to_string_lossy();
-                        let dir = path.rsplit_once('\\').map_or("", |(d, _)| d);
-                        let sub = dir
-                            .strip_prefix(&root)
-                            .unwrap_or("")
-                            .trim_start_matches('\\')
-                            .replace('\\', "/");
-                        (remote.clone(), *size, sub)
-                    })
-                    .collect())
+        let listed = match engine.folder_contents(username, folder).await {
+            Ok(dirs) => from_dirs(dirs),
+            Err(e) => {
+                tracing::debug!(%username, error = %e, "folder listing failed; using search results");
+                Vec::new()
             }
+        };
+        if !listed.is_empty() {
+            return Ok(listed);
         }
+        // Disc folders are grouped under their album, so each file's own
+        // directory still decides where it lands.
+        let found: Vec<_> = fallback
+            .iter()
+            .filter_map(|(remote, size)| {
+                let path = remote.to_string_lossy();
+                let dir = path.rsplit_once('\\').map_or("", |(d, _)| d);
+                Some((remote.clone(), *size, subdir(dir, &root)?))
+            })
+            .collect();
+        anyhow::ensure!(!found.is_empty(), "the peer did not list the folder");
+        Ok(found)
     }
 
-    fn rows(&self, id: Uuid, username: &str, files: &[(RawStr, u64, String)]) -> Vec<JobFile> {
+    /// One row per remote path: a peer's listing can repeat a file, and a job
+    /// holds and downloads each path once.
+    fn rows(id: Uuid, username: &str, files: &[(RawStr, u64, String)]) -> Vec<JobFile> {
+        let mut seen = std::collections::HashSet::new();
         files
             .iter()
+            .filter(|(remote, ..)| {
+                let first = seen.insert(remote.as_bytes());
+                if !first {
+                    tracing::warn!(%username, remote = %remote.to_string_lossy(), "peer listed a file twice");
+                }
+                first
+            })
             .map(|(remote, size, sub)| JobFile {
                 job_id: id,
                 peer: username.to_string(),
@@ -542,8 +790,70 @@ impl Jobs {
         path
     }
 
+    /// Whether the album can do without this file.
+    pub(crate) fn optional(&self, f: &JobFile) -> bool {
+        let base = f.remote.rsplit(|&b| b == b'\\').next().unwrap_or(&f.remote);
+        base.iter().rposition(|&b| b == b'.').is_some_and(|dot| {
+            let ext = &base[dot + 1..];
+            self.optional
+                .iter()
+                .any(|o| o.as_bytes().eq_ignore_ascii_case(ext))
+        })
+    }
+
+    /// Whether a file has arrived, by the engine where the database has yet
+    /// to hear.
+    fn arrived(&self, engine: Option<&Engine>, f: &JobFile) -> bool {
+        f.state == "completed"
+            || engine
+                .and_then(|e| e.download_view(&f.peer, &RawStr(f.remote.clone().into())))
+                .is_some_and(|v| v.state == "completed")
+    }
+
+    /// When bytes for the job last arrived, as of `received` in all.
+    fn progressed(
+        &self,
+        job: &Job,
+        received: u64,
+        now: tokio::time::Instant,
+    ) -> tokio::time::Instant {
+        let mut stalled = self.stalled.lock();
+        let entry = stalled.entry(job.id).or_insert_with(|| {
+            // From when this source was taken on, which the job row
+            // records, so a restart does not forgive a peer that has sent
+            // nothing.
+            let waited = (chrono::Utc::now() - job.updated_at)
+                .to_std()
+                .unwrap_or_default();
+            (now.checked_sub(waited).unwrap_or(now), received)
+        });
+        if received > entry.1 {
+            *entry = (now, received);
+        }
+        entry.0
+    }
+
+    /// Stop fetching a file and delete what arrived of it.
+    async fn drop_file(&self, engine: Option<&Engine>, f: &JobFile) {
+        if let Some(engine) = engine {
+            engine.remove_download(&f.peer, &RawStr(f.remote.clone().into()));
+        }
+        let dest = self.dest(f);
+        let mut part = dest.file_name().unwrap_or_default().to_os_string();
+        part.push(".part");
+        let _ = tokio::fs::remove_file(dest.with_file_name(part)).await;
+        let _ = tokio::fs::remove_file(&dest).await;
+    }
+
+    /// The optional files go first: they are small, and a peer that sends
+    /// in the order asked then has them done before the music is.
     fn start(&self, engine: &Engine, _id: Uuid, rows: &[JobFile]) {
-        for f in rows.iter().filter(|f| f.state != "completed") {
+        let mut rows: Vec<_> = rows
+            .iter()
+            .filter(|f| !matches!(f.state.as_str(), "completed" | "skipped"))
+            .collect();
+        rows.sort_by_cached_key(|f| !self.optional(f));
+        for f in rows {
             engine.download(
                 &f.peer,
                 RawStr(f.remote.clone().into()),
@@ -554,18 +864,16 @@ impl Jobs {
     }
 
     /// Pick up the jobs a previous process left: fetches from URLs and
-    /// imports at once, downloads from peers once there is an engine to
-    /// queue them with. Called at boot and again when an account signs in;
-    /// only the downloads are queued twice, which the engine ignores. A
-    /// download the engine lacks is also queued by the next tick.
+    /// imports at once. Downloads from peers are asked for again by the
+    /// next tick, as each peer has room for them. Called at boot and again
+    /// when an account signs in.
     pub async fn resume(self: &Arc<Self>) -> Result<()> {
         use std::sync::atomic::Ordering::SeqCst;
-        let (fetches, downloads): (Vec<_>, Vec<_>) =
-            db::jobs(&self.db, Some("downloading"), 10_000)
+        if !self.resumed.load(SeqCst) {
+            let fetches = db::jobs(&self.db, Some("downloading"), 10_000)
                 .await?
                 .into_iter()
-                .partition(|j| matches!(j.source.0, Source::Url { .. }));
-        if !self.resumed.load(SeqCst) {
+                .filter(|j| matches!(j.source.0, Source::Url { .. }));
             // Remembered across restarts: a peer that stalled us yesterday
             // is no more likely to send today because this process is new.
             let now = tokio::time::Instant::now();
@@ -584,17 +892,105 @@ impl Jobs {
             // run again by the next call.
             self.resumed.store(true, SeqCst);
         }
-        if let Some(engine) = self.session.engine().cloned() {
-            for job in downloads {
-                let rows = db::job_files(&self.db, job.id).await?;
-                self.start(&engine, job.id, &rows);
-            }
-        }
         self.wake.notify_one();
         Ok(())
     }
 
     /// The job's place in its peer's upload queue, while it is waiting in one.
+    /// What the import of `id` is doing now, and the MusicBrainz requests
+    /// it has made and the budget the service last reported.
+    pub fn stage(&self, id: Uuid) -> Option<Stage> {
+        let mut stage = self.stages.lock().get(&id).cloned()?;
+        let mb = self.tagger.musicbrainz_stats();
+        stage.mb_requests = mb.requests.saturating_sub(stage.mb_base);
+        stage.mb_budget = mb.budget;
+        Some(stage)
+    }
+
+    fn set_stage(
+        &self,
+        id: Uuid,
+        label: String,
+        until: Option<chrono::DateTime<chrono::Utc>>,
+        progress: Option<(u64, u64)>,
+    ) {
+        let now = chrono::Utc::now();
+        let mut stages = self.stages.lock();
+        let base = || self.tagger.musicbrainz_stats().requests;
+        let stage = stages.entry(id).or_insert_with(|| Stage {
+            label: String::new(),
+            since: now,
+            until: None,
+            progress: None,
+            mb_requests: 0,
+            mb_budget: None,
+            mb_base: base(),
+            before_wait: None,
+        });
+        if stage.label == label && stage.until == until && stage.progress == progress {
+            return;
+        }
+        let since = match (&until, stage.before_wait.take()) {
+            // Back from a wait to the stage it interrupted: its own clock.
+            (None, Some((was, since))) if was == label => since,
+            (None, _) if stage.label == label => stage.since,
+            // A wait, or another report of the same wait: what it
+            // interrupted is kept until the importer reports it again.
+            (Some(_), interrupted) => {
+                stage.before_wait = if stage.until.is_none() {
+                    Some((stage.label.clone(), stage.since))
+                } else {
+                    interrupted
+                };
+                if stage.until.is_some() && stage.label == label {
+                    stage.since
+                } else {
+                    now
+                }
+            }
+            (None, _) => now,
+        };
+        stage.label = label;
+        stage.since = since;
+        stage.until = until;
+        stage.progress = progress;
+        drop(stages);
+        crate::live::changed(crate::live::Topic::Jobs);
+    }
+
+    fn on_stage(&self, id: Uuid, stage: &sift::progress::Stage) {
+        use sift::progress::Stage as S;
+        match stage {
+            S::WaitingOnMusicBrainz { why, retry_in } => self.set_stage(
+                id,
+                format!("waiting on MusicBrainz ({why})"),
+                Some(chrono::Utc::now() + *retry_in),
+                None,
+            ),
+            other => self.set_stage(id, other.to_string(), None, None),
+        }
+    }
+
+    fn clear_stage(&self, id: Uuid) {
+        if self.stages.lock().remove(&id).is_some() {
+            crate::live::changed(crate::live::Topic::Jobs);
+        }
+    }
+
+    /// Run `fut`, an import of `id`, with each stage it reaches recorded.
+    async fn staged<T>(self: &Arc<Self>, id: Uuid, fut: impl Future<Output = T>) -> T {
+        let jobs = Arc::downgrade(self);
+        sift::progress::scope(
+            move |s: &sift::progress::Stage| {
+                if let Some(jobs) = jobs.upgrade() {
+                    jobs.on_stage(id, s);
+                }
+            },
+            fut,
+        )
+        .await
+    }
+
     pub fn place(&self, id: Uuid) -> Option<u32> {
         self.places.lock().get(&id).copied()
     }
@@ -633,7 +1029,7 @@ impl Jobs {
     /// Import again the jobs that have waited long enough on a metadata
     /// service.
     async fn import_due(self: &Arc<Self>) -> Result<()> {
-        for job in db::due_waiting(&self.db, DEFER.as_secs()).await? {
+        for job in db::due_waiting(&self.db).await? {
             let how = job.import_how.unwrap_or(How::Match(None));
             if db::claim_import(&self.db, job.id, &["waiting"], &how).await? {
                 self.import_in_background(job.id, how);
@@ -651,12 +1047,14 @@ impl Jobs {
         let Some(engine) = self.session.engine().cloned() else {
             return Ok(());
         };
-        // A fetch from a URL is followed by its own task.
-        let jobs: Vec<_> = db::jobs(&self.db, Some("downloading"), 10_000)
+        // A fetch from a URL is followed by its own task. Oldest first, so
+        // a peer's jobs are asked for in the order they were made.
+        let mut jobs: Vec<_> = db::jobs(&self.db, Some("downloading"), 10_000)
             .await?
             .into_iter()
             .filter(|j| !matches!(j.source.0, Source::Url { .. }))
             .collect();
+        jobs.sort_by_key(|j| j.created_at);
         let ids: Vec<Uuid> = jobs.iter().map(|j| j.id).collect();
         // A job leaves downloading by more routes than clear these as they
         // go (failing in a fall back, a status set elsewhere); what is not
@@ -666,16 +1064,148 @@ impl Jobs {
             self.stalled.lock().retain(|id, _| live.contains(id));
             self.places.lock().retain(|id, _| live.contains(id));
             self.retried.lock().retain(|id, _| live.contains(id));
+            self.held.lock().retain(|id| live.contains(id));
+            self.refused.lock().retain(|id, _| live.contains(id));
         }
         let mut files = db::files_of_jobs(&self.db, &ids).await?;
+        let in_flight = self.admit(&engine, &jobs, &files);
         // One job's failure is that job's: the rest still move.
         for job in jobs {
+            if self.held.lock().contains(&job.id) {
+                continue;
+            }
             let rows = files.remove(&job.id).unwrap_or_default();
-            if let Err(e) = self.tick_job(&engine, &job, rows).await {
+            let peer_busy = rows
+                .first()
+                .and_then(|r| in_flight.get(&r.peer))
+                .copied()
+                .unwrap_or(0);
+            if let Err(e) = self.tick_job(&engine, &job, rows, peer_busy).await {
                 tracing::warn!(job = %job.id, error = %e, "job tick failed");
             }
         }
         Ok(())
+    }
+
+    /// Ask each peer for as many of its waiting jobs, oldest first, as
+    /// [`Self::limits`] allow alongside what it already has of ours, and
+    /// hold the rest. A job is asked for whole, and one is always asked for
+    /// when the peer has nothing else of ours, however large; a peer that
+    /// has refused files for a full queue is asked for nothing new until
+    /// that is settled. Returns, by peer, the files of ours it holds that
+    /// are queued or on their way.
+    fn admit(
+        &self,
+        engine: &Engine,
+        jobs: &[Job],
+        files: &HashMap<Uuid, Vec<JobFile>>,
+    ) -> HashMap<String, usize> {
+        #[derive(Default)]
+        struct Load {
+            jobs: usize,
+            files: usize,
+            bytes: u64,
+        }
+        let mut load: HashMap<&str, Load> = HashMap::new();
+        let mut in_flight: HashMap<String, usize> = HashMap::new();
+        let mut waiting = Vec::new();
+        for job in jobs {
+            let Some(rows) = files.get(&job.id).filter(|r| !r.is_empty()) else {
+                continue;
+            };
+            let outstanding: Vec<&JobFile> = rows
+                .iter()
+                .filter(|f| !matches!(f.state.as_str(), "completed" | "skipped"))
+                .collect();
+            let mut asked = outstanding.is_empty();
+            for f in &outstanding {
+                if let Some(v) = engine.download_view(&f.peer, &RawStr(f.remote.clone().into())) {
+                    asked = true;
+                    if !matches!(v.state, "completed" | "failed" | "cancelled") {
+                        *in_flight.entry(f.peer.clone()).or_default() += 1;
+                    }
+                }
+            }
+            if asked && !self.held.lock().contains(&job.id) {
+                let l = load.entry(rows[0].peer.as_str()).or_default();
+                l.jobs += 1;
+                l.files += outstanding.len();
+                l.bytes += outstanding.iter().map(|f| f.size as u64).sum::<u64>();
+            } else {
+                waiting.push((job, rows, outstanding));
+            }
+        }
+        let refusing: std::collections::HashSet<String> = self
+            .refused
+            .lock()
+            .values()
+            .map(|r| r.peer.clone())
+            .collect();
+        let now = tokio::time::Instant::now();
+        for (job, rows, outstanding) in waiting {
+            let peer = rows[0].peer.as_str();
+            let bytes: u64 = outstanding.iter().map(|f| f.size as u64).sum();
+            let l = load.entry(peer).or_default();
+            let fits = l.jobs == 0
+                || (!refusing.contains(peer)
+                    && l.jobs < self.limits.jobs
+                    && l.files + outstanding.len() <= self.limits.files
+                    && l.bytes + bytes <= self.limits.bytes);
+            if !fits {
+                self.held.lock().insert(job.id);
+                continue;
+            }
+            l.jobs += 1;
+            l.files += outstanding.len();
+            l.bytes += bytes;
+            *in_flight.entry(peer.to_string()).or_default() += outstanding.len();
+            // Its wait for the peer starts now, not when it was made.
+            if self.held.lock().remove(&job.id) {
+                self.stalled.lock().insert(job.id, (now, 0));
+            }
+            self.start(engine, job.id, rows);
+        }
+        in_flight
+    }
+
+    /// Whether a job is waiting here for its peer to have room, and why.
+    pub fn held(&self, id: Uuid) -> Option<&'static str> {
+        if self.held.lock().contains(&id) {
+            Some("waiting here until fewer of our downloads are with this peer")
+        } else if self.refused.lock().contains_key(&id) {
+            Some(
+                "the peer's queue for us is full; asking again once what it is sending has arrived",
+            )
+        } else {
+            None
+        }
+    }
+
+    /// Whether to ask again for a job's files a peer refused for a full
+    /// queue: once nothing of ours is queued with or coming from it, and
+    /// the wait since the last ask has passed; or give up once it has gone
+    /// on for [`QUEUE_FULL_PATIENCE`]. The second value is true the first
+    /// time it is seen.
+    fn refusal(&self, id: Uuid, peer: &str, peer_busy: usize, received: u64) -> (Refusal, bool) {
+        let now = tokio::time::Instant::now();
+        let mut refused = self.refused.lock();
+        let mut first = false;
+        let r = refused.entry(id).or_insert_with(|| {
+            first = true;
+            Refused {
+                peer: peer.to_string(),
+                since: now,
+                next: now + QUEUE_FULL_FIRST,
+                rounds: 0,
+                received,
+            }
+        });
+        r.received = received;
+        let decision = refusal_due(r, now, peer_busy);
+        if decision == Refusal::GiveUp {
+            refused.remove(&id);
+        }
+        (decision, first)
     }
 
     /// Follow one downloading job: record its files' states, and start its
@@ -685,7 +1215,9 @@ impl Jobs {
         engine: &Engine,
         job: &Job,
         rows: Vec<JobFile>,
+        peer_busy: usize,
     ) -> Result<()> {
+        let rows: Vec<JobFile> = rows.into_iter().filter(|f| f.state != "skipped").collect();
         if rows.is_empty() {
             db::move_status(
                 &self.db,
@@ -701,7 +1233,16 @@ impl Jobs {
         let mut received = 0u64;
         let mut place: Option<u32> = None;
         let mut transferring = false;
+        // An album of nothing but optional files waits for all of them.
+        let music = rows.iter().any(|f| !self.optional(f));
+        // Optional files not yet arrived: never a reason to retry or change
+        // source, and dropped once the music is in.
+        let mut extras = Vec::new();
+        let mut extra_arriving = false;
+        // Files the peer refused for a full queue, and why.
+        let mut refused: Vec<(&JobFile, String)> = Vec::new();
         for f in &rows {
+            let optional = music && self.optional(f);
             let remote = RawStr(f.remote.clone().into());
             let (state, error) = match engine.download_view(&f.peer, &remote) {
                 Some(v) => {
@@ -716,6 +1257,13 @@ impl Jobs {
                 // Not in the engine: completed before a restart, or lost.
                 None if f.state == "completed" => ("completed".to_string(), None),
                 None => {
+                    // Skipped by a person since the rows were read.
+                    if db::file_state(&self.db, job.id, &f.peer, &f.remote)
+                        .await?
+                        .is_none_or(|s| s == "skipped")
+                    {
+                        continue;
+                    }
                     engine.download(&f.peer, remote, f.size as u64, self.dest(f));
                     ("queued".to_string(), None)
                 }
@@ -731,6 +1279,17 @@ impl Jobs {
                 )
                 .await?;
             }
+            if optional && state != "completed" {
+                extra_arriving |= state == "transferring";
+                extras.push(f);
+                continue;
+            }
+            if state == "failed"
+                && let Some(reason) = error.filter(|e| queue_full(e))
+            {
+                refused.push((f, reason));
+                continue;
+            }
             *states
                 .entry(match state.as_str() {
                     "completed" => "completed",
@@ -739,12 +1298,62 @@ impl Jobs {
                 })
                 .or_default() += 1;
         }
+        let now = tokio::time::Instant::now();
+        if refused.is_empty() {
+            // Settled once the peer sends more; until then, files asked for
+            // again may yet be refused, and the wait goes on where it was.
+            let mut open = self.refused.lock();
+            if open.get(&job.id).is_some_and(|r| received > r.received) {
+                open.remove(&job.id);
+            }
+        } else {
+            let (decision, first) = self.refusal(job.id, &refused[0].0.peer, peer_busy, received);
+            if first {
+                let why = summarise(refused.iter().map(|(_, r)| r.as_str()));
+                tracing::info!(job = %job.id, peer = %refused[0].0.peer, %why, "peer queue full; waiting for it to drain");
+                self.event(job, "held", Some(cause::PEER_QUEUE_FULL), Some(&why))
+                    .await;
+            }
+            match decision {
+                Refusal::Ask => {
+                    for (f, _) in &refused {
+                        let remote = RawStr(f.remote.clone().into());
+                        if !engine.retry_download(&f.peer, &remote) {
+                            engine.download(&f.peer, remote, f.size as u64, self.dest(f));
+                        }
+                    }
+                    // Asking again is a fresh wait on the peer.
+                    self.stalled.lock().insert(job.id, (now, received));
+                    return Ok(());
+                }
+                Refusal::Wait if !states.contains_key("active") => {
+                    // Nothing else of it is coming: the wait is the peer's
+                    // queue, not a stall.
+                    self.stalled.lock().insert(job.id, (now, received));
+                    return Ok(());
+                }
+                // What it accepted is still coming: followed as usual.
+                Refusal::Wait => {}
+                // Six hours of a full queue is not a peer dropping off: no
+                // rounds of asking again, whatever else is still coming.
+                Refusal::GiveUp => {
+                    self.retried.lock().remove(&job.id);
+                    return self.leave(engine, job, &rows, cause::PEER_QUEUE_FULL).await;
+                }
+            }
+        }
         let (done, failed, active) = (
             states.get("completed"),
             states.get("failed"),
             states.get("active"),
         );
-        if active.is_some() {
+        if active.is_none() && failed.is_none() && done.is_some() && extra_arriving {
+            // The music is in and an optional file is part way: worth a
+            // short wait for, never another source.
+            if now.duration_since(self.progressed(job, received, now)) < EXTRA_WAIT {
+                return Ok(());
+            }
+        } else if active.is_some() {
             // A peer that queues every file and never sends one (no free
             // slot for strangers, or a queue it never works through)
             // would hold the album forever while other sources sit
@@ -756,23 +1365,7 @@ impl Jobs {
                     None => places.remove(&job.id),
                 };
             }
-            let now = tokio::time::Instant::now();
-            let since = {
-                let mut stalled = self.stalled.lock();
-                let entry = stalled.entry(job.id).or_insert_with(|| {
-                    // From when this source was taken on, which the job
-                    // row records, so a restart does not forgive a peer
-                    // that has sent nothing.
-                    let waited = (chrono::Utc::now() - job.updated_at)
-                        .to_std()
-                        .unwrap_or_default();
-                    (now.checked_sub(waited).unwrap_or(now), received)
-                });
-                if received > entry.1 {
-                    *entry = (now, received);
-                }
-                entry.0
-            };
+            let since = self.progressed(job, received, now);
             let stalled = now.duration_since(self.started) >= STARTUP_GRACE
                 && now.duration_since(since) >= STALL;
             if stalled && job.alternates.0.is_empty() {
@@ -796,7 +1389,7 @@ impl Jobs {
                 if let Some(peer) = rows.first().map(|r| r.peer.clone()) {
                     self.stalled_peers.lock().insert(peer, now);
                 }
-                self.fall_back(engine, job, &rows, cause::STALLED_PEER)
+                self.fall_back(engine, job, &rows, cause::STALLED_PEER, None)
                     .await?;
             }
             return Ok(());
@@ -805,6 +1398,12 @@ impl Jobs {
         self.places.lock().remove(&job.id);
         if failed.is_none() && done.is_some() {
             self.retried.lock().remove(&job.id);
+            // Before the claim, so a failure here leaves the job downloading
+            // for the next tick rather than claimed with no import running.
+            for f in extras {
+                self.drop_file(Some(engine), f).await;
+                db::set_file_skipped(&self.db, job.id, &f.peer, &f.remote, true).await?;
+            }
             // Cancelled or removed since this tick read it: left so.
             let how = How::Match(None);
             if db::claim_import(&self.db, job.id, &["downloading"], &how).await? {
@@ -821,7 +1420,6 @@ impl Jobs {
             // Most failures are a peer dropping off for a moment. Asking
             // the same peer again, spaced out, resumes from the partial
             // files; a new source would start the album from nothing.
-            let now = tokio::time::Instant::now();
             let round = {
                 let mut retried = self.retried.lock();
                 let (rounds, next) = retried.entry(job.id).or_insert((0, now));
@@ -838,10 +1436,12 @@ impl Jobs {
             };
             match round {
                 Some(true) => {
-                    for f in rows
-                        .iter()
-                        .filter(|f| matches!(f.state.as_str(), "failed" | "cancelled"))
-                    {
+                    // Not those refused for a full queue, asked for as the
+                    // peer drains.
+                    for f in rows.iter().filter(|f| {
+                        matches!(f.state.as_str(), "failed" | "cancelled")
+                            && !refused.iter().any(|(r, _)| r.remote == f.remote)
+                    }) {
                         let remote = RawStr(f.remote.clone().into());
                         if !engine.retry_download(&f.peer, &remote) {
                             engine.download(&f.peer, remote, f.size as u64, self.dest(f));
@@ -849,45 +1449,66 @@ impl Jobs {
                     }
                 }
                 Some(false) => {}
-                // Out of stored fallbacks, as a folder picked by hand
-                // always is: a peer that refuses (a daily file limit, a
-                // ban) will not relent, but another may have the album.
-                None if job.alternates.0.is_empty() => {
-                    if !self.search_again(engine, job, cause::PEER_FAILED).await? {
-                        self.fall_back(engine, job, &rows, cause::PEER_FAILED)
-                            .await?
-                    }
-                }
-                None => {
-                    self.fall_back(engine, job, &rows, cause::PEER_FAILED)
-                        .await?
-                }
+                None => self.leave(engine, job, &rows, cause::PEER_FAILED).await?,
             }
         }
         Ok(())
     }
 
-    /// The folder failed; move to the next candidate, or give up. `cause` is
-    /// why this source is being left, for the job's history.
-    async fn fall_back(
+    /// Leave this source for the next fallback; out of stored fallbacks, as
+    /// a folder picked by hand always is, search for the album again, since
+    /// a peer that refuses (a daily file limit, a ban) will not relent but
+    /// another may have it.
+    async fn leave(
         self: &Arc<Self>,
         engine: &Engine,
         job: &Job,
         rows: &[JobFile],
         cause: &str,
     ) -> Result<()> {
+        if !job.alternates.0.is_empty() {
+            return self.fall_back(engine, job, rows, cause, None).await;
+        }
+        match self.search_again(engine, job, cause).await? {
+            Searched::Moved => Ok(()),
+            Searched::NotFound => self.fall_back(engine, job, rows, cause, None).await,
+            Searched::NothingToSearch => {
+                self.fall_back(engine, job, rows, cause, Some(NOTHING_TO_SEARCH))
+                    .await
+            }
+        }
+    }
+
+    /// The folder failed; move to the next candidate, or give up. `cause` is
+    /// why this source is being left, for the job's history, and `note` is
+    /// added to the error when it gives up. A candidate another job is
+    /// already fetching, or imported in the last day, is passed over.
+    async fn fall_back(
+        self: &Arc<Self>,
+        engine: &Engine,
+        job: &Job,
+        rows: &[JobFile],
+        cause: &str,
+        note: Option<&str>,
+    ) -> Result<()> {
         let mut alternates = job.alternates.0.clone();
         // A peer that stalled us recently goes last here as it does in grab:
         // the order was fixed when the job began, before it was known.
         let stalled = self.recently_stalled();
         alternates.sort_by_key(|a| stalled.contains(&a.username));
-        let errors: Vec<String> = rows.iter().filter_map(|f| f.error.clone()).collect();
+        let errors = summarise(rows.iter().filter_map(|f| f.error.as_deref()));
         let left = rows.first().map(|r| r.peer.clone()).unwrap_or_default();
         for f in rows {
             engine.remove_download(&f.peer, &RawStr(f.remote.clone().into()));
         }
         while !alternates.is_empty() {
             let alt = alternates.remove(0);
+            if let Some(other) =
+                db::job_of_source(&self.db, &alt.username, &alt.folder, Some(job.id), true).await?
+            {
+                tracing::info!(job = %job.id, user = %alt.username, other = %other.id, "another job has that copy; passing it over");
+                continue;
+            }
             let folder = RawStr(alt.folder_raw.clone().into());
             let found: Vec<(RawStr, u64)> = alt
                 .files
@@ -896,20 +1517,21 @@ impl Jobs {
                 .collect();
             match self.listing(engine, &alt.username, &folder, &found).await {
                 Ok(files) if !files.is_empty() => {
-                    tracing::info!(job = %job.id, user = %alt.username, ?errors, "falling back to another source");
+                    tracing::info!(job = %job.id, user = %alt.username, %errors, "falling back to another source");
                     let _ = tokio::fs::remove_dir_all(self.dir(job.id)).await;
                     let source = Source::Soulseek {
                         username: alt.username.clone(),
                         folder: alt.folder.clone(),
                         folder_raw: alt.folder_raw.clone(),
                     };
-                    let rows = self.rows(job.id, &alt.username, &files);
+                    let rows = Self::rows(job.id, &alt.username, &files);
                     if !db::replace_files(&self.db, job.id, &source, &alternates, &rows).await? {
                         tracing::info!(job = %job.id, "moved on while another source was found; left as it is");
                         return Ok(());
                     }
-                    self.start(engine, job.id, &rows);
-                    let detail = format!("to {}; left {left}: {}", alt.username, errors.join("; "));
+                    // Asked for by the next tick, once the peer has room.
+                    self.wake.notify_one();
+                    let detail = format!("to {}; left {left}: {errors}", alt.username);
                     self.event(job, "fallback", Some(cause), Some(&detail))
                         .await;
                     return Ok(());
@@ -917,14 +1539,16 @@ impl Jobs {
                 _ => continue,
             }
         }
-        let error = errors.first().cloned().unwrap_or_else(|| {
-            if cause == cause::STALLED_PEER {
-                "the peer sent nothing for twenty minutes, and no other copy could be fetched"
-                    .into()
-            } else {
-                "download failed, and no other copy could be fetched".into()
-            }
-        });
+        let mut error = if !errors.is_empty() {
+            errors
+        } else if cause == cause::STALLED_PEER {
+            "the peer sent nothing for twenty minutes, and no other copy could be fetched".into()
+        } else {
+            "download failed, and no other copy could be fetched".into()
+        };
+        if let Some(note) = note {
+            error = format!("{error}; {note}");
+        }
         if db::move_status(&self.db, job.id, LEAVING, "failed", Some(&error)).await? {
             self.event(job, "failed", Some(cause), Some(&error)).await;
         }
@@ -935,7 +1559,7 @@ impl Jobs {
     /// logged, never allowed to fail the work it describes.
     async fn event(&self, job: &Job, outcome: &str, cause: Option<&str>, detail: Option<&str>) {
         let peer = match &job.source.0 {
-            Source::Soulseek { username, .. } | Source::Files { username } => username.clone(),
+            Source::Soulseek { username, .. } | Source::Files { username, .. } => username.clone(),
             Source::Url { url } => host(url),
         };
         if let Err(e) = db::record_event(
@@ -1030,6 +1654,20 @@ impl Jobs {
         // A file that does not decode never goes in, whoever approved it: it
         // plays as noise, and no judgement about the release changes that.
         let tracks = self.analyse(id, &dir).await;
+        let filed = self.import_stages(id, job, dir, tracks, how).await;
+        self.clear_stage(id);
+        filed
+    }
+
+    /// [`Self::file`] from the spectral check on, its stages recorded.
+    async fn import_stages(
+        self: &Arc<Self>,
+        id: Uuid,
+        job: Job,
+        dir: std::path::PathBuf,
+        tracks: Vec<crate::analysis::TrackAnalysis>,
+        how: How,
+    ) -> Result<()> {
         db::set_analysis(&self.db, id, &tracks).await?;
         let damaged: Vec<_> = tracks.iter().filter(|t| t.damaged()).collect();
         if !damaged.is_empty() {
@@ -1093,15 +1731,74 @@ impl Jobs {
             }
         }
         tracing::info!(%id, title = %job.title, dir = %dir.display(), "import started");
-        let outcome = match &how {
-            How::Match(release) if job.replaces => {
-                self.tagger
-                    .import_replacing(&dir, release.as_deref(), self.library.bin())
-                    .await
+        let mut outcome = self
+            .staged(id, async {
+                match &how {
+                    How::Match(release) if job.replaces => {
+                        self.tagger
+                            .import_replacing(&dir, release.as_deref(), self.library.bin())
+                            .await
+                    }
+                    How::Match(release) => self.tagger.import(&dir, release.as_deref()).await,
+                    How::AsIs(edits) => self.tagger.import_as_is(&dir, edits).await,
+                }
+            })
+            .await;
+        // A purchase comes with tags its seller wrote, which are good, and
+        // nothing else will tell more about it; once a metadata service has
+        // put it off a few times and MusicBrainz is unavailable again, it is
+        // filed by them rather than kept waiting. Only tags that describe
+        // one album and carry a date: as-is asks MusicBrainz for a missing
+        // year, which it would not answer now. Not a Soulseek copy, whose
+        // tags are anyone's. Should filing by the tags fail, the job waits
+        // for MusicBrainz as it would have.
+        let mut as_is_because = None;
+        if let Err(e) = &outcome
+            && e.is_transient()
+            && matches!(e, sift::ImportError::MusicBrainz(_))
+            && matches!(job.source.0, Source::Url { .. })
+            && matches!(how, How::Match(None))
+            && !job.replaces
+            && job.defer_tries >= AS_IS_AFTER
+        {
+            let dated = self
+                .tagger
+                .tracks(&dir)
+                .await
+                .is_ok_and(|t| !t.is_empty() && t.iter().all(|t| t.date.is_some()));
+            match self.tagger.check_as_is(&dir).await {
+                Ok(()) if dated => {
+                    let why = format!(
+                        "filed by its own tags: put off {} times and MusicBrainz still unavailable ({e:#})",
+                        job.defer_tries
+                    );
+                    tracing::info!(%id, "{why}");
+                    match self
+                        .staged(id, self.tagger.import_as_is(&dir, &sift::Edits::default()))
+                        .await
+                    {
+                        Ok(filed) => {
+                            db::set_import_how(&self.db, id, &How::AsIs(sift::Edits::default()))
+                                .await?;
+                            as_is_because = Some(why);
+                            outcome = Ok(filed);
+                        }
+                        Err(sift::ImportError::Exists(existing)) => {
+                            outcome = Err(sift::ImportError::Exists(existing));
+                        }
+                        Err(as_is) => {
+                            tracing::warn!(%id, error = %as_is, "could not file by its own tags; waiting for MusicBrainz")
+                        }
+                    }
+                }
+                Ok(()) => {
+                    tracing::info!(%id, "MusicBrainz unavailable and the tags carry no date; waiting")
+                }
+                Err(blocker) => {
+                    tracing::info!(%id, error = %blocker, "MusicBrainz unavailable and the tags do not describe one album; waiting")
+                }
             }
-            How::Match(release) => self.tagger.import(&dir, release.as_deref()).await,
-            How::AsIs(edits) => self.tagger.import_as_is(&dir, edits).await,
-        };
+        }
         match &outcome {
             Ok(sift::Outcome::Imported { dir: path, .. }) => {
                 tracing::info!(%id, library = %path.display(), "import finished: filed")
@@ -1110,11 +1807,25 @@ impl Jobs {
             Err(e) => tracing::info!(%id, error = %e, "import finished: not filed"),
         }
         match outcome {
-            Ok(sift::Outcome::Imported { dir: path, log, .. }) => {
+            Ok(sift::Outcome::Imported {
+                dir: path,
+                log,
+                musicbrainz_unavailable,
+                ..
+            }) => {
+                let path_text = path.to_string_lossy();
+                let why = as_is_because.or_else(|| {
+                    musicbrainz_unavailable.map(|e| {
+                        format!("matched on Discogs because MusicBrainz was unavailable ({e})")
+                    })
+                });
+                let (log, detail) = match &why {
+                    Some(why) => (format!("{why}\n{log}"), format!("{path_text}; {why}")),
+                    None => (log, path_text.to_string()),
+                };
                 db::set_import_log(&self.db, id, &log).await?;
-                db::set_imported(&self.db, id, &path.to_string_lossy()).await?;
-                self.event(&job, "imported", None, Some(&path.to_string_lossy()))
-                    .await;
+                db::set_imported(&self.db, id, &path_text).await?;
+                self.event(&job, "imported", None, Some(&detail)).await;
                 let _ = tokio::fs::remove_dir_all(&dir).await;
                 // Gain, genres and lyrics, off the import path: an album is
                 // playable as soon as it is filed, and these only add to it.
@@ -1134,6 +1845,7 @@ impl Jobs {
                             album = %path.display(),
                             gain_db = ?e.gain_db,
                             genres = ?e.genres,
+                            release_types = ?e.release_types,
                             lyrics = e.lyrics,
                             artists = ?e.artists,
                             problems = ?e.problems,
@@ -1149,10 +1861,13 @@ impl Jobs {
                     }
                 });
             }
+            // When Discogs stood in for MusicBrainz, sift's reason and log
+            // say so, and the cause is the outage rather than the files.
             Ok(sift::Outcome::Review {
                 reason,
                 candidates,
                 log,
+                musicbrainz_unavailable,
             }) => {
                 db::set_import_log(&self.db, id, &log).await?;
                 db::set_review(&self.db, id, &reason, &candidates).await?;
@@ -1162,6 +1877,7 @@ impl Jobs {
                 };
                 db::set_as_is_blocker(&self.db, id, &blocker).await?;
                 let c = match candidates.first() {
+                    _ if musicbrainz_unavailable.is_some() => cause::MB_UNAVAILABLE,
                     None => cause::NO_CANDIDATES,
                     Some(b) if b.missing > 0 => cause::INCOMPLETE,
                     Some(b) if b.extra > 0 => cause::EXTRA_FILES,
@@ -1178,8 +1894,12 @@ impl Jobs {
                     sift::ImportError::Discogs(_) => ("Discogs", cause::DISCOGS_UNAVAILABLE),
                     _ => ("MusicBrainz", cause::MB_UNAVAILABLE),
                 };
-                let waiting = format!("{e:#}; trying again in {} minutes", DEFER.as_secs() / 60);
-                if db::defer_import(&self.db, id, &waiting, DEFER_TRIES)
+                let wait = defer_wait(id, job.defer_tries + 1);
+                let waiting = format!(
+                    "{e:#}; put off {} of {DEFER_TRIES} times",
+                    job.defer_tries + 1
+                );
+                if db::defer_import(&self.db, id, &waiting, DEFER_TRIES, wait)
                     .await?
                     .is_some()
                 {
@@ -1215,9 +1935,16 @@ impl Jobs {
                 let _ = tokio::fs::remove_dir_all(&dir).await;
             }
             // As-is refused: the tags are not good enough to file by, which
-            // leaves the album where it was, waiting on a decision.
+            // leaves the album where it was, waiting on a decision. The card
+            // takes its blocker from the files as they stand, not from the
+            // edits this attempt carried, which may be what was refused.
             Err(e @ sift::ImportError::Untagged(_)) => {
                 db::set_status(&self.db, id, "review", Some(&format!("{e:#}"))).await?;
+                let blocker = match self.tagger.check_as_is(&dir).await {
+                    Ok(()) => String::new(),
+                    Err(e) => format!("{e:#}"),
+                };
+                db::set_as_is_blocker(&self.db, id, &blocker).await?;
                 self.event(
                     &job,
                     "review",
@@ -1294,6 +2021,16 @@ impl Jobs {
         }
         files.sort();
         let out_dir = self.spectrograms.join(id.to_string());
+        let sizes: Vec<u64> = {
+            let mut sizes = Vec::with_capacity(files.len());
+            for f in &files {
+                sizes.push(tokio::fs::metadata(f).await.map_or(0, |m| m.len()));
+            }
+            sizes
+        };
+        let total: u64 = sizes.iter().sum();
+        let mut done = 0;
+        self.set_stage(id, "checking the audio".into(), None, Some((0, total)));
         let limit = Arc::new(tokio::sync::Semaphore::new(3));
         let tasks: Vec<_> = files
             .into_iter()
@@ -1328,10 +2065,12 @@ impl Jobs {
             })
             .collect();
         let mut tracks = Vec::new();
-        for t in tasks {
+        for (t, size) in tasks.into_iter().zip(sizes) {
             if let Ok(Some(a)) = t.await {
                 tracks.push(a);
             }
+            done += size;
+            self.set_stage(id, "checking the audio".into(), None, Some((done, total)));
         }
         tracks
     }
@@ -1339,13 +2078,18 @@ impl Jobs {
     /// Take a job waiting on a decision into `importing`, or say why not. A
     /// second request for the same job (a double tap, an assistant beside a
     /// person) is refused here rather than queued behind the first.
+    ///
+    /// A job waiting on a metadata service can be taken too, so a person
+    /// need not wait out an outage to file it by its tags or name its
+    /// release.
     async fn claim(&self, id: Uuid, how: &How) -> Result<()> {
-        if db::claim_import(&self.db, id, db::DECIDED, how).await? {
+        let from = [db::DECIDED, &["waiting"]].concat();
+        if db::claim_import(&self.db, id, &from, how).await? {
             return Ok(());
         }
         let job = db::job(&self.db, id).await?.context("no such job")?;
         bail!(
-            "job is {}; only review, suspect and failed jobs import",
+            "job is {}; only review, suspect, failed and waiting jobs import",
             job.status
         )
     }
@@ -1506,31 +2250,39 @@ impl Jobs {
         }
         let rows = db::job_files(&self.db, id).await?;
         let _ = tokio::fs::remove_dir_all(self.complete_dir(&job)).await;
-        self.fall_back(&engine, &job, &rows, cause).await
+        self.fall_back(&engine, &job, &rows, cause, None).await
     }
 
-    /// Search for the job's title again and move to the best copy found on
-    /// another peer, for a job with no fallbacks left. Titles are the query a
-    /// grab was given, so this is the grab's own search. False when no other
-    /// copy was found and the job was left as it was.
+    /// Search for the album again and move to the best copy found on another
+    /// peer, for a job with no fallbacks left. The album is what the job
+    /// came from says it is (see [`Self::wanted`]); a copy is taken only
+    /// when its folder names the same album, and nothing is searched for
+    /// when nothing names one.
     async fn search_again(
         self: &Arc<Self>,
         engine: &Engine,
         job: &Job,
         cause: &str,
-    ) -> Result<bool> {
+    ) -> Result<Searched> {
         let rows = db::job_files(&self.db, job.id).await?;
         let current = rows.first().map(|r| r.peer.clone()).unwrap_or_default();
+        let Some((wanted, from_title)) = self.wanted(job, &rows).await else {
+            tracing::info!(job = %job.id, title = %job.title, "nothing names an album to search for; not looking for another copy");
+            return Ok(Searched::NothingToSearch);
+        };
+        let query = wanted.query();
         let stalled = self.recently_stalled();
         let search = async |filter: &crate::folders::Filter| -> Result<Vec<Folder>> {
             let responses =
-                crate::graphql::responses(engine, &job.title, SEARCH_WAIT.as_secs()).await?;
+                crate::graphql::responses(engine, &query, SEARCH_WAIT.as_secs()).await?;
             Ok(crate::folders::relevant_complete_first(
                 crate::folders::group(responses.iter().map(Arc::as_ref), filter),
-                &job.title,
+                &query,
             )
             .into_iter()
-            .filter(|f| f.username != current && !stalled.contains(&f.username))
+            .filter(|f| {
+                f.username != current && !stalled.contains(&f.username) && wanted.matches(&f.path)
+            })
             .collect())
         };
         // The replacement must be as good a copy as the one it replaces:
@@ -1557,17 +2309,70 @@ impl Jobs {
         };
         let found = search(&filter).await?;
         if found.is_empty() {
-            tracing::info!(job = %job.id, "no other copy online; still on {current}");
-            return Ok(false);
+            tracing::info!(job = %job.id, %query, "no other copy online; still on {current}");
+            return Ok(Searched::NotFound);
         }
-        tracing::info!(job = %job.id, copies = found.len(), "found other copies; moving off {current}");
+        tracing::info!(job = %job.id, %query, copies = found.len(), "found other copies; moving off {current}");
         self.stalled_peers
             .lock()
             .insert(current, tokio::time::Instant::now());
         let mut job = job.clone();
+        // Named for the album from here on, so a later search is for the
+        // album and not for the name of whichever folder it then sits in.
+        if !from_title {
+            job.title = wanted.title();
+            db::set_title(&self.db, job.id, &job.title).await?;
+        }
         job.alternates = Json(found.into_iter().take(4).map(Alternate::from).collect());
-        self.fall_back(engine, &job, &rows, cause).await?;
-        Ok(true)
+        self.fall_back(engine, &job, &rows, cause, None).await?;
+        Ok(Searched::Moved)
+    }
+
+    /// The album a job is of, for searching again: the title it was given,
+    /// when a person or a grab chose it rather than it being the folder's
+    /// own name; else the tags of what arrived; else the folder it came from.
+    /// True with it when it is the title.
+    async fn wanted(&self, job: &Job, rows: &[JobFile]) -> Option<(crate::fallback::Wanted, bool)> {
+        use crate::fallback::Wanted;
+        let folder = match &job.source.0 {
+            Source::Soulseek { folder, .. } => Some(folder.clone()),
+            Source::Files { folder, .. } => folder.clone().or_else(|| {
+                common_folder(
+                    rows.iter()
+                        .map(|r| String::from_utf8_lossy(&r.remote).into_owned()),
+                )
+            }),
+            Source::Url { .. } => None,
+        };
+        let leaf = folder
+            .as_deref()
+            .map(|f| f.rsplit('\\').next().unwrap_or(f));
+        if leaf != Some(job.title.as_str())
+            && let Some(w) = Wanted::from_title(&job.title)
+        {
+            return Some((w, true));
+        }
+        if let Some(w) = self.tagged(job.id).await {
+            return Some((w, false));
+        }
+        folder
+            .as_deref()
+            .and_then(Wanted::from_path)
+            .map(|w| (w, false))
+    }
+
+    /// The album the arrived files' tags name most often.
+    async fn tagged(&self, id: Uuid) -> Option<crate::fallback::Wanted> {
+        let tracks = self.tagger.tracks(&self.dir(id)).await.ok()?;
+        let mut counts: HashMap<(String, String), usize> = HashMap::new();
+        for t in tracks {
+            let (Some(album), Some(artist)) = (t.album, t.album_artist.or(t.artist)) else {
+                continue;
+            };
+            *counts.entry((artist, album)).or_default() += 1;
+        }
+        let ((artist, album), _) = counts.into_iter().max_by_key(|(_, n)| *n)?;
+        crate::fallback::Wanted::from_tags(&artist, &album)
     }
 
     /// Retry a failed or cancelled job from its current source.
@@ -1613,7 +2418,7 @@ impl Jobs {
 
     async fn redownload(&self, engine: &Engine, id: Uuid) -> Result<()> {
         let rows = db::job_files(&self.db, id).await?;
-        for f in &rows {
+        for f in rows.iter().filter(|f| f.state != "skipped") {
             let remote = RawStr(f.remote.clone().into());
             if !engine.retry_download(&f.peer, &remote) {
                 engine.download(&f.peer, remote, f.size as u64, self.dest(f));
@@ -1621,6 +2426,67 @@ impl Jobs {
         }
         self.wake.notify_one();
         Ok(())
+    }
+
+    /// Leave out the files at `skip` (paths in the album, as [`file_path`]
+    /// gives them), deleting what arrived of them, and fetch those at `fetch`
+    /// again. Only while the job downloads, and never down to no files.
+    pub async fn skip_files(
+        &self,
+        id: Uuid,
+        skip: &std::collections::HashSet<String>,
+        fetch: &std::collections::HashSet<String>,
+    ) -> Result<()> {
+        let job = db::job(&self.db, id).await?.context("no such job")?;
+        anyhow::ensure!(
+            job.status == "downloading" && !matches!(job.source.0, Source::Url { .. }),
+            "job is {}; files are chosen only while a download from a peer is under way",
+            job.status
+        );
+        let rows = db::job_files(&self.db, id).await?;
+        anyhow::ensure!(
+            rows.iter().any(|f| {
+                let path = file_path(f);
+                !skip.contains(&path) && (f.state != "skipped" || fetch.contains(&path))
+            }),
+            "that leaves nothing to download; remove the job instead"
+        );
+        let engine = self.session.engine();
+        for f in &rows {
+            let path = file_path(f);
+            let skipped = f.state == "skipped";
+            if skip.contains(&path) && !skipped {
+                db::set_file_skipped(&self.db, id, &f.peer, &f.remote, true).await?;
+                self.drop_file(engine, f).await;
+            } else if fetch.contains(&path) && !skip.contains(&path) && skipped {
+                db::set_file_skipped(&self.db, id, &f.peer, &f.remote, false).await?;
+                if let Some(engine) = engine {
+                    let remote = RawStr(f.remote.clone().into());
+                    engine.download(&f.peer, remote, f.size as u64, self.dest(f));
+                }
+            }
+        }
+        self.wake.notify_one();
+        Ok(())
+    }
+
+    /// Stop waiting for the files still to come and import what arrived:
+    /// for a peer that holds back a file it listed and never sends it.
+    pub async fn finish(&self, id: Uuid) -> Result<()> {
+        let rows = db::job_files(&self.db, id).await?;
+        let engine = self.session.engine();
+        let music = rows.iter().any(|f| !self.optional(f));
+        anyhow::ensure!(
+            rows.iter()
+                .any(|f| !(music && self.optional(f)) && self.arrived(engine, f)),
+            "no music has arrived yet to import"
+        );
+        let skip = rows
+            .iter()
+            .filter(|f| f.state != "skipped" && !self.arrived(engine, f))
+            .map(file_path)
+            .collect();
+        self.skip_files(id, &skip, &Default::default()).await
     }
 
     pub async fn remove(&self, id: Uuid) -> Result<()> {
@@ -1665,6 +2531,64 @@ impl Jobs {
             .await?;
         db::delete_job(&self.db, id).await?;
         Ok(())
+    }
+}
+
+/// Where a directory from a peer's folder listing lands under the job:
+/// `root` itself is `""` and a subfolder its relative path. A sibling whose
+/// name only begins with `root` (`Iconic (2021)` beside `Iconic`) is `None`,
+/// since some peers answer a folder request with every folder sharing its
+/// prefix. Anything else keeps to the job's top level.
+fn subdir(dir: &str, root: &str) -> Option<String> {
+    let root = root.trim_end_matches('\\');
+    let rest = match dir.get(..root.len()) {
+        Some(head) if head.eq_ignore_ascii_case(root) => &dir[root.len()..],
+        _ => return Some(String::new()),
+    };
+    if !root.is_empty() && !rest.is_empty() && !rest.starts_with('\\') {
+        return None;
+    }
+    Some(rest.trim_start_matches('\\').replace('\\', "/"))
+}
+
+/// A file's path within its album, as a person and the API name it.
+/// Refuse a folder with no audio in it: there is no album to import, and a
+/// search for its name finds some other album.
+fn ensure_audio(files: &[(RawStr, u64, String)], folder: &str) -> Result<()> {
+    let audio = files.iter().any(|(remote, ..)| {
+        let name = remote.to_string_lossy();
+        crate::folders::is_audio_name(&name)
+    });
+    anyhow::ensure!(audio, "no audio files in {folder}: nothing to import");
+    Ok(())
+}
+
+/// The deepest folder holding every one of these paths, if any does.
+pub(crate) fn common_folder<S: AsRef<str>>(paths: impl IntoIterator<Item = S>) -> Option<String> {
+    let mut common: Option<Vec<String>> = None;
+    for path in paths {
+        let parts: Vec<&str> = path.as_ref().split('\\').collect();
+        let dir = &parts[..parts.len().saturating_sub(1)];
+        common = Some(match common {
+            None => dir.iter().map(|p| p.to_string()).collect(),
+            Some(c) => c
+                .into_iter()
+                .zip(dir)
+                .take_while(|(a, b)| a == *b)
+                .map(|(a, _)| a)
+                .collect(),
+        });
+    }
+    common.filter(|c| !c.is_empty()).map(|c| c.join("\\"))
+}
+
+pub(crate) fn file_path(f: &JobFile) -> String {
+    let name = RawStr(f.remote.clone().into()).to_string_lossy();
+    let base = name.rsplit('\\').next().unwrap_or(&name);
+    if f.subdir.is_empty() {
+        base.to_string()
+    } else {
+        format!("{}/{base}", f.subdir)
     }
 }
 
@@ -1921,6 +2845,193 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::*;
+
+    #[test]
+    fn a_full_queue_is_told_from_a_refusal_for_good() {
+        for r in [
+            "Too many files",
+            "Too many megabytes",
+            "too many files",
+            "Queue full",
+            "Queue limit reached",
+        ] {
+            assert!(queue_full(r), "{r}");
+        }
+        for r in [
+            "File not shared.",
+            "Banned",
+            "Cancelled",
+            "the peer failed to send it",
+            "teamnatour is offline",
+        ] {
+            assert!(!queue_full(r), "{r}");
+        }
+    }
+
+    #[test]
+    fn repeated_reasons_are_counted_not_repeated() {
+        let many = std::iter::repeat_n("Too many files", 312);
+        assert_eq!(summarise(many), "Too many files (×312)");
+        assert_eq!(
+            summarise([
+                "Too many files",
+                "File not shared.",
+                "Too many files",
+                "",
+                " Too many files ",
+            ]),
+            "Too many files (×3); File not shared."
+        );
+        assert_eq!(summarise(Vec::<&str>::new()), "");
+        let distinct: Vec<String> = (0..200).map(|i| format!("reason {i}")).collect();
+        let long = summarise(distinct.iter().map(String::as_str));
+        assert_eq!(long.chars().count(), SUMMARY_MAX + 1);
+        assert!(long.ends_with('…'));
+    }
+
+    #[test]
+    fn a_full_queue_is_asked_again_once_drained_less_often_each_time() {
+        let start = tokio::time::Instant::now();
+        let mut r = Refused {
+            peer: "teamnatour".into(),
+            since: start,
+            next: start + QUEUE_FULL_FIRST,
+            rounds: 0,
+            received: 0,
+        };
+        assert_eq!(refusal_due(&mut r, start, 0), Refusal::Wait, "not at once");
+        let later = start + QUEUE_FULL_FIRST;
+        assert_eq!(
+            refusal_due(&mut r, later, 40),
+            Refusal::Wait,
+            "not while the peer still has ours queued"
+        );
+        assert_eq!(refusal_due(&mut r, later, 0), Refusal::Ask);
+        assert_eq!(r.next - later, QUEUE_FULL_FIRST * 2);
+        assert_eq!(refusal_due(&mut r, later, 0), Refusal::Wait);
+        for _ in 0..10 {
+            let at = r.next;
+            assert_eq!(refusal_due(&mut r, at, 0), Refusal::Ask);
+            assert!(r.next - at <= QUEUE_FULL_MAX);
+        }
+        assert_eq!(
+            refusal_due(&mut r, start + QUEUE_FULL_PATIENCE, 0),
+            Refusal::GiveUp
+        );
+    }
+
+    #[test]
+    fn files_have_the_deepest_folder_holding_them_all() {
+        assert_eq!(
+            common_folder([
+                r"music\Recoil\Liquid\01.flac",
+                r"music\Recoil\Liquid\02.flac"
+            ])
+            .as_deref(),
+            Some(r"music\Recoil\Liquid")
+        );
+        assert_eq!(
+            common_folder([
+                r"music\Recoil\Liquid\CD1\01.flac",
+                r"music\Recoil\Liquid\CD2\01.flac"
+            ])
+            .as_deref(),
+            Some(r"music\Recoil\Liquid")
+        );
+        assert_eq!(common_folder([r"a\x.flac", r"b\y.flac"]), None);
+        assert_eq!(common_folder(Vec::<&str>::new()), None);
+    }
+
+    #[test]
+    fn a_folder_without_audio_is_refused() {
+        let listing = |names: &[&str]| -> Vec<(RawStr, u64, String)> {
+            names
+                .iter()
+                .map(|n| (RawStr::from(n.to_string()), 1, String::new()))
+                .collect()
+        };
+        assert!(
+            ensure_audio(
+                &listing(&[r"x\Covers\front.jpg", r"x\Covers\back.JPG"]),
+                "Covers"
+            )
+            .is_err()
+        );
+        assert!(ensure_audio(&listing(&[r"x\a\front.jpg", r"x\a\01.FLAC"]), "a").is_ok());
+    }
+
+    #[test]
+    fn sibling_folders_sharing_a_prefix_are_left_out() {
+        let root = "music\\The Skinner Brothers\\Iconic";
+        for (dir, want) in [
+            ("music\\The Skinner Brothers\\Iconic", Some("")),
+            ("MUSIC\\the skinner brothers\\iconic", Some("")),
+            ("music\\The Skinner Brothers\\Iconic\\CD1", Some("CD1")),
+            (
+                "music\\The Skinner Brothers\\Iconic\\CD1\\Art",
+                Some("CD1/Art"),
+            ),
+            ("music\\The Skinner Brothers\\Iconic (2021)", None),
+            ("music\\The Skinner Brothers\\Iconics", None),
+            ("elsewhere\\Iconic", Some("")),
+        ] {
+            assert_eq!(subdir(dir, root).as_deref(), want, "{dir}");
+        }
+        assert_eq!(
+            subdir("music\\Iconic\\CD1", "music\\Iconic\\").as_deref(),
+            Some("CD1"),
+            "a root typed with a trailing backslash"
+        );
+        assert_eq!(
+            subdir("Iconic\\CD1", "").as_deref(),
+            Some("Iconic/CD1"),
+            "a folder at the share root"
+        );
+    }
+
+    #[test]
+    fn a_file_listed_twice_becomes_one_row() {
+        let file = |name: &str, size| (RawStr::from(name), size, "CD1".to_string());
+        let rows = Jobs::rows(
+            Uuid::new_v4(),
+            "peer",
+            &[
+                file("a\\CD1\\01.flac", 10),
+                file("a\\CD1\\02.flac", 20),
+                file("a\\CD1\\01.flac", 99),
+            ],
+        );
+        let kept: Vec<_> = rows.iter().map(|r| (r.remote.as_slice(), r.size)).collect();
+        assert_eq!(
+            kept,
+            [
+                (b"a\\CD1\\01.flac".as_slice(), 10),
+                (b"a\\CD1\\02.flac".as_slice(), 20),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_put_off_import_tries_again_soon_then_every_five_minutes() {
+        let id = Uuid::new_v4();
+        let around = |tries, secs: f64| {
+            let wait = defer_wait(id, tries).as_secs_f64();
+            assert!((secs * 0.8..=secs * 1.2).contains(&wait), "{tries}: {wait}");
+        };
+        around(1, 30.0);
+        around(2, 60.0);
+        around(3, 120.0);
+        around(4, 300.0);
+        around(DEFER_TRIES, 300.0);
+        assert_eq!(
+            defer_wait(id, 2),
+            defer_wait(id, 2),
+            "the same each time it is asked"
+        );
+        let spread: std::collections::HashSet<_> =
+            (0..20).map(|_| defer_wait(Uuid::new_v4(), 1)).collect();
+        assert!(spread.len() > 10, "jobs put off together return apart");
+    }
 
     #[test]
     fn path_parts_stay_inside_the_job_on_every_platform() {

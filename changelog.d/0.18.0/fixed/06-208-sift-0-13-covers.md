@@ -1,0 +1,1 @@
+- **sift 0.13: albums without art in the Cover Art Archive or on Discogs take the Apple Music catalogue's cover.** Before, an album matched on Discogs while MusicBrainz was unavailable could be filed with no cover, and its import log read only `cover art: none`. The log now gives each source's reason for being passed over. Various Artists compilations are never looked up by name.

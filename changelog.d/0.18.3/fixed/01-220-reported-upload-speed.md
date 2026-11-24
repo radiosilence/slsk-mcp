@@ -1,0 +1,1 @@
+- **The upload speed reported to the server and to peers leaves out the wait for the downloader to close.** It was the file's size over the whole send including that wait of up to 30 seconds, which understated our speed for any client slow to close.

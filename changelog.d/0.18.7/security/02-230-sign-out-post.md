@@ -1,0 +1,1 @@
+- **Another site cannot sign you out.** `/auth/logout` signed out on a GET, so any page could do it with an image tag; it is now a POST that must come from Datastar or carry a same-origin `Sec-Fetch-Site` or `Origin`.

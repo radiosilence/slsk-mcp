@@ -69,9 +69,26 @@ tested for interoperability against the `soulseek-rs` client.
    lossless first (FLAC before WAV), then free upload slot, queue length and
    speed.
 2. The best folder's full listing is requested from the peer and each file is
-   queued. Failed files are asked for again from the same peer twice, resuming
-   from what arrived; after that, or after twenty minutes without a byte, the
-   next of four fallback folders is tried.
+   queued. Each peer is asked for at most three jobs, a hundred files and a
+   gigabyte of ours at once (`PEER_MAX_*`); further jobs for it wait here, so
+   queueing a whole discography from one sharer does not run into the
+   per-user queue limits most sharers set. A peer that still refuses files
+   for a full queue ("Too many files", "Too many megabytes") is asked for
+   them again once what it accepted has arrived, less often each time, and
+   only left after six hours (`peer_queue_full`). Other failed files are
+   asked for again from the same peer twice, resuming from what arrived;
+   after that, or after twenty minutes without a byte, the next of four
+   fallback folders is tried. With none left, the album is searched for
+   again: by the title the job was given, the tags of what arrived, or the
+   artist and album its folder sits under, never by a scans or disc folder's
+   own name ("Covers", "CD2"), and a copy found is taken only when its
+   folder names the same album. A folder already being fetched, or imported
+   in the last day, is not fetched again. Cruft such as `.nfo`, `.sfv` and
+   cover scans (`OPTIONAL_EXTENSIONS`) is asked for first but never waited
+   on: sharers often list a file they will not send, and once the music has
+   arrived whatever of it is still queued is dropped. A person can also
+   untick files to skip on a downloading job, or mark it complete to import
+   what has arrived (`skipJobFiles`, `finishDownload`).
 3. Every lossless-labelled track is checked for a lossy or upsampled source
    (see below). An album where a quarter of the tracks confidently fail is
    held as `suspect` with per-track spectrograms, for a person or assistant to
@@ -83,6 +100,14 @@ tested for interoperability against the `soulseek-rs` client.
    to choose from. A release the matcher did not find can be named by pasting
    its MusicBrainz ID or URL. For a release MusicBrainz lacks, the files can
    be imported as-is by their own tags when those describe one album.
+   A single file with no album tag, as a store's single comes, is filed as
+   its own album named by its title. While MusicBrainz is refusing requests,
+   and Discogs (below) is off or has nothing for the album, the job waits (`waiting`) and tries
+   again after 30 seconds, a minute, two minutes, then every five, each give
+   or take a fifth so jobs put off together come back apart; after 24 tries
+   it fails for a person to retry. A waiting job can be cancelled, or filed
+   by its tags (`importAsIs`) or a named release (`resolveJob`) without
+   waiting the outage out.
 
 ### Discogs
 
@@ -91,7 +116,11 @@ all, where Discogs often has the exact pressing. With `DISCOGS_TOKEN` set to a
 Discogs personal access token, sift searches Discogs whenever MusicBrainz has
 no strong match, and the two compete on distance: a close Discogs release is
 applied without review, and otherwise its releases are offered beside
-MusicBrainz's. The token alone turns this on; the service adds beets'
+MusicBrainz's. When MusicBrainz is unavailable, Discogs is searched in its
+place rather than the import waiting on it (unless the files name their
+MusicBrainz release), so an outage on one service does
+not hold up an album the other knows; the job's log and event say when this
+happened. The token alone turns this on; the service adds beets'
 `discogs` plugin itself, since nobody setting a token means it to go unused.
 
 ### AcoustID
@@ -115,7 +144,10 @@ lands, unpacks it if it is a zip (one folder wrapping everything is
 unwrapped, and an entry naming a path outside the archive refuses it), and
 continues from step 3. The tags are checked and chosen in the same review
 as any other album, so a purchase is not filed until it matches or a person
-has looked at it. There is no other copy to fall back to; a failed fetch is
+has looked at it, with one exception: a purchase's tags come from its seller
+and are usually right, so when MusicBrainz is still unavailable on the third
+try, a purchase whose tags describe one album and carry a date is filed by
+them as `importAsIs` would, and its import log and event say so. There is no other copy to fall back to; a failed fetch is
 retried from the same link. Only the link's host is logged or shown, since
 purchase links carry access tokens, and a fetch is capped at 8 GiB.
 
@@ -141,7 +173,7 @@ band and are not detected
 ### When something goes wrong
 
 Every outcome other than a clean import is recorded with a cause from a fixed
-set (`stalled_peer`, `corrupt_copy`, `no_audio`, `no_candidates`,
+set (`stalled_peer`, `peer_queue_full`, `corrupt_copy`, `no_audio`, `no_candidates`,
 `weak_match`, `incomplete`, `lossy_source`, `upsampled`, …) and the version
 that produced it, in a history kept after the job itself is gone. The
 `triage` query groups them by cause with examples, and
@@ -217,7 +249,11 @@ pick by what the host already runs.
 - **Kubernetes** — `deploy/pulumi` is a Pulumi component
   (`@radiosilence/slsk-mcp-pulumi`, at the image's version): local volumes for
   the library and downloads pinned to the node that holds them, state on the
-  node's own disk, a UPnP mapper for the peer port, and a NetworkPolicy confining it.
+  node's own disk, a NetworkPolicy confining the service, and a UPnP mapper
+  for the peer port. The mapper runs on the host network, which no
+  NetworkPolicy here confines, so it can reach whatever the node can. It holds
+  no secret. Its loop runs as nobody with no capabilities; before it starts, an
+  init container runs as root to install miniupnpc from the alpine mirror.
 - **Windows** — `slsk-mcp-windows-amd64.zip` on each release, built and tested
   in CI but run by its users rather than the maintainer, so Windows-only
   problems need a Windows user to reproduce them. See below.
@@ -245,9 +281,9 @@ Whatever runs it, three things matter:
    internet. Two peers both behind NAT cannot connect at all, so an
    unreachable client can only download from the half of the network that is
    reachable, and uploads to the other half never happen.
-2. **The internal port** (`INTERNAL_ADDR`) trusts `X-Slsk-*` credential
-   headers. Bind it to loopback or firewall it to the MCP gateway; never
-   publish it. Metrics have a port of their own (`METRICS_ADDR`) so the
+2. **The internal port** (`INTERNAL_ADDR`) serves MCP and GraphQL without
+   authentication. Bind it to loopback or firewall it to the MCP gateway;
+   never publish it. Metrics have a port of their own (`METRICS_ADDR`) so the
    scraper never needs this one.
 3. **The library and downloads on one filesystem**, so an import is a rename
    rather than a copy of every album.
@@ -300,6 +336,8 @@ startup.
 | `STATE_DIR` | `/data` | `slsk.db` (jobs, sealed credentials, bans, messages), the library index and the share-probe cache. On a local disk: SQLite over a network filesystem loses its locking. |
 | `LISTEN_PORT` | `2234` | The peer port. Must be reachable for peers behind NAT to connect. |
 | `UPLOAD_SLOTS`, `UPLOAD_LIMIT`, `DOWNLOAD_LIMIT` | `500`, `0`, `0` | Uploads at once, then limits in bytes per second (0 is unlimited). Each running upload holds a socket and a 256 KiB buffer; past what saturates the uplink, more slots split it more ways rather than send more. |
+| `OPTIONAL_EXTENSIONS` | `nfo,txt,sfv,md5,ffp,st5,m3u,m3u8,pls,log,accurip,url,ini,db,jpg,jpeg,png,gif,bmp,pdf` | Comma-separated. Files a download asks for first but does not wait on: once the music has arrived, any still queued or failed are dropped. Sharers often list an `.nfo` they never send, which would otherwise hold the album forever. |
+| `PEER_MAX_JOBS`, `PEER_MAX_FILES`, `PEER_MAX_MEGABYTES` | `3`, `100`, `1000` | How much is asked of one peer at once. Sharers cap each user's queue and refuse files past it; jobs beyond these wait here instead. A job is never split, and one is always asked for when the peer has nothing else of ours, however large. |
 | `SEARCHES_PER_HOUR` | `600` | Searches allowed in any rolling hour, 0 for unlimited. Every search is relayed to thousands of peers, and the server temporarily bans accounts that search in floods; past the budget a search is refused with when the next is free. |
 | `MAX_INBOUND_CONNECTIONS`, `MAX_INBOUND_PER_ADDRESS` | `512`, `32` | Connections other peers may hold open to the peer port, in total and from one address. Anyone can connect, so these bound what strangers can hold. Behind a proxy that hides peers' source addresses (Docker's userland proxy, Docker Desktop), every peer arrives from one address: raise the per-address limit to the total. |
 | `DESCRIPTION` | names the client as automated | The user info other peers see, until a description is saved from the Profile tab. The default says this is an automated client that shares back, so sharers can decide for themselves. |
@@ -311,10 +349,10 @@ startup.
 
 ## Three listeners
 
-The UI listens on one port behind OIDC. MCP and GraphQL listen on another,
-where `X-Slsk-Username`/`X-Slsk-Password` headers are trusted without
-question — that is how the MCP gateway passes the signed-in user's account —
-so it must be reachable from the gateway only. `/metrics` has a third port
+The UI listens on one port behind OIDC. MCP and GraphQL listen on another
+without authentication: the Soulseek account is the one configured, or set
+in the UI, and nothing a request carries changes it. Anyone reaching that
+port drives the client, so it must be reachable from the gateway only. `/metrics` has a third port
 to itself, so a scraper can be admitted without being admitted to the second.
 The chart's NetworkPolicy admits the gateway to one and the metrics agent to
 the other, and nothing else to either.
@@ -327,11 +365,50 @@ re-file, credit, enrich, re-import, edit or bin), browsing a user's shares, prof
 settings and triage. Each has its own address, and the server draws that
 page whole around a shared layout, so a link or a reload costs one request
 and nothing for the other pages; Datastar then patches parts of it in place,
-and a live stream updates only what that page shows. Each action calls the
+and a live stream updates only what that page shows. The patches, the streams,
+the request checks and Datastar's script itself come from
+[askama_datastar](https://github.com/radiosilence/askama-datastar), which
+radiosilence's other web UIs share. Each action calls the
 same Rust the GraphQL resolvers call. Buttons show busy while their request is in flight and then the
 server's answer, never a guess. Anything that changes the library or reaches
 other people (binning, re-filing, enriching, banning, sending a message) asks
 first; library changes show exactly what they will do before they do it.
+
+The live stream is driven by what changes, never by a timer: a database
+write to a table a page shows, a stage an import reaches, or the engine's
+signal for a transfer changing state, queue place or measured rate, a search
+spending the hourly budget, or the distributed network gaining or losing a
+parent or child. It redraws only the parts those touch, at most four times a
+second, and sends a part only when it differs from what was sent; on the
+Downloads page a card that changed is sent alone. Between patches the
+browser moves bars, transfer rates, times left and countdowns from the
+measurement each patch carries (bytes, total, rate, and when it was read),
+with one animation-frame loop that runs only while something moves and the
+tab is visible. It never draws past the total or more than two seconds past
+the last measurement, so a stalled peer shows as stalled. Countdowns (a
+put-off import's next try, a MusicBrainz wait, the next free search) are
+sent as deadlines.
+
+An import's card says what it is doing and for how long: checking the audio
+(with the bytes checked), searching MusicBrainz, comparing candidates, a wait
+on MusicBrainz with its reason, fingerprinting, Discogs, cover art, writing
+tags and moving into the library, with the MusicBrainz requests it has made
+and the budget the service last reported. GraphQL gives the same on `Job`
+(`stage`, `stageSince`, `stageUntil`, `musicbrainzRequests`).
+
+The Activity page shows what other users do with your shares: who is
+browsing them and which folders they open, the searches that reach you that
+your shares answer (with how many files, and whether the distributed network
+relayed them), and uploads starting and ending, each as it happens. Below it
+are the last week's trends: the most searched words, those searched for that
+your shares never answered (worth a wishlist entry), your folders most opened
+or downloaded from, and people who came back on more than one day.
+Browses, opened folders and answered searches are kept a row each for 90
+days. The distributed network relays many searches a second, so every search
+is otherwise only counted by its normalised words per hour, held in memory
+for the hour and written as that hour's thousand most searched when it ends.
+GraphQL has the same: `shareActivity`, `shareLog` and `shareTrends`, for an
+assistant asked what people have been looking for lately.
 
 Each search opens a tab on the Search page, so a run of searches can be
 read one at a time without losing the earlier results. Tabs are kept in the
@@ -384,7 +461,10 @@ on in the background, an album at a time, with progress and a result for
 each.
 
 The GraphQL mutations behind these take `preview: true` for the same answer
-without the change, so an assistant can show it first.
+without the change, so an assistant can show it first. Applied, each runs in
+a task of its own that the request only waits on: an assistant's call that
+times out, or a dropped connection, does not stop a write part way through
+an album, and the outcome is logged either way.
 
 Browsing shares, a peer's or this client's own (the library as peers see it,
 read from the share index rather than over the network), works like Finder's

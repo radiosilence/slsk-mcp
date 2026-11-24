@@ -1,0 +1,1 @@
+- **The advisory audit runs `cargo audit` directly.** `rustsec/audit-check` reported through a check run it created and then updated, and the update sometimes came back 404, failing the job after a clean audit; `cargo audit`'s exit code is now the gate, as in koan.

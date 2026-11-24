@@ -1,5 +1,144 @@
 # Changelog
 
+## 0.18.7
+
+### Security
+
+- **A confirmed message is the one previewed.** PREVIEW bound its confirmation token to a 64-bit non-cryptographic hash of the arguments, which a chosen pair could collide; it is now a SHA-256 of the length-prefixed arguments, still single use and good for 15 minutes.
+- **Another site cannot sign you out.** `/auth/logout` signed out on a GET, so any page could do it with an image tag; it is now a POST that must come from Datastar or carry a same-origin `Sec-Fetch-Site` or `Origin`.
+
+### Changed
+
+- **Datastar 1.0.5, through askama_datastar.** The web UI's patches, event streams, POST guard and Datastar's script come from the shared crate rather than code of slsk-mcp's own. Datastar moves from 1.0.2 to 1.0.5, which fixes reconnecting after a tab returns to the foreground, and a quiet stream is kept open by a comment every 15 seconds rather than every 5.
+
+### Fixed
+
+- **Hidden controls no longer flash while the page loads.** The library's selection bar, Bin spares, the date field and the art form waited for Datastar's `data-show` to hide them; they now start `hidden`. Transfer counters used `data-show` for their own purpose, which Datastar ran as script; they use `data-draw`.
+
+### Internal
+
+- **The advisory audit runs `cargo audit` directly.** `rustsec/audit-check` reported through a check run it created and then updated, and the update sometimes came back 404, failing the job after a clean audit; `cargo audit`'s exit code is now the gate, as in koan.
+
+## 0.18.6
+
+### Security
+
+- **url 2.5.9.** Fixes RUSTSEC-2026-0592, a stack overflow in `Url::origin()` on nested `blob:` URLs.
+
+### Changed
+
+- **Browsing a user's shares draws every row.** A peer sends its whole listing in one message, so folders open in full rather than a hundred rows at a time behind Show more.
+
+## 0.18.5
+
+### Fixed
+
+- **The web UI's enrich preview shows the release type.** Enrich has written a missing release type since 0.18.4, but the preview listed only genres, lyrics and credits, so the type it would write could not be seen before applying.
+- **Re-tagging from a release with no tracklist says so.** MusicBrainz holds some releases with a title but no tracks. Picking one in the web UI matched none of the album's files, and the preview reported that the files already carried the release's tags. It now says the release has no tracklist, and `reimportAlbums` with `preview` lists that as a problem.
+
+## 0.18.4
+
+### Fixed
+
+- **Imports write the release type.** sift 0.14 tags every import with its release group's type (`RELEASETYPE`), so players list singles and EPs apart from albums; as-is imports keep the original date, label and identifiers their files carry; and Discogs matches file various-artists releases as compilations. `enrichLibrary` adds the type to albums imported before, and skips measuring gain an album already has.
+
+## 0.18.3
+
+### Changed
+
+- **The total speeds fall away faster.** A drop now fades over about two seconds rather than five, so the status line reaches zero roughly ten seconds after transfers stop rather than half a minute.
+
+### Fixed
+
+- **The upload speed reported to the server and to peers leaves out the wait for the downloader to close.** It was the file's size over the whole send including that wait of up to 30 seconds, which understated our speed for any client slow to close.
+- **Each transfer's speed reads what it has moved lately.** It was measured only when a write or read went through, so a peer that stalled, or an upload waiting up to 30 seconds for its downloader to close, kept showing its last speed and an ETA counted from it. Speeds are now measured once a second from the bytes moved over the last three seconds, with uploads counted every 16 KiB, so a stall reads 0 B/s within three seconds and a slow peer reads steadily.
+
+## 0.18.2
+
+### Security
+
+- **The UPnP port mapper runs as nobody.** miniupnpc is installed by a root init container into a shared volume, so the process that parses UPnP responses from the LAN holds no root and no capabilities.
+- **The UPnP port mapper runs on a supported alpine with a narrower footprint.** It moves from alpine 3.21, which reached end of life on 2026-11-01, to alpine 3.24. The install skips package scripts, the init container states its root user explicitly, and the mapper runs on a read-only root filesystem with miniupnpc's libraries loaded for `upnpc` alone. The same alpine image runs the main `slsk` Deployment's root `state` init container, so deploying this restarts the Soulseek client, which is replaced rather than rolled (`Recreate`).
+- **The UPnP port mapper logs no text a LAN device chose, and retries sooner.** `upnpc`'s output mixes the WAN address with text any LAN device controls, newlines included, so the log no longer carries it: a failure is reported as the UPnP error number, a fixed message (no gateway, UPnP off) or `upnpc`'s exit status, and a success names the internal address only when it is a plain IPv4 address and port. `upnpc` now picks the LAN address facing the router itself. A failure retries in five minutes, backing off to half a lease when the router gives the same answer again. The mapper's package-install init container and the Soulseek client's `state` init container run with read-only root filesystems.
+
+### Changed
+
+- **The total speeds at the top of the page are smoothed.** They are measured from the bytes moved each second and averaged, following a rise within a second or two and letting a drop fade over about five seconds, so the gap between one file ending and the next starting no longer reads as nothing moving.
+
+## 0.18.1
+
+### Fixed
+
+- **Album art can be set and removed on Windows.** sift 0.13.1 fixes two bugs that stopped it there: albums were not found by their folder, since sift bounded indexed paths with `/` while Windows stores them with `\`, and every tag write failed with "Access is denied", since sift flushed its finished copy through a read-only handle.
+
+## 0.18.0
+
+### Added
+
+- **Downloads from one peer are paced to its queue limits.** Each peer is asked for at most three jobs, a hundred files and a gigabyte at once (`PEER_MAX_JOBS`, `PEER_MAX_FILES`, `PEER_MAX_MEGABYTES`), and later jobs wait here. A peer that refuses files for a full queue ("Too many files", "Too many megabytes") is asked again once what it accepted has arrived, less often each time, and is only left after six hours, as the new `peer_queue_full` cause. Before, a discography queued from one sharer failed most of its jobs on the sharer's per-user limit. `Job.held` says why a job is waiting.
+
+### Changed
+
+- **sift 0.12.1: imports deferred for a MusicBrainz outage ask it less and less often.** After giving up on a refusing MusicBrainz the shared client now rests at least 30 seconds, doubling with each give-up in a row up to ten minutes, so a batch of deferred imports no longer keeps returning to a service that is still refusing.
+
+### Fixed
+
+- **Accept a folder whose listing repeats a file or names its siblings.** A peer's listing that named the same path twice, or answered for `Iconic` with `Iconic (2021)` as well, failed the job on a database constraint. Each path now becomes one download, sibling folders that only share the name's prefix are left out, and both are logged.
+- **Scans and extras download with their album.** Downloading a folder tree from a browse made a job of every folder with files, so `Covers`, `PICTURES`, `Assets` and the like were fetched alone and failed as `no_audio`. A folder with no music now goes with the nearest album above it, as a subdirectory, and is left out when there is none; a folder or set of files with no audio is refused up front.
+- **Download errors say each reason once.** A job's error and its history now read "Too many files (×312)" rather than repeating the reason for every file, and are cut at 500 characters.
+- **Looking for another copy searches for the album, not its folder's name.** A job with no fallbacks left searched the network for its title, which for a folder downloaded from a browse is the folder's own name: "Covers", "CD" and "DVD" fetched and imported other artists' albums. The search is now built from the title a person or grab gave, the tags of what arrived, or the artist and album the folder sits under, never from a scans or disc folder's name (lookalike letters such as a Cyrillic "С" included); a copy is taken only when its folder names the same album, and with nothing to search for the job fails saying so.
+- **Jobs keep the folder they came from, and the same folder is not fetched twice at once.** Jobs from a browse or `downloadFiles` now record their folder on the peer, shown as `Job.folder` (derived from the files for older jobs). Asking for a whole folder already on its way returns that job; files picked one by one neither find nor stand for one. A fallback also passes over a copy another job has in hand or imported in the last day.
+- **sift 0.13: albums without art in the Cover Art Archive or on Discogs take the Apple Music catalogue's cover.** Before, an album matched on Discogs while MusicBrainz was unavailable could be filed with no cover, and its import log read only `cover art: none`. The log now gives each source's reason for being passed over. Various Artists compilations are never looked up by name.
+
+## 0.17.0
+
+### Changed
+
+- **Discogs stands in while MusicBrainz is unavailable.** An import whose MusicBrainz search fails after its retries searches Discogs instead: a close match is filed and a weak one goes to review with its Discogs candidates. The job is put off only when Discogs is off, unavailable or has nothing, or the files name their MusicBrainz release, and its log and event record that Discogs was used because MusicBrainz was unavailable.
+
+### Fixed
+
+- **Import as-is files a single.** One file with no album tag, as Bandcamp sells a single, is filed as its own album named by its title, its artist as album artist and as track 1, where it was refused. The card no longer suggests Import as-is until the files have been checked and pass, and a refusal becomes the card's stated blocker instead of leaving the suggestion in place.
+
+## 0.16.0
+
+### Added
+
+- **Activity on your shares.** A new Activity page shows, as it happens, who browses your shares and which folders they open, the searches your shares answer (with how many files, and whether the distributed network relayed them), and uploads starting and ending, with the week's trends below: the most searched words, what is searched for that you do not hold, your folders most wanted, and people who come back. Browses, folders and answered searches are kept for 90 days; every search is otherwise counted by its words per hour, keeping each hour's thousand most searched, so storage stays bounded. GraphQL has `shareActivity`, `shareLog` and `shareTrends`. The uploads history now follows the engine's changes instead of polling every two seconds.
+
+## 0.15.0
+
+### Added
+
+- **The web UI shows what is happening as it happens.** The live stream is driven by changes (database writes, import stages, the engine's transfer, search-budget and distributed-network signal) instead of a redraw every second, at most four redraws a second, sending only the parts and job cards that changed. An import shows its stage and how long it has been on it (checking the audio with bytes checked, searching MusicBrainz, comparing candidates, a MusicBrainz wait and its reason, writing tags, moving into the library) with its MusicBrainz requests and the service's budget; downloads and uploads show per-file bars with rate and time left, and a waiting job, a MusicBrainz wait and the next free search count down. Bars and countdowns move in the browser from the measurement each patch carries. Cards also say why a job moved to another copy and how many copies remain, the status line names the distributed parent and the searches used this hour, and the wishlist says which wish is searched next and when. GraphQL `Job` gains `stage`, `stageSince`, `stageUntil`, `stageDone`, `stageTotal`, `musicbrainzRequests`, `musicbrainzRemaining`, `musicbrainzLimit`, `bytesPerSec`, `measuredAt`, `movedBecause` and `movedFrom`; `JobFile` gains `bytesPerSec` and `place`.
+
+## 0.14.0
+
+### Security
+
+- **rmcp 3.10.0.** Fixes RUSTSEC-2026-0462, unbounded buffering of response bodies in rmcp's Streamable HTTP clients. slsk-mcp serves MCP and does not use those clients, so it was not exposed, but the audit flags any vulnerable version in the lockfile. The manifest now requires 3.10, so an older one cannot be resolved again.
+
+### Changed
+
+- **Imports put off by a MusicBrainz outage come back sooner, and purchases stop waiting on it.** A put-off import tries again after 30 seconds, a minute, two minutes, then every five, each with jitter, instead of every five minutes from the start; the job shows when. A job from `importUrl` still waiting on MusicBrainz at its third try is filed by its own tags, as `importAsIs` would, when they describe one album and carry a date; its import log and event say so. Soulseek grabs keep waiting. A waiting job can now be filed with `importAsIs` or `resolveJob` without waiting the outage out.
+- **MusicBrainz outages and shed searches stall imports for seconds, not minutes.** sift 0.11.0 stops retrying a refusing MusicBrainz after 45 seconds and then fails requests without sending them until the requested wait is over, so imports queued behind an outage are put off at once instead of each retrying for about six minutes. A search shed by MusicBrainz under load (`x-ratelimit-zone: search`, `Retry-After: 0`) is retried after a few seconds without slowing the client, and lookups by MusicBrainz id carry on while searches rest.
+
+## 0.13.6
+
+### Fixed
+
+- **Library writes outlive their requests.** `setAlbumArt`, `removeAlbumArt`, `editTracks`, `modifyAlbums`, `enrichLibrary`, `creditArtists`, `reimportAlbums`, `refile`, `binAlbums` and `binDuplicates` run in a task of their own that the request waits on, so a client that times out or drops the connection cannot stop a write part way through an album. Each write's outcome, including a panic, is logged when it ends.
+
+## 0.13.5
+
+### Added
+
+- **Downloads no longer wait on album cruft.** Files such as `.nfo`, `.sfv`, logs and scans (`OPTIONAL_EXTENSIONS`) are asked for first and dropped once the music has arrived, since sharers often list one they never send. A downloading job's files can be ticked off to skip them, and "Mark complete" (`finishDownload`) imports what has arrived; `skipJobFiles` does the same over GraphQL.
+
+### Internal
+
+- **Windows no longer gates `Checks`.** The pull-request Windows build still runs and reports, but its runners often queue for minutes, so a merge no longer waits on it.
+
 ## 0.13.4
 
 ### Changed

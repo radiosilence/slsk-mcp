@@ -4,31 +4,18 @@
 //! descriptions, so a session that never mentions music pays almost nothing
 //! for having this connected.
 
-use std::sync::Arc;
-
 use rmcp::handler::server::{router::tool::ToolRouter, wrapper::Parameters};
 use rmcp::model::{
     CallToolResult, ContentBlock, Implementation, ProtocolVersion, ServerCapabilities, ServerConfig,
 };
-use rmcp::service::RequestContext;
-use rmcp::{
-    ErrorData as McpError, RoleServer, ServerHandler, schemars, tool, tool_handler, tool_router,
-};
+use rmcp::{ErrorData as McpError, ServerHandler, schemars, tool, tool_handler, tool_router};
 
-use crate::App;
 use crate::graphql::{self, SlskSchema};
 
 type ToolResult = std::result::Result<CallToolResult, McpError>;
 
-/// Set by the gateway after it has authenticated the user. Trusted without
-/// question, which is why the port serving this is reachable from the
-/// gateway alone.
-pub const USERNAME_HEADER: &str = "x-slsk-username";
-pub const PASSWORD_HEADER: &str = "x-slsk-password";
-
 #[derive(Clone)]
 pub struct SlskMcp {
-    app: Arc<App>,
     schema: SlskSchema,
     #[allow(dead_code)] // read by the #[tool_handler] expansion
     tool_router: ToolRouter<Self>,
@@ -42,34 +29,10 @@ pub struct GraphqlRequest {
     pub variables: Option<String>,
 }
 
-/// Switch to the credentials a request carries, if it carries any.
-pub async fn apply_credentials(app: &Arc<App>, headers: &http::HeaderMap) -> Result<(), String> {
-    let get = |h: &str| {
-        headers
-            .get(h)
-            .and_then(|v| v.to_str().ok())
-            .map(str::trim)
-            .filter(|v| !v.is_empty())
-    };
-    if let (Some(u), Some(p)) = (get(USERNAME_HEADER), get(PASSWORD_HEADER)) {
-        let first = app.session.engine().is_none();
-        app.session
-            .use_account(u, p)
-            .await
-            .map_err(|e| format!("{e:#}"))?;
-        // The first sign-in queues the downloads left waiting for an engine.
-        if first && let Err(e) = app.jobs.resume().await {
-            tracing::warn!(error = %e, "could not resume jobs");
-        }
-    }
-    Ok(())
-}
-
 impl SlskMcp {
-    pub fn new(app: Arc<App>, schema: SlskSchema) -> Self {
+    pub fn new(schema: SlskSchema) -> Self {
         Self {
             schema,
-            app,
             tool_router: Self::tool_router(),
         }
     }
@@ -93,16 +56,7 @@ impl SlskMcp {
         title = "Soulseek",
         description = "Run a GraphQL query or mutation against the user's Soulseek client, which shares their music library and files what it downloads into it. Use it to find and fetch albums (`grab`), search and browse other users, follow downloads and imports, resolve albums the tagger could not match, and manage uploads and bans. Get the schema from `slsk_schema` first. Variables are a JSON string."
     )]
-    async fn slsk(
-        &self,
-        ctx: RequestContext<RoleServer>,
-        Parameters(req): Parameters<GraphqlRequest>,
-    ) -> ToolResult {
-        if let Some(parts) = ctx.extensions.get::<http::request::Parts>()
-            && let Err(e) = apply_credentials(&self.app, &parts.headers).await
-        {
-            return Ok(CallToolResult::error(vec![ContentBlock::text(e)]));
-        }
+    async fn slsk(&self, Parameters(req): Parameters<GraphqlRequest>) -> ToolResult {
         let mut request = async_graphql::Request::new(req.query);
         if let Some(vars) = req.variables.filter(|v| !v.trim().is_empty()) {
             match serde_json::from_str::<serde_json::Value>(&vars) {
@@ -154,7 +108,9 @@ impl ServerHandler for SlskMcp {
                  best lossless copy from a peer with a free slot, keeps four fallbacks, downloads, tags it against \
                  MusicBrainz and files it into the library. It returns a job; poll `job(id)` until `status` is \
                  `imported`, `review` or `failed`. Downloads take minutes to hours depending on the peer, so report \
-                 progress rather than waiting in a loop.\n\n\
+                 progress rather than waiting in a loop. When every track has arrived and the job still waits on \
+                 a file the peer holds back (one that is not music), `finishDownload(id)` imports what arrived; \
+                 `skipJobFiles(id, paths)` leaves out the files at those paths (`files { path }`).\n\n\
                  For an album the user has bought, as on Bandcamp, `importUrl(url)` fetches its download link \
                  (a zip of the album, or one audio file) and imports it the same way, ending in the same \
                  statuses with the same review actions. It has no other copy to move to, so `nextSource` does \
@@ -164,7 +120,8 @@ impl ServerHandler for SlskMcp {
                  `tagger { discogs }` is on. Pick the right one, asking the user if it is not obvious, and call \
                  `resolveJob(id, releaseId)`; a release the user links to on either site can be passed as its URL. If no candidate fits these files (wrong \
                  edition, missing discs), `nextSource(id)` drops them and downloads the next copy found. When neither MusicBrainz nor Discogs has such a release \
-                 (no candidates, and the files' tags look right), `importAsIs(id)` files it by those tags; it is \
+                 (no candidates, and the files' tags look right), `importAsIs(id)` files it by those tags (a lone file with no \
+                 album tag, as a store's single comes, is its own album named by its title); it is \
                  refused, with the reason, when they do not describe one album.\n\n\
                  Working the review queue, when the user asks you to deal with what is waiting: for each job in \
                  `review`, read `jobTracks(id)` (the files' tags) and `compareRelease(id, releaseId)` for the best \
@@ -194,7 +151,7 @@ impl ServerHandler for SlskMcp {
                  no longer wants, after a `preview: true` shown to them. `refilePlan` lists albums not where the current naming \
                  rules would put them; `refile(query)` moves them. Show the user a plan before acting on more than \
                  a handful of albums: moving files can cost the player its play counts. Every import gets \
-                 ReplayGain, genres and lyrics automatically; `enrichLibrary(query)` adds them to albums \
+                 ReplayGain, genres, its release type (album, single, EP…) and lyrics automatically; `enrichLibrary(query)` adds them to albums \
                  imported before, one artist or album at a time, since each takes seconds. Every import also \
                  credits each artist on a collaboration in its own tags; `creditArtists(query)` does that \
                  alone for albums filed before, reading no audio but asking MusicBrainz once per album with a \
@@ -210,7 +167,9 @@ impl ServerHandler for SlskMcp {
                  returns what it would do: the moves, each spare's bin destination, each file's artist \
                  credits and where they come from, every file's edited fields, the genres and lyrics enriching would add (gain is only \
                  measured when written), the release a re-import would apply, the art that would be written or removed. Preview first and show the user \
-                 before applying to more than one album.\n\n\
+                 before applying to more than one album. A write that times out still runs to the end on the \
+                 server: read `albumArt`, `libraryTracks` or `libraryAlbums` to see the result rather than \
+                 calling it again.\n\n\
                  The client is also a chat client: rooms, private messages (`conversations`, `messages`), \
                  buddies and interests. `sendMessage` and `say` reach real people, so they take two calls: \
                  PREVIEW returns a token and sends nothing; show the user the preview, and only after they agree \

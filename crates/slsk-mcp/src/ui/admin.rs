@@ -8,7 +8,7 @@ use axum::extract::{Query, State};
 use axum::response::Response;
 use axum::routing::{get, post};
 
-use super::{UiState, failed, fields, flash_ok, human, many, one, patch, signals, status_html};
+use super::{UiState, failed, fields, flash_ok, human, one, patch, signals, status_html};
 use crate::App;
 use crate::graphql::TriageCause;
 
@@ -75,7 +75,7 @@ async fn set_ban(s: &UiState, body: &[u8], banned: bool) -> Response {
         return failed(&anyhow::anyhow!("Say who."));
     };
     match crate::graphql::set_ban(&s.app, user, banned).await {
-        Ok(_) => many(vec![
+        Ok(_) => askama_datastar::events(vec![
             patch(&format!(
                 "{}\n{}",
                 bans_html(&s.app).await,
@@ -249,7 +249,7 @@ async fn interest(State(s): State<UiState>, body: Bytes) -> Response {
         _ => None,
     };
     match s.app.social.set_interest(item, liked).await {
-        Ok(()) => many(vec![
+        Ok(()) => askama_datastar::events(vec![
             patch(&format!(
                 "{}\n<div id=\"flash\"></div>",
                 settings_html(&s.app).await
@@ -322,7 +322,7 @@ pub(super) async fn triage_page(app: &App, q: &Days) -> String {
 
 async fn triage(State(s): State<UiState>, Query(q): Query<Days>) -> Response {
     let days = q.days.unwrap_or(7).clamp(1, 365);
-    many(vec![
+    askama_datastar::events(vec![
         patch(&triage_html(&s.app, Some(days)).await),
         super::place(&super::place_url("/triage", &[("days", &days.to_string())])),
     ])

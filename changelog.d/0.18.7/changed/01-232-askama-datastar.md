@@ -1,0 +1,1 @@
+- **Datastar 1.0.5, through askama_datastar.** The web UI's patches, event streams, POST guard and Datastar's script come from the shared crate rather than code of slsk-mcp's own. Datastar moves from 1.0.2 to 1.0.5, which fixes reconnecting after a tab returns to the foreground, and a quiet stream is kept open by a comment every 15 seconds rather than every 5.

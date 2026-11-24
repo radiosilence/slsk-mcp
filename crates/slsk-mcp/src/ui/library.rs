@@ -17,7 +17,7 @@ use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 
-use super::{UiState, escape, failed, fields, flash_ok, patch, sse};
+use super::{UiState, escape, failed, fields, flash_ok, patch};
 use crate::art::{AlbumArt, ArtRemoved, ArtSet, Image, Target};
 use crate::library::{
     AlbumEdit, AlbumMove, CreditWrite, LibraryAlbum, Overview, Preview, TagEdits, by_path,
@@ -504,7 +504,7 @@ async fn more(State(s): State<UiState>, body: Bytes) -> Response {
     };
     let all = super::field(&form, "all").is_some();
     let (rows, more) = RowsView::render_page(&s, &filter, rows, from, all);
-    super::many(vec![super::append("#lib-rows", &rows), patch(&more)])
+    askama_datastar::events(vec![super::append("#lib-rows", &rows), patch(&more)])
 }
 
 /// The selection's counts, cleared with the list. A redrawn list keeps its
@@ -517,6 +517,8 @@ fn unselected() -> axum::response::sse::Event {
 #[template(path = "pages/library.html")]
 struct Page {
     q: String,
+    /// The date field is in use, so it starts shown.
+    dated: bool,
     run: String,
 }
 
@@ -524,6 +526,7 @@ struct Page {
 pub(super) fn page(s: &UiState, filter: &Filter) -> String {
     Page {
         q: filter.q.clone(),
+        dated: filter.since == "date",
         run: run_html(s),
     }
     .render()
@@ -535,10 +538,10 @@ pub(super) fn page(s: &UiState, filter: &Filter) -> String {
 async fn view(State(s): State<UiState>, uri: http::Uri) -> Response {
     let filter: Filter = super::query(&uri);
     let open = open_albums(&uri);
-    sse(async_stream::stream! {
-        yield Ok(patch(r#"<div id="library"><p class="text-meta text-muted">Reading the library…</p></div>"#));
-        yield Ok(patch(&list_html(&s, &filter).await));
-        yield Ok(unselected());
+    askama_datastar::stream(async_stream::stream! {
+        yield patch(r#"<div id="library"><p class="text-meta text-muted">Reading the library…</p></div>"#);
+        yield patch(&list_html(&s, &filter).await);
+        yield unselected();
         if !open.is_empty() {
             let shown: HashSet<String> = listing(&s, &filter)
                 .await
@@ -548,8 +551,8 @@ async fn view(State(s): State<UiState>, uri: http::Uri) -> Response {
                 .map(|r| r.album.path)
                 .collect();
             for path in open.iter().filter(|p| shown.contains(*p)) {
-                yield Ok(patch(&album_html(&s, &filter, path).await));
-                yield Ok(patch(&art_html(&s, path).await));
+                yield patch(&album_html(&s, &filter, path).await);
+                yield patch(&art_html(&s, path).await);
             }
         }
     })
@@ -558,7 +561,7 @@ async fn view(State(s): State<UiState>, uri: http::Uri) -> Response {
 
 async fn find(State(s): State<UiState>, body: Bytes) -> Response {
     let filter = Filter::from_fields(&fields(&body));
-    super::many(vec![
+    askama_datastar::events(vec![
         patch(&list_html(&s, &filter).await),
         unselected(),
         patch(r#"<div id="lib-preview"></div>"#),
@@ -755,9 +758,9 @@ async fn album(
     State(s): State<UiState>,
     Query(AlbumQuery { filter, path }): Query<AlbumQuery>,
 ) -> Response {
-    sse(async_stream::stream! {
-        yield Ok(patch(&album_html(&s, &filter, &path).await));
-        yield Ok(patch(&art_html(&s, &path).await));
+    askama_datastar::stream(async_stream::stream! {
+        yield patch(&album_html(&s, &filter, &path).await);
+        yield patch(&art_html(&s, &path).await);
     })
     .into_response()
 }
@@ -959,14 +962,14 @@ async fn releases(
     Query(AlbumQuery { filter, path }): Query<AlbumQuery>,
 ) -> Response {
     let slot = slot_of(&path);
-    sse(async_stream::stream! {
-        yield Ok(patch(&format!(r#"<div id="{slot}-retag"><p class="text-meta text-muted">Asking for releases that fit these files…</p></div>"#)));
+    askama_datastar::stream(async_stream::stream! {
+        yield patch(&format!(r#"<div id="{slot}-retag"><p class="text-meta text-muted">Asking for releases that fit these files…</p></div>"#));
         let discogs = s.app.jobs.discogs();
         let view = match s.app.library.rematch(&path).await {
             Ok(r) => ReleasesView { path: &path, slot, filter: &filter, candidates: r.candidates, review: r.review, error: None, discogs },
             Err(e) => ReleasesView { path: &path, slot, filter: &filter, candidates: Vec::new(), review: None, error: Some(format!("{e:#}")), discogs },
         };
-        yield Ok(patch(&view.render().unwrap_or_default()));
+        yield patch(&view.render().unwrap_or_default());
     })
     .into_response()
 }
@@ -1276,6 +1279,7 @@ enum Body {
     Enrich {
         credits: Vec<CreditWrite>,
         genres: Vec<String>,
+        types: Vec<String>,
         lyrics: Vec<Lyric>,
     },
     Reimport {
@@ -1550,6 +1554,7 @@ async fn plan_one(
                 p.body = Body::Enrich {
                     credits: plan.credits.files.iter().map(CreditWrite::from).collect(),
                     genres: plan.genres.clone(),
+                    types: plan.release_types.clone(),
                     lyrics: plan.lyrics.iter().map(Lyric::of).collect(),
                 };
             }
@@ -1573,6 +1578,10 @@ async fn plan_one(
                 p.ticked = p.applicable && review.is_none();
                 p.note = match (&plan.refused, review, changes) {
                     (Some(why), _, _) => Some(format!("Would be refused: {}", why.replace(&format!("{root}/"), ""))),
+                    _ if plan.comparison.release.tracks == 0 => {
+                        Some("This release has no tracklist on its site, so there is nothing to tag these files from. Add its tracks there, or pick another release.".into())
+                    }
+                    _ if plan.files.is_empty() => Some("None of these files match a track of this release.".into()),
                     (None, _, 0) => Some("The files already carry this release's tags, where it files them.".into()),
                     (None, Some(why), _) => Some(format!("The tagger would not match this on its own: {why}.")),
                     (None, None, _) => None,
@@ -1759,17 +1768,17 @@ async fn previewed(s: UiState, action: Action, form: Vec<(String, String)>) -> R
     };
     let slot = slot_in(&form);
     let all = super::field(&form, "all").is_some();
-    sse(async_stream::stream! {
+    askama_datastar::stream(async_stream::stream! {
         let selected = rows.len();
         let shown = action.cap().map_or(selected, |c| selected.min(c));
         let split = super::field(&form, "split").unwrap_or_default().trim().to_string();
         let shell = PlanView { action, filter: &filter, slot: &slot, all, selected, shown, split: &split };
-        yield Ok(patch(&shell.render().unwrap_or_default()));
+        yield patch(&shell.render().unwrap_or_default());
         let known = if matches!(action, Action::Credit | Action::Enrich) {
             match s.app.library.known_artists().await {
                 Ok(k) => k.splitting_on(&split),
                 Err(e) => {
-                    yield Ok(patch(&super::flash_err(&format!("{e:#}"))));
+                    yield patch(&super::flash_err(&format!("{e:#}")));
                     return;
                 }
             }
@@ -1781,11 +1790,11 @@ async fn previewed(s: UiState, action: Action, form: Vec<(String, String)>) -> R
         // folder is refused when the batch is re-filed.
         let mut filed: HashMap<String, String> = HashMap::new();
         for (i, row) in rows.iter().take(shown).enumerate() {
-            yield Ok(patch(&format!(
+            yield patch(&format!(
                 r#"<p id="{slot}-pv-progress" class="text-meta text-muted">Working out {} of {shown}: {}</p>"#,
                 i + 1,
                 escape(&title_of(&row.album)),
-            )));
+            ));
             let mut p = plan_one(&s, action, row, &known, &ask).await;
             if let Body::Edit { into: into @ Some(_), .. } = &mut p.body {
                 let d = into.clone().unwrap_or_default();
@@ -1801,11 +1810,11 @@ async fn previewed(s: UiState, action: Action, form: Vec<(String, String)>) -> R
             }
             applicable += usize::from(p.applicable);
             let html = PlannedView { p: &p, root: &root, slot: &slot }.render().unwrap_or_default();
-            yield Ok(super::append(&format!("#{slot}-pv-albums"), &html));
+            yield super::append(&format!("#{slot}-pv-albums"), &html);
         }
-        yield Ok(patch(&format!(
+        yield patch(&format!(
             r#"<p id="{slot}-pv-progress" class="text-meta text-muted">{applicable} of {shown} would change.</p>"#
-        )));
+        ));
         let button = if applicable == 0 {
             String::new()
         } else {
@@ -1816,9 +1825,9 @@ async fn previewed(s: UiState, action: Action, form: Vec<(String, String)>) -> R
                 slug = action.slug(),
             )
         };
-        yield Ok(patch(&format!(
+        yield patch(&format!(
             r#"<div id="{slot}-pv-apply" class="mt-2.5 flex flex-wrap items-center gap-2" data-init="$_apply_{slot} = document.querySelectorAll('#{slot}-apply input[name=path]:checked').length">{button}<button type="button" class="quiet" data-on:click="document.getElementById('{slot}-preview').replaceChildren()">Cancel</button></div>"#
-        )));
+        ));
     })
     .into_response()
 }
@@ -2121,7 +2130,7 @@ pub(super) struct RunSent {
 /// The run panel's changes since `sent`: the whole panel when a run
 /// starts or ends, and while it runs, its head and the albums done since.
 pub(super) fn run_events(s: &UiState, sent: &mut RunSent) -> Vec<axum::response::sse::Event> {
-    let run = s.run.lock();
+    let run = s.run.read();
     let stamp = (
         run.id,
         run.running,
@@ -2172,7 +2181,7 @@ pub(super) fn run_events(s: &UiState, sent: &mut RunSent) -> Vec<axum::response:
 }
 
 pub(super) fn run_html(s: &UiState) -> String {
-    let run = s.run.lock();
+    let run = s.run.read();
     RunView {
         run: &run,
         root: &s.app.library.root().to_string_lossy(),
@@ -2267,22 +2276,22 @@ async fn apply(State(s): State<UiState>, Path(action): Path<String>, body: Bytes
         };
         let _ = tx.send(ended);
     });
-    sse(async_stream::stream! {
-        yield Ok(patch(&run_html(&s)));
-        yield Ok(patch(&format!(r#"<div id="{from}-preview"></div>"#)));
+    askama_datastar::stream(async_stream::stream! {
+        yield patch(&run_html(&s));
+        yield patch(&format!(r#"<div id="{from}-preview"></div>"#));
         let Ok((moved, done, failed)) = rx.await else {
             return;
         };
-        yield Ok(patch(&run_html(&s)));
+        yield patch(&run_html(&s));
         // Every album the filter admits may have changed, and most are not
         // drawn: the list is drawn again. Otherwise only the rows applied
         // to change, so what else is open or scrolled to stays.
         if all {
-            yield Ok(patch(&list_html(&s, &filter).await));
-            yield Ok(unselected());
+            yield patch(&list_html(&s, &filter).await);
+            yield unselected();
         } else {
             for e in changed_rows(&s, &filter, &ticked, &moved, &from).await {
-                yield Ok(e);
+                yield e;
             }
         }
         let msg = format!(
@@ -2291,7 +2300,7 @@ async fn apply(State(s): State<UiState>, Path(action): Path<String>, body: Bytes
             done - failed,
             if failed > 0 { format!(", {failed} failed") } else { String::new() }
         );
-        yield Ok(patch(&flash_ok(&msg)));
+        yield patch(&flash_ok(&msg));
     })
     .into_response()
 }
@@ -2325,13 +2334,21 @@ async fn changed_rows(
         match rows.remove(now) {
             Some(row) => {
                 let (html, _) = RowsView::render_page(s, filter, vec![row], 0, false);
-                events.push(super::insert(&target, "replace", &html));
+                events.push(super::insert(
+                    &target,
+                    askama_datastar::ElementPatchMode::Replace,
+                    &html,
+                ));
                 if slot_of(path) == slot {
                     events.push(patch(&album_html(s, filter, now).await));
                     events.push(patch(&art_html(s, now).await));
                 }
             }
-            None => events.push(super::insert(&target, "remove", "")),
+            None => events.push(super::insert(
+                &target,
+                askama_datastar::ElementPatchMode::Remove,
+                "",
+            )),
         }
     }
     if slot == "lib" {
@@ -2357,7 +2374,7 @@ fn edited(path: String) -> Outcome {
 
 async fn run(
     app: &crate::App,
-    state: &parking_lot::Mutex<LibraryRun>,
+    state: &crate::live::Watched<LibraryRun>,
     art: &ArtStash,
     action: Action,
     paths: &[String],

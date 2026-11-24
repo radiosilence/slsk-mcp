@@ -1,0 +1,1 @@
+- **A confirmed message is the one previewed.** PREVIEW bound its confirmation token to a 64-bit non-cryptographic hash of the arguments, which a chosen pair could collide; it is now a SHA-256 of the length-prefixed arguments, still single use and good for 15 minutes.

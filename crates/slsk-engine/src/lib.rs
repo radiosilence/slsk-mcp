@@ -13,6 +13,7 @@ mod limit;
 mod metrics;
 mod net;
 mod peers;
+mod rate;
 mod server;
 pub mod shares;
 mod uploads;
@@ -135,6 +136,25 @@ pub enum Event {
     Status(Status),
 }
 
+/// What another user did with our shares.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Activity {
+    /// Asked for our whole share list.
+    Browse { username: String },
+    /// Opened one of our folders.
+    Folder { username: String, folder: String },
+    /// A search reached us, from the server or the distributed network, and
+    /// was looked up in our shares: `results` files matched (0 for none).
+    /// Searches not looked up (our own, a banned user's, too short, or shed
+    /// under load) are not reported.
+    Search {
+        username: String,
+        query: String,
+        distributed: bool,
+        results: usize,
+    },
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Direction {
     Download,
@@ -178,6 +198,24 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Bumped whenever something changes that a person watching would see: the
+/// login status, a transfer's state, queue place or measured rate (once a
+/// second while it moves), the smoothed total speeds (once a second until
+/// they settle at zero), a search spending the budget, or the distributed
+/// network's parent or children. Shared by every engine in the process.
+static CHANGES: std::sync::LazyLock<watch::Sender<u64>> =
+    std::sync::LazyLock::new(|| watch::channel(0).0);
+
+pub(crate) fn changed() {
+    CHANGES.send_modify(|n| *n = n.wrapping_add(1));
+}
+
+/// Wakes on every change [`CHANGES`] counts, for a caller showing them as
+/// they happen without polling.
+pub fn changes() -> watch::Receiver<u64> {
+    CHANGES.subscribe()
+}
+
 type Key = (String, Bytes);
 
 pub(crate) struct Inner {
@@ -186,6 +224,9 @@ pub(crate) struct Inner {
     server_tx: RwLock<Option<mpsc::Sender<Bytes>>>,
     status: watch::Sender<Status>,
     events: broadcast::Sender<Event>,
+    /// Kept apart from `events`: the distributed network relays searches
+    /// fast enough to crowd out the messages that channel carries.
+    activity: broadcast::Sender<Arc<Activity>>,
     reconnect: Notify,
     shares: shares::Shares,
     excluded: RwLock<Vec<String>>,
@@ -205,6 +246,7 @@ pub(crate) struct Inner {
     /// Large peer messages being inflated and parsed at once.
     decoders: Arc<Semaphore>,
     pub(crate) metrics: Arc<Metrics>,
+    rates: Arc<rate::Rates>,
     up_limit: limit::Bucket,
     down_limit: limit::Bucket,
     /// When searches may go out (see [`SearchPace`]), and when each search
@@ -285,12 +327,19 @@ impl Inner {
         self.banned.read().contains(&username.to_lowercase())
     }
 
+    /// Tell subscribers what someone did with our shares. Nobody listening
+    /// is fine: the event is dropped.
+    fn activity(&self, activity: Activity) {
+        let _ = self.activity.send(Arc::new(activity));
+    }
+
     fn set_status(&self, status: Status) {
         self.metrics.logged_in.store(
             u64::from(matches!(status, Status::LoggedIn { .. })),
             Ordering::Relaxed,
         );
         self.status.send_replace(status.clone());
+        changed();
         let _ = self.events.send(Event::Status(status));
     }
 }
@@ -309,12 +358,14 @@ impl Engine {
         cfg.listen_port = listener.local_addr()?.port();
         let (status, _) = watch::channel(Status::Connecting);
         let (events, _) = broadcast::channel(4096);
+        let (activity, _) = broadcast::channel(4096);
         let metrics = Arc::new(Metrics::default());
         let inner = Arc::new(Inner {
             credentials: RwLock::new((cfg.username.clone(), cfg.password.clone())),
             server_tx: RwLock::new(None),
             status,
             events,
+            activity,
             reconnect: Notify::new(),
             shares: Arc::new(arc_swap::ArcSwap::from_pointee(shares::ShareIndex::empty())),
             excluded: RwLock::new(Vec::new()),
@@ -333,6 +384,7 @@ impl Engine {
             decoders: Arc::new(Semaphore::new(4)),
             up_limit: limit::Bucket::new(cfg.upload_limit),
             down_limit: limit::Bucket::new(cfg.download_limit),
+            rates: Arc::default(),
             metrics,
             next_search: Mutex::new((
                 SearchPace::new(tokio::time::Instant::now()),
@@ -348,6 +400,7 @@ impl Engine {
             cfg,
         });
         tokio::spawn(uploads::schedule(inner.clone()));
+        tokio::spawn(rate::sample(inner.clone()));
         let engine = Self(inner);
         let starting = engine.clone();
         tokio::spawn(async move {
@@ -370,6 +423,12 @@ impl Engine {
 
     pub fn status(&self) -> watch::Receiver<Status> {
         self.0.status.subscribe()
+    }
+
+    /// What other users do with our shares, as it happens. A subscriber that
+    /// falls behind loses the oldest; nothing waits for it.
+    pub fn activity(&self) -> broadcast::Receiver<Arc<Activity>> {
+        self.0.activity.subscribe()
     }
 
     pub fn events(&self) -> broadcast::Receiver<Event> {
@@ -550,6 +609,7 @@ impl Engine {
             recent.push_back(at);
             at
         };
+        changed();
         tokio::time::sleep_until(at).await;
         Ok(())
     }
@@ -676,11 +736,29 @@ impl Engine {
         self.0.uploads.views()
     }
 
-    /// Upload and download speeds in bytes per second, summed: what
-    /// [`Engine::uploads`] and [`Engine::downloads`] would add up to,
-    /// without building either list.
+    /// Searches counted against the last hour, the hourly budget (0 for
+    /// none), and when the oldest of them leaves the hour, freeing a search
+    /// once the budget is spent.
+    pub fn search_budget(&self) -> (usize, usize, Option<std::time::SystemTime>) {
+        let (_, recent) = &*self.0.next_search.lock();
+        let now = tokio::time::Instant::now();
+        let hour = Duration::from_secs(3600);
+        let used = recent
+            .iter()
+            .filter(|t| now.duration_since(**t) < hour)
+            .count();
+        let frees = recent
+            .iter()
+            .find(|t| now.duration_since(**t) < hour)
+            .map(|t| std::time::SystemTime::now() + (hour - now.duration_since(*t)));
+        (used, self.0.cfg.searches_per_hour, frees)
+    }
+
+    /// Total upload and download speeds in bytes per second, averaged over
+    /// the last several seconds so the gaps between files do not read as
+    /// nothing moving.
     pub fn speeds(&self) -> (u64, u64) {
-        (self.0.uploads.speed(), self.0.downloads.speed())
+        self.0.rates.get()
     }
 
     /// Uploads sending or waiting to.

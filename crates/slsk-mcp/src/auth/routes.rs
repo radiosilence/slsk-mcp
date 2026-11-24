@@ -4,7 +4,7 @@ use axum::Router;
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 
 use crate::auth::cookie::{FLOW_COOKIE, SESSION_COOKIE, clear_cookie, read_cookie, set_cookie};
 use crate::auth::oidc::{authorize_url, exchange_code, pkce};
@@ -18,11 +18,11 @@ pub const SESSION_TTL_SECS: i64 = 7 * 24 * 3600;
 /// Long enough to complete a login round-trip and no longer.
 pub const FLOW_TTL_SECS: i64 = 600;
 
-pub fn router() -> Router<AppState> {
+pub fn router(sessions: Sessions) -> Router<AppState> {
     let router = Router::new()
         .route("/auth/login", get(login))
         .route("/auth/callback", get(callback))
-        .route("/auth/logout", get(logout));
+        .merge(signout().with_state(sessions));
     #[cfg(debug_assertions)]
     let router = router.route("/auth/dev-login", get(dev_login));
     router
@@ -139,13 +139,140 @@ pub async fn callback(
     ))
 }
 
-pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
+/// Sign-out is a POST, since on a GET any page could sign a user out with an
+/// image tag. It needs only the sessions, which is what lets its tests run
+/// without the rest of the app.
+fn signout() -> Router<Sessions> {
+    Router::new().route("/auth/logout", post(logout))
+}
+
+/// Whether a state-changing request came from this site's own pages: Datastar
+/// marks its requests with a header a cross-site form cannot set, and a plain
+/// form is known by the browser's `Sec-Fetch-Site`, or else by an `Origin`
+/// naming the host it was sent to. A request carrying none of them is refused.
+fn from_this_site(headers: &HeaderMap) -> bool {
+    if askama_datastar::is_datastar(headers) {
+        return true;
+    }
+    let text = |name| headers.get(name).and_then(|v| v.to_str().ok());
+    if let Some(site) = text(header::HeaderName::from_static("sec-fetch-site")) {
+        return site == "same-origin";
+    }
+    match (text(header::ORIGIN), text(header::HOST)) {
+        (Some(origin), Some(host)) => origin
+            .split_once("://")
+            .is_some_and(|(_, authority)| authority.eq_ignore_ascii_case(host)),
+        _ => false,
+    }
+}
+
+pub async fn logout(State(sessions): State<Sessions>, headers: HeaderMap) -> Response {
+    if !from_this_site(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
     if let Some(id) = headers
         .get(header::COOKIE)
         .and_then(|v| v.to_str().ok())
         .and_then(|h| read_cookie(h, SESSION_COOKIE))
     {
-        state.sessions.delete(id).await;
+        sessions.delete(id).await;
     }
-    redirect("/", &[clear_cookie(SESSION_COOKIE)])
+    // See Other, so the browser follows the POST with a GET of the page.
+    let mut response = redirect("/", &[clear_cookie(SESSION_COOKIE)]);
+    *response.status_mut() = StatusCode::SEE_OTHER;
+    response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    /// The sign-out routes served on a loopback port, with one session
+    /// signed in, and a client that does not follow the redirect.
+    async fn serve() -> (String, Sessions, String, reqwest::Client) {
+        let sessions = Sessions::new(crate::db::Db::memory().await);
+        let id = sessions
+            .create("someone", Duration::from_secs(60))
+            .await
+            .unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let app = signout().with_state(sessions.clone());
+        tokio::spawn(async move { axum::serve(listener, app).await });
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap();
+        (base, sessions, id, client)
+    }
+
+    #[tokio::test]
+    async fn a_get_does_not_sign_out() {
+        let (base, sessions, id, client) = serve().await;
+        let response = client
+            .get(format!("{base}/auth/logout"))
+            .header(header::COOKIE, format!("{SESSION_COOKIE}={id}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+        assert!(sessions.get(&id).await.is_some());
+    }
+
+    #[tokio::test]
+    async fn a_post_from_another_site_does_not_sign_out() {
+        let (base, sessions, id, client) = serve().await;
+        for (name, value) in [
+            ("sec-fetch-site", "cross-site"),
+            ("origin", "https://evil.example"),
+        ] {
+            let response = client
+                .post(format!("{base}/auth/logout"))
+                .header(header::COOKIE, format!("{SESSION_COOKIE}={id}"))
+                .header(name, value)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN, "{name}");
+        }
+        let response = client
+            .post(format!("{base}/auth/logout"))
+            .header(header::COOKIE, format!("{SESSION_COOKIE}={id}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN, "no headers");
+        assert!(sessions.get(&id).await.is_some());
+    }
+
+    #[tokio::test]
+    async fn a_post_from_this_site_signs_out() {
+        for (name, value) in [
+            ("datastar-request", "true"),
+            ("sec-fetch-site", "same-origin"),
+        ] {
+            let (base, sessions, id, client) = serve().await;
+            let response = client
+                .post(format!("{base}/auth/logout"))
+                .header(header::COOKIE, format!("{SESSION_COOKIE}={id}"))
+                .header(name, value)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::SEE_OTHER, "{name}");
+            assert!(sessions.get(&id).await.is_none(), "{name}");
+        }
+        let (base, sessions, id, client) = serve().await;
+        let origin = base.clone();
+        let response = client
+            .post(format!("{base}/auth/logout"))
+            .header(header::COOKIE, format!("{SESSION_COOKIE}={id}"))
+            .header(header::ORIGIN, origin)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER, "origin");
+        assert!(sessions.get(&id).await.is_none(), "origin");
+    }
 }

@@ -1201,6 +1201,10 @@
     padding-right: calc(var(--spacing) * 2.5);
   }
 
+  .pb-1 {
+    padding-bottom: var(--spacing);
+  }
+
   .pb-2 {
     padding-bottom: calc(var(--spacing) * 2);
   }
@@ -1420,6 +1424,10 @@
     .hover\:opacity-100:hover {
       opacity: 1;
     }
+  }
+
+  .data-attr\:hidden[data-attr] {
+    display: none;
   }
 
   :is(.\*\:nth-2\:w-\[4\.5em\] > *):nth-child(2) {

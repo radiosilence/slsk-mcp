@@ -5,19 +5,24 @@
   </div>
   <div class="text-meta text-muted wrap-anywhere">
     {% match self.asked(j) %}{% when Some with (q) %}asked for “{{ q }}” · {% when None %}{% endmatch %}{% match j.username %}{% when Some with (u) %}from <a class="wrap-anywhere" href="{{ crate::ui::profile_href(u) }}">{{ u }}</a>{% when None %}{% match j.host %}{% when Some with (h) %}from {{ h }}{% when None %}{% endmatch %}{% endmatch %}
-    {% if j.status == "downloading" %} · {{ self.progress(j) }}{% endif %}
-    {% if j.status == "importing" %} · tagging and filing{% endif %}
+    {% if j.status == "downloading" %} · {% if self.moving(j) %}<span {{ self.measure(j.downloaded_bytes, j.total_bytes, j.bytes_per_sec, j.measured_at)|safe }} data-draw="bytes">{{ self.size(j.downloaded_bytes) }}</span> of {{ self.size(j.total_bytes) }} · {{ self.size(j.bytes_per_sec) }}/s · <span {{ self.measure(j.downloaded_bytes, j.total_bytes, j.bytes_per_sec, j.measured_at)|safe }} data-draw="eta"></span>{% else %}{{ self.progress(j) }}{% endif %}{% endif %}
+    {% if j.status == "importing" %} · {% match j.stage %}{% when Some with (st) %}{{ st }} for <span data-since="{{ self.ms(j.stage_since) }}"></span>{% match j.stage_until %}{% when Some with (u) %}, retrying in <span data-until="{{ self.at(u) }}"></span>{% when None %}{% endmatch %}{% when None %}waiting its turn to be filed{% endmatch %}{% match j.musicbrainz_requests %}{% when Some with (n) %}{% if *n > 0 %} · {{ n }} MusicBrainz request{% if *n != 1 %}s{% endif %}{% match j.musicbrainz_remaining %}{% when Some with (r) %}, budget {{ r }} of {{ j.musicbrainz_limit.unwrap_or_default() }} left{% when None %}{% endmatch %}{% endif %}{% when None %}{% endmatch %}{% endif %}
+    {% match j.retry_at %}{% when Some with (r) %} · trying again in <span data-until="{{ self.at(r) }}"></span>{% when None %}{% endmatch %}
+    {% match j.moved_because %}{% when Some with (c) %} · moved from {% match j.moved_from %}{% when Some with (p) %}{{ p }}{% when None %}a peer{% endmatch %}: {{ self.cause(c) }}{% when None %}{% endmatch %}
+    {% if !warn && j.alternates > 0 %} · {{ j.alternates }} other {% if j.alternates == 1 %}copy{% else %}copies{% endif %} to fall back on{% endif %}
     {% if let Some(href) = self.filed(j) %} · <a href="{{ href }}">in the library</a>{% endif %}
   </div>
-  {% if j.status == "downloading" %}<progress max="100" value="{{ self.pct(j) }}">{{ self.pct(j) }}%</progress>{% endif %}
+  {% if j.status == "downloading" %}<progress max="{{ j.total_bytes.max(1) }}" value="{{ j.downloaded_bytes }}" {{ self.measure(j.downloaded_bytes, j.total_bytes, j.bytes_per_sec, j.measured_at)|safe }}>{{ self.pct(j) }}%</progress>{% endif %}
+  {% if j.status == "importing" %}{% match j.stage_total %}{% when Some with (t) %}<progress max="{{ (*t).max(1) }}" value="{{ j.stage_done.unwrap_or_default() }}" title="{{ self.size(&j.stage_done.unwrap_or_default()) }} of {{ self.size(t) }} checked">{{ self.size(&j.stage_done.unwrap_or_default()) }} of {{ self.size(t) }}</progress>{% when None %}{% endmatch %}{% endif %}
   {% if (full || !warn) && !j.files.is_empty() %}{% let shown = self.is_open(j) %}
   {% if !full %}<button type="button" class="quiet mt-1.5 px-2 py-0.5 text-meta" data-on:click="{{ self.toggle(j) }}" data-text="({{ shown }} ? '▾ ' : '▸ ') + '{{ j.files.len() }} files'">{% if open %}▾{% else %}▸{% endif %} {{ j.files.len() }} files</button>{% endif %}
   {% if open %}
-  <ul class="mt-1 grid gap-1 text-meta"{% if !full %} data-show="{{ shown }}"{% endif %}>
+  <ul class="mt-1 grid gap-1 text-meta"{% if !full %} data-attr:hidden="!({{ shown }})"{% endif %}>
     {% for f in j.files %}
     <li class="flex min-w-0 flex-wrap items-baseline gap-x-2">
       <span class="min-w-0 flex-[1_1_60%] wrap-anywhere{% if f.state == "completed" %} text-muted{% endif %}">{{ f.name }}</span>
-      <span class="{% if f.error.is_some() %}text-bad{% else %}text-muted{% endif %}">{{ self.file_progress(f) }}</span>
+      <span class="{% if f.error.is_some() %}text-bad{% else %}text-muted{% endif %}">{% if f.bytes_per_sec > 0 && f.state == "transferring" %}<span {{ self.measure(f.bytes, f.size, f.bytes_per_sec, j.measured_at)|safe }} data-draw="bytes">{{ self.size(f.bytes) }}</span> of {{ self.size(f.size) }} · {{ self.size(f.bytes_per_sec) }}/s · <span {{ self.measure(f.bytes, f.size, f.bytes_per_sec, j.measured_at)|safe }} data-draw="eta"></span>{% else %}{{ self.file_progress(f) }}{% match f.place %}{% when Some with (p) %} · place {{ p }} in the queue{% when None %}{% endmatch %}{% endif %}</span>
+      {% if f.state == "transferring" %}<progress class="basis-full" max="{{ f.size.max(1) }}" value="{{ f.bytes }}" {{ self.measure(f.bytes, f.size, f.bytes_per_sec, j.measured_at)|safe }}></progress>{% endif %}
     </li>
     {% endfor %}
   </ul>
@@ -44,6 +49,12 @@
   <details class="mt-2" data-ignore-morph data-on:toggle="el.open && @get('/jobs/{{ j.id.as_str() }}/sources')">
     <summary class="text-muted">Sources and history{% if j.alternates > 0 %} · {{ j.alternates }} other {% if j.alternates == 1 %}copy{% else %}copies{% endif %}{% endif %}</summary>
     <div id="sources-{{ j.id.as_str() }}" class="mt-1.5 text-meta text-muted">Reading history…</div>
+  </details>
+  {% endif %}
+  {% if j.status == "downloading" && j.username.is_some() %}
+  <details class="mt-2" data-ignore-morph data-on:toggle="el.open && @get('/jobs/{{ j.id.as_str() }}/pick')">
+    <summary class="text-muted">Choose files</summary>
+    <div id="pick-{{ j.id.as_str() }}" class="mt-1.5 text-meta text-muted">Reading files…</div>
   </details>
   {% endif %}
   {% if j.status == "review" || j.status == "suspect" %}
@@ -76,13 +87,14 @@
   </form>
   {% endif %}
   {% match self.advice(j) %}{% when Some with (a) %}<p class="mt-2.5 mb-0 rounded-sm border-l-3 border-brand bg-brand/8 px-2.5 py-2"><strong>Suggested:</strong> {{ a.why }}</p>{% when None %}{% endmatch %}
-  {% match self.as_is_blocked(j) %}{% when Some with (b) %}{% if j.status == "review" %}<p class="my-0.5 text-meta text-muted">Import as-is won't work: {{ b }}</p>{% endif %}{% when None %}{% endmatch %}
+  {% match self.as_is_blocker_line(j) %}{% when Some with (b) %}{% if j.status == "review" %}<p class="my-0.5 text-meta text-muted">Import as-is won't work: {{ b }}</p>{% endif %}{% when None %}{% endmatch %}
   <div class="mt-2.5 flex flex-wrap items-center gap-2">
     {% match self.advice(j) %}{% when Some with (a) %}<button class="primary" data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/{{ a.action }}')">{{ a.label }}</button>{% when None %}{% endmatch %}
     {% if self.offer(j, "approve") %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/approve')">Import anyway</button>{% endif %}
     {% if self.offer(j, "next") %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/next')">Try another copy</button>{% endif %}
     {% if self.offer(j, "as-is") %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/as-is')">Import as-is</button>{% endif %}
     {% if self.offer(j, "retry") %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/retry')">Retry</button>{% endif %}
+    {% if self.offer(j, "finish") %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/finish')" title="Stop waiting for the files still to come and import what has arrived">Mark complete</button>{% endif %}
     {% if self.offer(j, "cancel") %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/cancel')">Cancel</button>{% endif %}
     <span class="flex-1 max-sm:hidden"></span>
     {% if self.offer(j, "match") %}<button class="quiet" data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/retry')">Match again</button>{% endif %}

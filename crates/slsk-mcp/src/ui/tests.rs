@@ -20,6 +20,42 @@ fn only_hashed_asset_urls_are_cached_for_good() {
     assert!(!cache(None).contains("immutable"));
 }
 
+/// Datastar's `data-show` acts only once Datastar has loaded, so an element
+/// that starts hidden flashes until then; such elements carry `hidden` and
+/// `data-attr:hidden`. Nothing else may use the name either, since Datastar
+/// would run its value as script.
+#[test]
+fn nothing_waits_for_datastar_to_be_hidden() {
+    let attr = concat!("data-", "show");
+    let mut files = vec![std::path::PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/assets/live.js"
+    ))];
+    let mut dirs = vec![std::path::PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/templates"
+    ))];
+    dirs.push(concat!(env!("CARGO_MANIFEST_DIR"), "/src").into());
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else {
+                files.push(path);
+            }
+        }
+    }
+    for path in files {
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !text.contains(&format!("{attr}=")) && !text.contains(&format!("{attr}:")),
+            "{} uses {attr}",
+            path.display()
+        );
+    }
+}
+
 #[test]
 fn a_job_page_is_named_by_its_id_alone() {
     let id = Uuid::new_v4();
@@ -532,8 +568,6 @@ mod library {
 }
 
 mod browse {
-    use std::collections::BTreeMap;
-
     use axum_extra::extract::Query;
     use base64::Engine as _;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -616,12 +650,71 @@ mod browse {
         assert_eq!(albums(&dirs, b"").len(), 3);
     }
 
+    fn scans(name: &str) -> Directory {
+        Directory {
+            name: RawStr::from(name.to_string()),
+            files: ["front.jpg", "back.jpg"]
+                .iter()
+                .map(|f| FileEntry {
+                    name: RawStr::from(f.to_string()),
+                    size: 1,
+                    extension: "jpg".into(),
+                    attrs: Vec::new(),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn folders_without_music_go_with_the_album_above_them() {
+        let root = "music\\Recoil (FLAC)\\Albums";
+        let dirs = vec![
+            dir(&format!("{root}\\2000 Liquid (CD)"), 2),
+            scans(&format!("{root}\\2000 Liquid (CD)\\Covers")),
+            scans(&format!("{root}\\2000 Liquid (CD)\\CD-Extra\\Assets")),
+            dir(&format!("{root}\\2007 subHuman (CD)\\CD1"), 3),
+            scans(&format!("{root}\\2007 subHuman (CD)\\CD1\\Scans")),
+            scans(&format!("{root}\\2007 subHuman (CD)\\PICTURES")),
+            // Nothing above it holds music.
+            scans("music\\Recoil (FLAC)\\Xtras"),
+        ];
+        let a = albums(&dirs, b"music");
+        let summary: Vec<(String, Vec<String>)> = a
+            .iter()
+            .map(|(k, v)| {
+                let mut subs: Vec<String> = v.iter().map(|f| f.2.clone()).collect();
+                subs.dedup();
+                (String::from_utf8_lossy(k).into_owned(), subs)
+            })
+            .collect();
+        assert_eq!(
+            summary,
+            vec![
+                (
+                    format!("{root}\\2000 Liquid (CD)"),
+                    vec!["".into(), "Covers".into(), "CD-Extra/Assets".into()]
+                ),
+                (
+                    format!("{root}\\2007 subHuman (CD)"),
+                    vec!["CD1".into(), "CD1/Scans".into(), "PICTURES".into()]
+                ),
+            ]
+        );
+        // A scans folder opened on its own is no album.
+        assert!(
+            albums(
+                &dirs,
+                format!("{root}\\2000 Liquid (CD)\\Covers").as_bytes()
+            )
+            .is_empty()
+        );
+    }
+
     fn place(at: &str, open: &[&str]) -> Place {
         Place {
             username: "u".into(),
             at: at.as_bytes().to_vec(),
             open: open.iter().map(|o| o.as_bytes().to_vec()).collect(),
-            more: BTreeMap::new(),
         }
     }
 
@@ -635,11 +728,9 @@ mod browse {
 
     #[test]
     fn the_address_names_expanded_folders_relative_to_the_open_one() {
-        let mut p = place("@@music\\A", &["@@music\\A\\One", "@@music\\A\\One\\CD1"]);
-        p.more.insert(b"@@music\\A".to_vec(), 2);
+        let p = place("@@music\\A", &["@@music\\A\\One", "@@music\\A\\One\\CD1"]);
         let q = query(&p.href());
         assert_eq!(q.open, vec!["One", "One/CD1"]);
-        assert_eq!(q.more, vec![".", "."]);
         assert_eq!(Place::from_query(&q).unwrap(), p);
     }
 
@@ -650,20 +741,6 @@ mod browse {
         let q = query(&p.href());
         assert!(q.open.iter().all(|o| o.starts_with(RAW)));
         assert_eq!(Place::from_query(&q).unwrap(), p);
-    }
-
-    #[test]
-    fn expanded_folders_share_one_budget_of_rows() {
-        let page = crate::ui::PAGE as usize;
-        let dirs: Vec<Directory> = (0..3)
-            .flat_map(|a| (0..page).map(move |i| dir(&format!("{a}\\{i:05}"), 1)))
-            .collect();
-        let p = place("", &["0", "1", "2"]);
-        let mut left = 3 + 2 * page;
-        let html = tree(&p, &dirs, b"", false, &mut left);
-        assert_eq!(left, 0);
-        assert_eq!(html.matches("aria-expanded=").count(), 3 + 2 * page);
-        assert!(html.contains("Collapse other folders"));
     }
 
     #[test]
@@ -690,20 +767,14 @@ mod browse {
     }
 
     #[test]
-    fn a_long_folder_is_drawn_a_page_at_a_time() {
-        let page = crate::ui::PAGE as usize;
-        let dirs: Vec<Directory> = (0..page + 3)
+    fn a_long_folder_is_drawn_whole() {
+        let dirs: Vec<Directory> = (0..2000)
             .map(|i| dir(&format!("@@m\\{i:05}"), 1))
+            .chain([dir("@@m", 3000)])
             .collect();
-        let p = place("@@m", &[]);
-        let html = tree(&p, &dirs, b"@@m", false, &mut { MOST_ROWS });
-        assert_eq!(html.matches("aria-expanded=").count(), page);
-        assert!(html.contains("Show more"));
-        let mut p = p;
-        p.more.insert(b"@@m".to_vec(), 1);
-        let html = tree(&p, &dirs, b"@@m", false, &mut { MOST_ROWS });
-        assert_eq!(html.matches("aria-expanded=").count(), page + 3);
-        assert!(!html.contains("Show more"));
+        let html = tree(&place("@@m", &[]), &dirs, b"@@m", false);
+        assert_eq!(html.matches("aria-expanded=").count(), 2000);
+        assert_eq!(html.matches("type=\"checkbox\"").count(), 3000);
     }
 
     #[test]

@@ -23,7 +23,7 @@ use crate::ui::UiState as AppState;
 /// stream cannot be redirected at all. Datastar marks its own requests, which
 /// is what makes this decidable rather than guessed.
 pub fn is_page_load(headers: &axum::http::HeaderMap) -> bool {
-    !headers.contains_key("datastar-request")
+    !askama_datastar::is_datastar(headers)
         && !headers
             .get(axum::http::header::ACCEPT)
             .and_then(|v| v.to_str().ok())

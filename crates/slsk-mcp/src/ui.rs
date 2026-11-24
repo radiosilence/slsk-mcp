@@ -8,22 +8,21 @@
 //! session layer, which wraps the router whole so a route added later is
 //! protected by construction.
 
-use std::convert::Infallible;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use askama::Template;
+use askama_datastar::{ElementPatchMode, PatchSignals, Signals};
 use axum::Router;
 use axum::body::Bytes;
 use axum::extract::{Path, Query, RawQuery, Request, State};
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::middleware::Next;
-use axum::response::sse::{Event, KeepAlive, Sse};
+use axum::response::sse::Event;
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use futures_util::Stream;
 use slsk_engine::slsk_proto::RawStr;
 use uuid::Uuid;
 
@@ -33,9 +32,12 @@ use crate::config::Config;
 use crate::folders::{Filter, Folder};
 use crate::graphql::{self, Job, Transfer};
 
+mod activity;
 mod admin;
 mod browse;
 mod chat;
+#[cfg(all(test, unix))]
+mod cost;
 mod library;
 mod profile;
 mod search;
@@ -50,7 +52,7 @@ pub struct UiState {
     pub sessions: Sessions,
     pub http: reqwest::Client,
     /// The library action running in the background, or the last one.
-    run: Arc<parking_lot::Mutex<library::LibraryRun>>,
+    run: Arc<crate::live::Watched<library::LibraryRun>>,
     /// Held by the library action running; the ones waiting take it in turn.
     slot: Arc<tokio::sync::Mutex<()>>,
     /// Album art previewed and not yet applied.
@@ -68,7 +70,10 @@ pub fn router(app: Arc<App>) -> Router {
         sessions: Sessions::new(app.db.clone()),
         app,
         http: reqwest::Client::new(),
-        run: Default::default(),
+        run: Arc::new(crate::live::Watched::new(
+            crate::live::Topic::Library,
+            Default::default(),
+        )),
         slot: Default::default(),
         art: Default::default(),
         browsed: Default::default(),
@@ -78,6 +83,7 @@ pub fn router(app: Arc<App>) -> Router {
         // Drawn whole by `pages`; nothing fetches a fragment of them.
         .route("/", get(StatusCode::NOT_FOUND))
         .route("/uploads", get(StatusCode::NOT_FOUND))
+        .route("/activity", get(StatusCode::NOT_FOUND))
         .route("/jobs/{id}", get(StatusCode::NOT_FOUND))
         .route("/stream", get(stream))
         .route("/search", get(search::results))
@@ -89,6 +95,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/jobs/{id}/release", post(resolve_pasted))
         .route("/jobs/{id}/spectrogram/{n}", get(spectrogram))
         .route("/jobs/{id}/files", get(job_files))
+        .route("/jobs/{id}/pick", get(job_pick).post(pick_files))
         .route("/jobs/{id}/sources", get(job_sources))
         .route("/jobs/{id}/compare/{release}", get(job_compare))
         .route("/uploads/cancel", post(cancel_upload))
@@ -102,7 +109,9 @@ pub fn router(app: Arc<App>) -> Router {
         .merge(profile::routes())
         .merge(chat::routes())
         .merge(admin::routes())
-        .layer(axum::middleware::from_fn(require_datastar_on_post))
+        .layer(axum::middleware::from_fn(
+            askama_datastar::require_datastar_on_post,
+        ))
         .layer(axum::middleware::from_fn_with_state(state.clone(), pages))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
@@ -110,11 +119,12 @@ pub fn router(app: Arc<App>) -> Router {
         ));
     Router::new()
         .merge(protected)
-        .merge(crate::auth::routes::router())
+        .merge(crate::auth::routes::router(state.sessions.clone()))
         .route("/healthz", get(|| async { "ok" }))
+        .route("/assets/datastar.js", get(askama_datastar::script::serve))
         .route(
-            "/assets/datastar.js",
-            get(|q: RawQuery| async { asset(DATASTAR_JS, "text/javascript; charset=utf-8", q) }),
+            "/assets/live.js",
+            get(|q: RawQuery| async { asset(LIVE_JS, "text/javascript; charset=utf-8", q) }),
         )
         .route(
             "/assets/app.css",
@@ -196,7 +206,7 @@ async fn compress_events(request: Request, next: Next) -> Response {
 }
 
 const APP_CSS: &str = include_str!("../assets/app.css");
-const DATASTAR_JS: &str = include_str!("../assets/datastar.js");
+const LIVE_JS: &str = include_str!("../assets/live.js");
 /// The typeface @radiosilence/theme sets; app.css names it by a URL relative to itself.
 const GEIST_MONO: &[u8] = include_bytes!("../assets/geist-mono.woff2");
 
@@ -217,7 +227,8 @@ fn fingerprint(bytes: &[u8]) -> String {
 
 static CSS_URL: LazyLock<String> = LazyLock::new(|| versioned("/assets/app.css", APP_CSS));
 static DATASTAR_URL: LazyLock<String> =
-    LazyLock::new(|| versioned("/assets/datastar.js", DATASTAR_JS));
+    LazyLock::new(|| askama_datastar::script::url("/assets/datastar.js"));
+static LIVE_URL: LazyLock<String> = LazyLock::new(|| versioned("/assets/live.js", LIVE_JS));
 
 /// A text asset. Requested by its hashed URL (`?v=`), it never changes, so it
 /// is kept for good; a bare URL is rechecked hourly.
@@ -269,75 +280,39 @@ async fn security_headers(request: Request, next: Next) -> Response {
     response
 }
 
-/// Every state change arrives from Datastar, which marks its requests with a
-/// header a cross-site form cannot set. Refusing POSTs without it closes
-/// cross-site request forgery independently of the cookie's SameSite.
-async fn require_datastar_on_post(request: Request, next: Next) -> Response {
-    if request.method() == http::Method::POST && !request.headers().contains_key("datastar-request")
-    {
-        return StatusCode::FORBIDDEN.into_response();
-    }
-    next.run(request).await
-}
-
-/// A bare `\r` would start an SSE data line of its own, outside the
-/// `elements` prefix, so it is dropped before the split.
+/// Markup this server built, as a patch of the elements with its ids.
 fn patch(html: &str) -> Event {
-    Event::default().event("datastar-patch-elements").data(
-        html.replace('\r', "")
-            .lines()
-            .map(|l| format!("elements {l}"))
-            .collect::<Vec<_>>()
-            .join("\n"),
-    )
+    askama_datastar::Html::trusted(html).patch().into()
 }
 
-fn sse(
-    events: impl Stream<Item = Result<Event, Infallible>> + Send + 'static,
-) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    Sse::new(events).keep_alive(KeepAlive::new().interval(Duration::from_secs(5)))
-}
-
+/// One patch as the whole answer.
 fn one(html: String) -> Response {
-    sse(futures_util::stream::once(async move { Ok(patch(&html)) })).into_response()
+    askama_datastar::events([patch(&html)])
 }
 
 /// Elements added at the end of the one `selector` names: rows streamed
 /// into a list as each is worked out.
 fn append(selector: &str, html: &str) -> Event {
-    insert(selector, "append", html)
+    insert(selector, ElementPatchMode::Append, html)
 }
 
 /// Elements added at the start of the one `selector` names.
 fn prepend(selector: &str, html: &str) -> Event {
-    insert(selector, "prepend", html)
+    insert(selector, ElementPatchMode::Prepend, html)
 }
 
-fn insert(selector: &str, mode: &str, html: &str) -> Event {
-    Event::default().event("datastar-patch-elements").data(
-        [format!("selector {selector}"), format!("mode {mode}")]
-            .into_iter()
-            .chain(
-                html.replace('\r', "")
-                    .lines()
-                    .map(|l| format!("elements {l}")),
-            )
-            .collect::<Vec<_>>()
-            .join("\n"),
-    )
-}
-
-/// Several events in one response: fragments, then signals to reset.
-fn many(events: Vec<Event>) -> Response {
-    sse(futures_util::stream::iter(events.into_iter().map(Ok))).into_response()
+fn insert(selector: &str, mode: ElementPatchMode, html: &str) -> Event {
+    askama_datastar::Html::trusted(html)
+        .patch()
+        .selector(selector)
+        .mode(mode)
+        .into()
 }
 
 /// Set signals from the server, as JSON: how a form is cleared once what it
 /// sent has been accepted.
 fn signals(json: &str) -> Event {
-    Event::default()
-        .event("datastar-patch-signals")
-        .data(format!("signals {json}"))
+    PatchSignals::new(json).into()
 }
 
 /// A confirmation that fades by itself; tapping it dismisses it sooner.
@@ -418,6 +393,7 @@ const PAGES: &[(&str, &str, &str)] = &[
     ("search", "/search", "Search"),
     ("albums", "/", "Downloads"),
     ("uploads", "/uploads", "Uploads"),
+    ("activity", "/activity", "Activity"),
     ("wishlist", "/wishlist", "Wishlist"),
     ("library", "/library", "Library"),
     ("browse", "/browse", "Browse"),
@@ -444,6 +420,9 @@ struct Page {
     /// The page's starting signals, from the address.
     signals: String,
     body: String,
+    /// The server's clock as it drew the page (ms since the epoch), for
+    /// `live.js` to correct a client clock that differs.
+    now: i64,
 }
 
 struct NavItem {
@@ -471,6 +450,9 @@ impl Page {
     fn datastar(&self) -> &str {
         &DATASTAR_URL
     }
+    fn live(&self) -> &str {
+        &LIVE_URL
+    }
     fn title(&self) -> &str {
         self.heading.as_deref().unwrap_or_else(|| {
             PAGES
@@ -492,7 +474,7 @@ struct AlbumsPage {
 /// it, and goes on to its own handler.
 async fn pages(State(s): State<UiState>, request: Request, next: Next) -> Response {
     if request.method() == http::Method::GET
-        && !request.headers().contains_key("datastar-request")
+        && !askama_datastar::is_datastar(request.headers())
         && let Some(tab) = PAGES
             .iter()
             .find(|p| request.uri().path() == p.1)
@@ -648,6 +630,7 @@ async fn render_page(
         "search" => search::page(&s.app, search_tab.as_ref(), &query(uri)).await,
         "uploads" => uploads_html(&s.app, PAGE).await,
         "wishlist" => wishlist::page(&s.app).await,
+        "activity" => activity::page(&s.app).await,
         "library" => library::page(s, &filter),
         "browse" => browse::page(s, &query::<browse::BrowseQuery>(uri).username),
         "chat" => chat::page(&s.app, &query(uri)).await,
@@ -665,6 +648,7 @@ async fn render_page(
         heading,
         signals,
         body,
+        now: chrono::Utc::now().timestamp_millis(),
     };
     Ok((status, Html(page.render().map_err(anyhow::Error::from)?)))
 }
@@ -679,6 +663,13 @@ struct StatusView {
     up: String,
     down: String,
     children: usize,
+    /// The distributed network's parent, which passes searches down to us.
+    parent: Option<String>,
+    /// Searches this hour, and the hourly budget (0 for none).
+    searches: (usize, usize),
+    /// Once the budget is spent, when the next search is free (ms since the
+    /// epoch).
+    search_free: Option<i64>,
 }
 
 async fn status_html(app: &App) -> String {
@@ -691,6 +682,9 @@ async fn status_html(app: &App) -> String {
             up: String::new(),
             down: String::new(),
             children: 0,
+            parent: None,
+            searches: (0, 0),
+            search_free: None,
         },
         Some(e) => {
             use slsk_engine::Status as S;
@@ -705,6 +699,8 @@ async fn status_html(app: &App) -> String {
                 S::Disconnected { error } => ("disconnected", Some(error.clone())),
             };
             let (up, down) = e.speeds();
+            let (used, budget, frees) = e.search_budget();
+            let (parent, _, _, children) = e.distributed();
             StatusView {
                 state,
                 username: Some(e.username()),
@@ -712,7 +708,13 @@ async fn status_html(app: &App) -> String {
                 files: e.share_counts().1,
                 up: human(up) + "/s",
                 down: human(down) + "/s",
-                children: e.distributed().3,
+                children,
+                parent,
+                searches: (used, budget),
+                search_free: frees
+                    .filter(|_| budget > 0 && used >= budget)
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_millis() as i64),
             }
         }
     };
@@ -785,14 +787,14 @@ struct Advice {
     why: String,
 }
 
-/// The jobs in hand, redrawn every second while the list is open.
+/// The jobs in hand, redrawn as they change while the list is open.
 #[derive(Template)]
 #[template(path = "jobs_live.html")]
 struct LiveJobs {
-    /// Waiting on a decision: review, suspect, failed.
-    attention: Vec<CardView>,
+    /// Waiting on a decision: review, suspect, failed. Each card drawn.
+    attention: Vec<String>,
     /// Downloading, importing, or waiting on a metadata service.
-    underway: Vec<CardView>,
+    underway: Vec<String>,
     /// Nothing in hand and nothing settled either.
     empty: bool,
 }
@@ -948,6 +950,12 @@ impl CardView {
         j.as_is_blocker.as_deref().filter(|b| !b.is_empty())
     }
 
+    /// The blocker, unless the job's error already says the same.
+    fn as_is_blocker_line<'a>(&self, j: &'a Job) -> Option<&'a str> {
+        self.as_is_blocked(j)
+            .filter(|b| j.error.as_deref() != Some(*b))
+    }
+
     /// The one action most likely right, and why: the judgement a person
     /// would otherwise make from the evidence on the card.
     fn advice(&self, j: &Job) -> Option<Advice> {
@@ -973,7 +981,9 @@ impl CardView {
                         ),
                     });
                 }
-                if best.is_none() && self.as_is_blocked(j).is_none() {
+                // Only once checked and found clean: an unchecked job may be
+                // refused, and a suggestion has to be one that works.
+                if best.is_none() && j.as_is_blocker.as_deref() == Some("") {
                     return Some(Advice {
                         action: "as-is".into(),
                         label: "Import as-is",
@@ -1043,16 +1053,54 @@ impl CardView {
 
     /// Whether to show `action` among the other choices: it applies, and
     /// is not already the suggestion.
+    /// Whether bytes are arriving, so the line shows the rate and time left.
+    fn moving(&self, j: &Job) -> bool {
+        j.bytes_per_sec > 0 && j.downloaded_bytes > 0
+    }
+
+    /// A measurement for `live.js` to draw from until the next one.
+    fn measure(
+        &self,
+        bytes: &u64,
+        total: &u64,
+        rate: &u64,
+        at: &chrono::DateTime<chrono::Utc>,
+    ) -> String {
+        // Stamped only while it moves: an idle card then reads the same
+        // from one redraw to the next, and is not sent again.
+        let at = if *rate > 0 { at.timestamp_millis() } else { 0 };
+        format!(r#"data-bytes="{bytes}" data-total="{total}" data-rate="{rate}" data-at="{at}""#)
+    }
+
+    fn at(&self, at: &chrono::DateTime<chrono::Utc>) -> i64 {
+        at.timestamp_millis()
+    }
+
+    fn ms(&self, at: &Option<chrono::DateTime<chrono::Utc>>) -> i64 {
+        at.map_or(0, |t| t.timestamp_millis())
+    }
+
+    fn size(&self, b: &u64) -> String {
+        human(*b)
+    }
+
+    fn cause(&self, c: &str) -> String {
+        admin::cause_label(c).to_lowercase()
+    }
+
     fn offer(&self, j: &Job, action: &str) -> bool {
         let applies = match action {
             "approve" => j.status == "suspect",
             "next" => {
                 matches!(j.status.as_str(), "review" | "suspect" | "failed") && j.alternates > 0
             }
-            "as-is" => j.status == "review" && self.as_is_blocked(j).is_none(),
+            "as-is" => {
+                matches!(j.status.as_str(), "review" | "waiting") && self.as_is_blocked(j).is_none()
+            }
             "retry" => matches!(j.status.as_str(), "failed" | "cancelled"),
             "match" => j.status == "review",
             "cancel" => matches!(j.status.as_str(), "downloading" | "waiting"),
+            "finish" => j.finishable && j.username.is_some(),
             _ => false,
         };
         applies && self.advice(j).is_none_or(|a| a.action != action)
@@ -1062,6 +1110,9 @@ impl CardView {
     /// underneath is the machine's.
     fn ask(&self, j: &Job) -> Option<&'static str> {
         match j.status.as_str() {
+            "review" if j.candidates.is_empty() && self.as_is_blocked(j).is_some() => Some(
+                "MusicBrainz has nothing that fits these files, and their tags are not enough to file them as they are. Correct the tags or try another copy.",
+            ),
             "review" if j.candidates.is_empty() => Some(
                 "MusicBrainz has nothing that fits these files. Import them as they are tagged, or try another copy.",
             ),
@@ -1111,6 +1162,20 @@ async fn settled_jobs(app: &App, shown: i64) -> SettledJobs {
 /// `files` signal names. `settled` is whether any job is done with, for
 /// the line an empty list shows.
 async fn live_jobs_html(app: &App, shown: &Shown, settled: bool) -> String {
+    live_jobs(app, shown, settled).await.html
+}
+
+/// The jobs in hand, drawn whole and card by card, so a stream can send
+/// only the cards that changed while none comes, goes or moves section.
+struct LiveDrawn {
+    html: String,
+    /// The sections and the order of the cards in them: when this is as
+    /// last sent, the cards can be patched one by one.
+    shape: String,
+    cards: Vec<(String, String)>,
+}
+
+async fn live_jobs(app: &App, shown: &Shown, settled: bool) -> LiveDrawn {
     let limit = shown.jobs.clamp(1, MOST);
     let active = crate::db::active_jobs(&app.db, limit)
         .await
@@ -1122,21 +1187,33 @@ async fn live_jobs_html(app: &App, shown: &Shown, settled: bool) -> String {
             tracing::warn!(error = ?e, "could not show jobs");
             Vec::new()
         });
+    let empty = jobs.is_empty() && !settled;
     let mut view = LiveJobs {
         attention: Vec::new(),
         underway: Vec::new(),
-        empty: jobs.is_empty() && !settled,
+        empty,
     };
+    let mut shape = format!("{empty}|");
+    let mut cards = Vec::with_capacity(jobs.len());
     for j in jobs {
-        let open = shown.files.split(',').any(|f| f == j.id.as_str());
+        let id = j.id.to_string();
+        let open = shown.files.split(',').any(|f| f == id);
         let card = card(app, j, false, open);
-        if card.warn {
-            view.attention.push(card);
+        let warn = card.warn;
+        let html = card.render().unwrap_or_default();
+        shape.push_str(&format!("{}{id},", if warn { "!" } else { "" }));
+        if warn {
+            view.attention.push(html.clone());
         } else {
-            view.underway.push(card);
+            view.underway.push(html.clone());
         }
+        cards.push((id, html));
     }
-    view.render().unwrap_or_default()
+    LiveDrawn {
+        html: view.render().unwrap_or_default(),
+        shape,
+        cards,
+    }
 }
 
 /// The whole job list, as the page first draws it.
@@ -1203,7 +1280,9 @@ impl SourcesView {
                 folder,
                 folder_raw,
             } => SourceLine::peer(username, Some((folder, folder_raw)), None),
-            Source::Files { username } => SourceLine::peer(username, None, None),
+            Source::Files {
+                username, folder, ..
+            } => SourceLine::peer(username, folder.as_deref().map(|f| (f, f.as_bytes())), None),
             Source::Url { url } => SourceLine {
                 from: crate::jobs::host(url),
                 profile: None,
@@ -1330,6 +1409,9 @@ async fn job_sources(State(s): State<UiState>, Path(id): Path<Uuid>) -> Response
 #[template(path = "uploads_peers.html")]
 struct UploadPeers {
     peers: Vec<Peer>,
+    /// When the transfers were read, for `live.js` to draw from (ms since
+    /// the epoch).
+    at: i64,
     sending: usize,
     queued: usize,
     sent: usize,
@@ -1478,6 +1560,7 @@ fn upload_peers_html(app: &App) -> String {
     }
     UploadPeers {
         peers,
+        at: chrono::Utc::now().timestamp_millis(),
         sending,
         queued,
         sent,
@@ -1516,13 +1599,12 @@ async fn upload_history_html(app: &App, shown: i64) -> String {
     .unwrap_or_default()
 }
 
-/// The stream's request: the page it serves, as `PAGES` names it, and the
-/// page's signals as Datastar sends them.
+/// The stream's request: the page it serves, as `PAGES` names it. The page's
+/// signals come with it, read as [`Shown`].
 #[derive(serde::Deserialize, Default)]
 #[serde(default)]
 struct StreamQuery {
     page: String,
-    datastar: String,
 }
 
 /// How many rows of the long lists the page shows, from the signals
@@ -1552,91 +1634,207 @@ impl Default for Shown {
     }
 }
 
-/// Re-render the live parts of the page `page` names once a second, sending
-/// each only when it changed: the status line and the nav's badges on every
-/// page, and the jobs, uploads or library run on their own. The page
-/// reopens the stream when the rows it shows change.
+/// Least time between two redraws of a page. Changes coming faster are
+/// gathered into the next one; bars and countdowns move in the browser in
+/// between, from the measurement and time each patch carries.
+const THROTTLE: Duration = Duration::from_millis(250);
+/// Least time between two sends of one job card for its progress alone.
+const CARD_EVERY: Duration = Duration::from_secs(1);
+/// How long a stream lives before the page opens another.
+const LIFETIME: Duration = Duration::from_secs(60);
+
+/// Send the live parts of the page `page` names as they change: the status
+/// line and the nav's badges on every page, and the jobs, uploads, search
+/// tabs or library run on their own. Nothing is polled. The stream waits on
+/// what changes them (a database write, an import's stage, a transfer's
+/// state or measured rate, the connection) and redraws only the parts those
+/// touch, at most every [`THROTTLE`], sending each only when it differs from
+/// what was sent. On the jobs list a card that changed is sent alone, and
+/// the whole list only when a job comes, goes or moves section. Times shown
+/// as "3 min ago" are redrawn each minute.
 ///
-/// The long lists (jobs done with, upload history) are separate parts,
-/// read narrowly or not at all until something in them could have
-/// changed, so a page showing hundreds of rows does not redraw them every
-/// second while one download moves.
+/// The long lists (jobs done with, upload history) are separate parts, read
+/// only when something in them could have changed, so a page showing
+/// hundreds of rows does not redraw them while one download moves.
 ///
-/// The stream ends itself after a while and the page reopens it on an
+/// The stream ends itself after [`LIFETIME`] and the page reopens it on an
 /// interval: a stream can die without either end noticing (a suspended
 /// phone, a replaced pod), and reopening on a timer is what bounds how long
 /// a page can sit showing stale state.
 async fn stream(
     State(s): State<UiState>,
-    Query(StreamQuery { page, datastar }): Query<StreamQuery>,
+    Query(StreamQuery { page }): Query<StreamQuery>,
+    Signals(shown): Signals<Shown>,
 ) -> impl IntoResponse {
+    use crate::live::Topic;
     let app = s.app.clone();
-    let shown: Shown = serde_json::from_str(&datastar).unwrap_or_default();
     let events = async_stream::stream! {
-        // The library run is sent when it moves, and while it runs only
-        // its head and the albums done since: it lists every album, which
-        // in a large run is long.
+        let mut changes = crate::live::subscribe();
+        let mut transfers = slsk_engine::changes();
+        let mut status = app.session.engine().map(|e| e.status());
+        let ends = tokio::time::Instant::now() + LIFETIME;
         let mut run_sent = library::RunSent::default();
         let mut sent: [String; 5] = Default::default();
         let mut settled_sent: Option<SettledJobs> = None;
-        // The newest upload and the minute the history was drawn at: its
-        // times read "3 min ago", so it is drawn again each minute too.
-        let mut history_sent: Option<(Option<String>, i64)> = None;
-        for _ in 0..20 {
-            // Jobs done with: read narrowly, drawn only when they differ.
-            let mut long = String::new();
-            let mut any_settled = false;
-            if page == "albums" {
-                let settled = settled_jobs(&app, shown.jobs).await;
-                any_settled = !settled.settled.is_empty();
-                if settled_sent.as_ref() != Some(&settled) {
-                    long = settled.render().unwrap_or_default();
-                    settled_sent = Some(settled);
-                }
+        let mut history_sent: Option<Option<String>> = None;
+        // The jobs list as last sent: its shape, and each card.
+        let mut shape_sent = String::new();
+        // Each card as last sent, and when.
+        let mut cards_sent: std::collections::HashMap<String, (String, tokio::time::Instant)> =
+            Default::default();
+        // A card held back by `CARD_EVERY`, due to be looked at again.
+        let mut recheck: Option<tokio::time::Instant> = None;
+        let mut seen = *changes.borrow_and_update();
+        // Everything is drawn the first time.
+        let (mut topics, mut moved, mut connection, mut minute) =
+            ([true; crate::live::TOPICS], true, true, true);
+        loop {
+            let jobs = topics[Topic::Jobs as usize];
+            let mut parts: [Option<String>; 5] = Default::default();
+            if connection || moved || minute {
+                parts[0] = Some(status_html(&app).await);
             }
-            if page == "uploads" {
-                let newest = crate::db::newest_upload(&app.db).await.ok().flatten();
-                let mark = (newest, chrono::Utc::now().timestamp() / 60);
-                if history_sent.as_ref() != Some(&mark) {
-                    long = upload_history_html(&app, shown.history).await;
-                    history_sent = Some(mark);
-                }
+            if moved || minute {
+                parts[3] = Some(up_count_html(&app));
             }
-            let parts = [
-                status_html(&app).await,
-                match page.as_str() {
-                    "albums" => live_jobs_html(&app, &shown, any_settled).await,
-                    "job" => match Uuid::parse_str(&shown.job) {
-                        // Empty, so nothing is sent; the next tick tries again.
+            if topics[Topic::Social as usize] || minute {
+                parts[4] = Some(chat::count_html(&app).await);
+            }
+            match page.as_str() {
+                "albums" => {
+                    let mut any_settled = settled_sent.as_ref().is_some_and(|s| !s.settled.is_empty());
+                    if jobs || minute {
+                        let settled = settled_jobs(&app, shown.jobs).await;
+                        any_settled = !settled.settled.is_empty();
+                        if settled_sent.as_ref() != Some(&settled) {
+                            parts[2] = Some(settled.render().unwrap_or_default());
+                            settled_sent = Some(settled);
+                        }
+                    }
+                    if jobs || moved || minute {
+                        let drawn = live_jobs(&app, &shown, any_settled).await;
+                        let now = tokio::time::Instant::now();
+                        recheck = None;
+                        if drawn.shape != shape_sent {
+                            parts[1] = Some(drawn.html);
+                            shape_sent = drawn.shape;
+                            cards_sent = drawn.cards.into_iter().map(|(id, h)| (id, (h, now))).collect();
+                        } else {
+                            for (id, html) in drawn.cards {
+                                let last = cards_sent.get(&id);
+                                if last.is_some_and(|(h, _)| *h == html) {
+                                    continue;
+                                }
+                                // Progress alone is sent once a second per
+                                // card; the browser draws it in between. A
+                                // change in the job itself goes at once.
+                                if !jobs
+                                    && let Some((_, at)) = last
+                                    && now < *at + CARD_EVERY
+                                {
+                                    let due = *at + CARD_EVERY;
+                                    recheck = Some(recheck.map_or(due, |r| r.min(due)));
+                                    continue;
+                                }
+                                yield patch(&html);
+                                cards_sent.insert(id, (html, now));
+                            }
+                        }
+                    }
+                }
+                "job" if jobs || moved || minute => {
+                    parts[1] = Some(match Uuid::parse_str(&shown.job) {
                         Ok(id) => job_page_html(&app, id).await.unwrap_or_else(|e| {
                             tracing::warn!(%id, error = %e, "could not show job");
                             String::new()
                         }),
                         Err(_) => String::new(),
-                    },
-                    "uploads" => upload_peers_html(&app),
-                    "search" => search::tabs_html(&app, Uuid::parse_str(&shown.tab).ok()).await,
-                    _ => String::new(),
-                },
-                long,
-                up_count_html(&app),
-                chat::count_html(&app).await,
-            ];
+                    });
+                }
+                "uploads" => {
+                    if moved || minute {
+                        parts[1] = Some(upload_peers_html(&app));
+                    }
+                    if topics[Topic::Uploads as usize] || minute {
+                        let newest = crate::db::newest_upload(&app.db).await.ok().flatten();
+                        if minute || history_sent.as_ref() != Some(&newest) {
+                            parts[2] = Some(upload_history_html(&app, shown.history).await);
+                            history_sent = Some(newest);
+                        }
+                    }
+                }
+                "wishlist" if topics[Topic::Social as usize] || jobs || minute => {
+                    parts[1] = Some(wishlist::html(&app).await);
+                }
+                "activity" => {
+                    if topics[Topic::Activity as usize] || minute {
+                        parts[1] = Some(activity::feed_html(&app));
+                    }
+                    if minute {
+                        parts[2] = Some(activity::trends_html(&app).await);
+                    }
+                }
+                "search" if topics[Topic::Search as usize] || minute => {
+                    parts[1] = Some(search::tabs_html(&app, Uuid::parse_str(&shown.tab).ok()).await);
+                }
+                "library" if topics[Topic::Library as usize] => {
+                    for e in library::run_events(&s, &mut run_sent) {
+                        yield e;
+                    }
+                }
+                _ => {}
+            }
             for (html, last) in parts.into_iter().zip(&mut sent) {
-                if !html.is_empty() && html != *last {
-                    yield Ok(patch(&html));
+                if let Some(html) = html
+                    && !html.is_empty()
+                    && html != *last
+                {
+                    yield patch(&html);
                     *last = html;
                 }
             }
-            if page == "library" {
-                for e in library::run_events(&s, &mut run_sent) {
-                    yield Ok(e);
-                }
+            tokio::time::sleep(THROTTLE).await;
+            let next_minute = tokio::time::Instant::now()
+                + Duration::from_secs(60 - (chrono::Utc::now().timestamp() % 60) as u64);
+            (moved, connection, minute) = (false, false, false);
+            tokio::select! {
+                r = changes.changed() => if r.is_err() { break },
+                r = transfers.changed() => match r {
+                    Ok(()) => moved = true,
+                    Err(_) => break,
+                },
+                Some(Ok(())) = async {
+                    match status.as_mut() {
+                        Some(rx) => Some(rx.changed().await),
+                        None => std::future::pending().await,
+                    }
+                } => connection = true,
+                () = tokio::time::sleep_until(next_minute) => minute = true,
+                () = tokio::time::sleep_until(ends) => break,
+                () = async {
+                    match recheck {
+                        Some(at) => tokio::time::sleep_until(at).await,
+                        None => std::future::pending().await,
+                    }
+                } => moved = true,
             }
-            tokio::time::sleep(Duration::from_secs(1)).await;
+            // Whatever else came in meanwhile is drawn in the same pass.
+            let now = *changes.borrow_and_update();
+            topics = std::array::from_fn(|i| now[i] != seen[i]);
+            seen = now;
+            if transfers.has_changed().unwrap_or(false) {
+                transfers.mark_unchanged();
+                moved = true;
+            }
+            if let Some(rx) = status.as_mut()
+                && rx.has_changed().unwrap_or(false)
+            {
+                rx.mark_unchanged();
+                connection = true;
+            }
         }
     };
-    sse(events)
+    askama_datastar::stream(events)
 }
 
 #[derive(serde::Deserialize)]
@@ -1762,7 +1960,7 @@ async fn download(State(s): State<UiState>, body: Bytes) -> Response {
 async fn job_action(
     State(s): State<UiState>,
     Path((id, action)): Path<(Uuid, String)>,
-    body: Bytes,
+    Signals(shown): Signals<Shown>,
 ) -> Response {
     let jobs = &s.app.jobs;
     let result = match action.as_str() {
@@ -1775,6 +1973,7 @@ async fn job_action(
         // shows it importing, then filed, or back in review with the reason
         // it was refused.
         "as-is" => jobs.import_as_is_soon(id, sift::Edits::default()).await,
+        "finish" => jobs.finish(id).await,
         _ => return StatusCode::NOT_FOUND.into_response(),
     };
     match result {
@@ -1782,7 +1981,7 @@ async fn job_action(
         Ok(()) => {
             done(
                 &s.app,
-                &shown_of(&body),
+                &shown,
                 matches!(action.as_str(), "retry" | "cancel" | "remove"),
             )
             .await
@@ -1797,6 +1996,11 @@ async fn job_action(
 /// jobs in hand, and with `settled`, the jobs done with as well, since the
 /// change may have moved one into or out of them.
 async fn done(app: &App, shown: &Shown, settled: bool) -> Response {
+    done_with(app, shown, settled, String::new()).await
+}
+
+/// [`done`], with `extra` elements patched as well.
+async fn done_with(app: &App, shown: &Shown, settled: bool, extra: String) -> Response {
     let html = match Uuid::parse_str(&shown.job) {
         Ok(id) => match job_page_html(app, id).await {
             Ok(html) => html,
@@ -1812,12 +2016,7 @@ async fn done(app: &App, shown: &Shown, settled: bool) -> Response {
             html
         }
     };
-    one(format!("{html}\n<div id=\"flash\"></div>"))
-}
-
-/// What the page shows, from the signals a JSON request carries.
-fn shown_of(body: &[u8]) -> Shown {
-    serde_json::from_slice(body).unwrap_or_default()
+    one(format!("{html}\n{extra}\n<div id=\"flash\"></div>"))
 }
 
 fn failed(e: &anyhow::Error) -> Response {
@@ -1827,13 +2026,13 @@ fn failed(e: &anyhow::Error) -> Response {
 async fn resolve(
     State(s): State<UiState>,
     Path((id, release)): Path<(Uuid, String)>,
-    body: Bytes,
+    Signals(shown): Signals<Shown>,
 ) -> Response {
     let Some(release) = crate::library::release_id(&release) else {
         return StatusCode::BAD_REQUEST.into_response();
     };
     match s.app.jobs.import_soon(id, false, Some(release)).await {
-        Ok(()) => done(&s.app, &shown_of(&body), false).await,
+        Ok(()) => done(&s.app, &shown, false).await,
         Err(e) => failed(&e),
     }
 }
@@ -1974,7 +2173,74 @@ async fn job_files(State(s): State<UiState>, Path(id): Path<Uuid>) -> Response {
     }
     .render()
     .unwrap_or_default();
-    many(vec![insert(&format!("#files-{id}"), "replace", &html)])
+    askama_datastar::events([insert(
+        &format!("#files-{id}"),
+        ElementPatchMode::Replace,
+        &html,
+    )])
+}
+
+/// The files of a downloading job, each ticked to fetch or not.
+#[derive(Template)]
+#[template(path = "job_pick.html")]
+struct JobPick {
+    id: Uuid,
+    error: Option<String>,
+    files: Vec<graphql::JobFile>,
+}
+
+impl JobPick {
+    fn size(&self, n: &u64) -> String {
+        human(*n)
+    }
+}
+
+async fn job_pick_html(app: &App, id: Uuid, error: Option<String>) -> String {
+    let files = match crate::db::job(&app.db, id).await {
+        Ok(Some(job)) => graphql::job_view(app, job, true)
+            .await
+            .map(|j| j.files)
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    };
+    JobPick { id, error, files }.render().unwrap_or_default()
+}
+
+async fn job_pick(State(s): State<UiState>, Path(id): Path<Uuid>) -> Response {
+    one(job_pick_html(&s.app, id, None).await)
+}
+
+/// The ticked files are fetched and the rest skipped.
+async fn pick_files(State(s): State<UiState>, Path(id): Path<Uuid>, body: Bytes) -> Response {
+    let fields = fields(&body);
+    // Only the files the form showed: a source changed since it was drawn
+    // brings files nobody has chosen about.
+    let named = |name: &str| -> std::collections::HashSet<String> {
+        fields
+            .iter()
+            .filter(|(k, _)| k == name)
+            .map(|(_, v)| v.clone())
+            .collect()
+    };
+    let want = named("want");
+    let skip = named("shown").difference(&want).cloned().collect();
+    let result = s.app.jobs.skip_files(id, &skip, &want).await;
+    let error = result.as_ref().err().map(|e| format!("{e:#}"));
+    let shown = Shown {
+        jobs: field(&fields, "jobs")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(PAGE),
+        job: field(&fields, "job").unwrap_or_default().to_string(),
+        files: field(&fields, "files").unwrap_or_default().to_string(),
+        ..Shown::default()
+    };
+    done_with(
+        &s.app,
+        &shown,
+        false,
+        job_pick_html(&s.app, id, error).await,
+    )
+    .await
 }
 
 /// A job's files against one release, track by track, as beets shows a
@@ -2021,7 +2287,11 @@ async fn job_compare(
     }
     .render()
     .unwrap_or_default();
-    many(vec![insert(&format!("#cmp-{id}"), "replace", &html)])
+    askama_datastar::events([insert(
+        &format!("#cmp-{id}"),
+        ElementPatchMode::Replace,
+        &html,
+    )])
 }
 
 #[derive(serde::Deserialize)]

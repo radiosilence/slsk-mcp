@@ -177,6 +177,9 @@ pub struct EnrichedAlbum {
     pub path: String,
     pub gain_db: Option<f64>,
     pub genres: Vec<String>,
+    /// Release types given to an album that had none (`album`, `single`,
+    /// `ep`…, primary first).
+    pub release_types: Vec<String>,
     /// Tracks given lyrics.
     pub lyrics: usize,
     /// With `preview`, the files that would be given lyrics.
@@ -201,6 +204,7 @@ impl EnrichedAlbum {
             path,
             gain_db: None,
             genres: p.genres.clone(),
+            release_types: p.release_types.clone(),
             lyrics: p.lyrics.len(),
             lyric_files: p.lyrics.iter().map(|l| file_name(&l.path)).collect(),
             artists,
@@ -566,6 +570,43 @@ impl Library {
         Ok(index)
     }
 
+    /// Run `write` in a task of its own and wait for it. A caller that stops
+    /// waiting (a client that timed out, a dropped connection) cannot leave
+    /// it part done: it carries on to completion or to its own error, and
+    /// its outcome is logged either way, panics included.
+    pub async fn detached<T, F, Fut>(
+        self: &Arc<Self>,
+        what: &'static str,
+        write: F,
+    ) -> anyhow::Result<T>
+    where
+        F: FnOnce(Arc<Self>) -> Fut,
+        Fut: Future<Output = anyhow::Result<T>> + Send + 'static,
+        T: Send + 'static,
+    {
+        let write = write(self.clone());
+        let task = tokio::spawn(async move {
+            let started = std::time::Instant::now();
+            let outcome = write.await;
+            match &outcome {
+                Ok(_) => {
+                    tracing::info!(write = what, took = ?started.elapsed(), "library write finished")
+                }
+                Err(e) => tracing::warn!(
+                    write = what,
+                    took = ?started.elapsed(),
+                    error = format!("{e:#}"),
+                    "library write failed"
+                ),
+            }
+            outcome
+        });
+        task.await.unwrap_or_else(|e| {
+            tracing::error!(write = what, error = %e, "library write stopped");
+            Err(anyhow::anyhow!("{what} stopped: {e}"))
+        })
+    }
+
     /// A reader: the first free, or when all are busy, the next in turn.
     async fn reader(&self) -> tokio::sync::MutexGuard<'_, sift::library::Library> {
         for r in &self.readers {
@@ -723,7 +764,7 @@ impl Library {
         Ok(sift::credits::Known::from_albums(&albums))
     }
 
-    /// Add gain, genres, lyrics and each artist's credit to matching
+    /// Add gain, genres, release types, lyrics and each artist's credit to matching
     /// albums, as every new import gets. Rewrites tags (only those fields)
     /// across what the query matches, so it is for a deliberate backfill.
     pub async fn enrich(&self, query: &[String]) -> anyhow::Result<Vec<EnrichedAlbum>> {
@@ -745,6 +786,7 @@ impl Library {
                 path: a.dir.to_string_lossy().into_owned(),
                 gain_db: e.gain_db,
                 genres: e.genres,
+                release_types: e.release_types,
                 lyrics: e.lyrics,
                 lyric_files: Vec::new(),
                 artists: e.artists,
@@ -1649,6 +1691,74 @@ mod tests {
         .iter()
         .map(|a| a.dir.to_string_lossy().into_owned())
         .collect()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_write_whose_request_is_dropped_still_finishes() {
+        let tmp = std::env::temp_dir().join(format!("slsk-detached-{}", uuid::Uuid::new_v4()));
+        let root = tmp.join("music");
+        let dir = root.join("Artist").join("Album");
+        std::fs::create_dir_all(&dir).unwrap();
+        let flac = include_bytes!("../tests/fixtures/silence.flac");
+        let files: Vec<PathBuf> = (1..=7).map(|n| dir.join(format!("{n:02}.flac"))).collect();
+        for f in &files {
+            std::fs::write(f, flac).unwrap();
+        }
+        let cfg = sift::Config {
+            directory: root.clone(),
+            ..Default::default()
+        };
+        let library = Arc::new(
+            Library::open(
+                &tmp.join("library.db"),
+                Arc::new(sift::Importer::new(cfg)),
+                tmp.join("music-bin"),
+            )
+            .unwrap(),
+        );
+        let image = library
+            .prepare_art(include_bytes!("../tests/fixtures/cover.png"))
+            .unwrap();
+        let dir = dir.to_string_lossy().into_owned();
+
+        // Held so the write is under way, waiting on the index, when its
+        // request goes away.
+        let held = library.writer.lock().await;
+        let (done, outcome) = tokio::sync::oneshot::channel();
+        let request = library.detached("set album art", move |l| async move {
+            let set = l
+                .set_art(
+                    &dir,
+                    &image,
+                    Target {
+                        embed: true,
+                        file: false,
+                    },
+                    true,
+                )
+                .await
+                .map(drop);
+            let _ = done.send(set.as_ref().map_err(|e| format!("{e:#}")).cloned());
+            set
+        });
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), request)
+                .await
+                .is_err(),
+            "the write finished while the index was held"
+        );
+        drop(held);
+        outcome.await.unwrap().expect("the write failed");
+
+        for f in &files {
+            assert_eq!(
+                sift::meta::pictures(f).unwrap().len(),
+                1,
+                "{} has no art",
+                f.display()
+            );
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]

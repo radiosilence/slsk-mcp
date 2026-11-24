@@ -8,7 +8,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use bytes::Bytes;
 use dashmap::DashMap;
@@ -111,6 +111,7 @@ impl Download {
         if ok {
             self.wake.notify_one();
             self.stop.notify_waiters();
+            crate::changed();
         }
         ok
     }
@@ -162,13 +163,16 @@ impl Downloads {
         self.map.get(&key(username, filename)).map(|d| d.clone())
     }
 
-    /// Bytes per second across the downloads arriving now.
-    pub fn speed(&self) -> u64 {
-        self.map
+    /// Measure each arriving download's speed from the bytes it moved since
+    /// the last call (see [`crate::rate::measure`]).
+    pub(crate) fn measure(&self, seen: &mut crate::rate::Seen, now: tokio::time::Instant) -> bool {
+        let live: Vec<Arc<Download>> = self
+            .map
             .iter()
             .filter(|d| d.state() == DownloadState::Transferring)
-            .map(|d| d.speed.load(Ordering::Relaxed))
-            .sum()
+            .map(|d| d.clone())
+            .collect();
+        crate::rate::measure(seen, live.iter().map(|d| (d.id, &d.bytes, &d.speed)), now)
     }
 
     pub fn views(&self) -> Vec<TransferView> {
@@ -224,8 +228,10 @@ impl Downloads {
     }
 
     pub fn set_place(&self, username: &str, filename: &RawStr, place: u32) {
-        if let Some(d) = self.get(username, filename) {
-            d.place.store(place, Ordering::Relaxed);
+        if let Some(d) = self.get(username, filename)
+            && d.place.swap(place, Ordering::Relaxed) != place
+        {
+            crate::changed();
         }
     }
 }
@@ -620,22 +626,13 @@ async fn receive(inner: &Inner, d: &Download, mut conn: Conn) -> Result<(), Erro
     }
     let mut file = tokio::io::BufWriter::with_capacity(READ_CHUNK, file);
     let leftover: Bytes = first.into();
-    let mut window = (Instant::now(), offset);
-    let mut take = |n: usize, offset: &mut u64| {
+    let take = |n: usize, offset: &mut u64| {
         *offset += n as u64;
         d.bytes.store(*offset, Ordering::Relaxed);
         inner
             .metrics
             .bytes_downloaded
             .fetch_add(n as u64, Ordering::Relaxed);
-        let elapsed = window.0.elapsed();
-        if elapsed >= Duration::from_secs(1) {
-            d.speed.store(
-                ((*offset - window.1) as f64 / elapsed.as_secs_f64()) as u64,
-                Ordering::Relaxed,
-            );
-            window = (Instant::now(), *offset);
-        }
     };
     if !leftover.is_empty() {
         let n = leftover.len().min((size - offset) as usize);

@@ -58,6 +58,10 @@ pub(crate) const EVENTS_SINCE: &str = "SELECT job_id, title, at, version, outcom
 pub(crate) const JOB_EVENTS: &str = "SELECT job_id, title, at, version, outcome, cause, detail, peer FROM job_events \
          WHERE job_id = ?1 ORDER BY at, id";
 
+/// Each job's moves to another source, newest first.
+pub(crate) const LAST_MOVES: &str = "SELECT job_id, cause, peer FROM job_events \
+         WHERE job_id IN (SELECT unhex(value) FROM json_each(?1)) AND outcome = 'fallback' ORDER BY job_id, at DESC";
+
 /// One file's state, before it changes.
 pub(crate) const FILE_STATE: &str =
     "SELECT state, size FROM job_files WHERE job_id = ?1 AND peer = ?2 AND remote = ?3";
@@ -76,6 +80,13 @@ pub(crate) const LIVE_GRAB: &str = "SELECT * FROM jobs WHERE lower(title) = lowe
 
 /// Newest first. Two statements rather than `?1 IS NULL OR status = ?1`,
 /// which no index can answer.
+const JOB_OF_SOURCE: &str = "SELECT * FROM jobs \
+     WHERE json_extract(source, '$.username') = ?1 AND json_extract(source, '$.folder') = ?2 \
+       AND (?4 IS NULL OR id != ?4) \
+       AND NOT coalesce(json_extract(source, '$.picked'), 0) \
+       AND (status IN ('downloading', 'importing', 'waiting', 'review', 'suspect') \
+            OR (?5 AND status = 'imported' AND updated_at > ?3)) \
+     ORDER BY created_at DESC LIMIT 1";
 pub(crate) const JOBS: &str = "SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?1";
 pub(crate) const JOBS_OF_STATUS: &str =
     "SELECT * FROM jobs WHERE status = ?1 ORDER BY created_at DESC LIMIT ?2";
@@ -109,6 +120,8 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0006_waiting.sql"),
     include_str!("../migrations/0007_search_tabs.sql"),
     include_str!("../migrations/0008_search_tab_ids.sql"),
+    include_str!("../migrations/0009_retry_at.sql"),
+    include_str!("../migrations/0010_share_activity.sql"),
 ];
 
 /// How many idle connections to keep. More than the concurrency the service
@@ -131,7 +144,7 @@ impl Db {
         let path = path.to_path_buf();
         let db = tokio::task::spawn_blocking(move || -> anyhow::Result<Self> {
             let mut conn = Connection::open(&path)?;
-            configure(&conn)?;
+            configure(&mut conn)?;
             conn.pragma_update(None, "journal_mode", "WAL")?;
             migrate(&mut conn)?;
             optimize(&conn);
@@ -163,12 +176,13 @@ impl Db {
             let mut conn = match pool.idle.lock().pop() {
                 Some(c) => c,
                 None => {
-                    let c = Connection::open(&pool.path)?;
-                    configure(&c)?;
+                    let mut c = Connection::open(&pool.path)?;
+                    configure(&mut c)?;
                     c
                 }
             };
             let out = f(&mut conn);
+            crate::live::announce();
             let mut idle = pool.idle.lock();
             if idle.len() < KEEP_IDLE {
                 idle.push(conn);
@@ -197,8 +211,16 @@ impl Db {
 
 /// Settings every connection needs; WAL is a property of the file and is set
 /// once, at open.
-fn configure(conn: &Connection) -> Result<()> {
+fn configure(conn: &mut Connection) -> Result<()> {
     conn.busy_timeout(Duration::from_secs(5))?;
+    // Every write tells the live pages, whichever code made it, once the
+    // call that made it has finished (`Db::run`). A write rolled back still
+    // wakes them; they redraw, find nothing changed and send nothing.
+    conn.update_hook(Some(|_, _: &str, table: &str, _| {
+        if let Some(topic) = crate::live::of_table(table) {
+            crate::live::note(topic);
+        }
+    }))?;
     conn.execute_batch(
         "PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON; PRAGMA temp_store = MEMORY;",
     )
@@ -341,8 +363,18 @@ pub enum Source {
         folder: String,
         folder_raw: Vec<u8>,
     },
-    /// Files picked individually.
-    Files { username: String },
+    /// Files picked individually, and the folder they were picked from:
+    /// the album's on the peer, for a browsed album, or the one folder
+    /// holding them all. Absent in rows written before it was kept, and for
+    /// files from more than one folder.
+    Files {
+        username: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        folder: Option<String>,
+        /// Some of the folder's files, ticked one by one, rather than all.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        picked: bool,
+    },
     /// A file fetched over HTTP: an album as a zip, or a single track.
     Url { url: String },
 }
@@ -394,6 +426,10 @@ pub struct Job {
     /// How its latest import was asked to decide the album.
     /// `None` for one written by a build whose `How` no longer reads.
     pub import_how: Option<crate::jobs::How>,
+    /// Times its import has been put off for a metadata service in a row.
+    pub defer_tries: u32,
+    /// For a `waiting` job, when its import is tried again.
+    pub retry_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -418,6 +454,8 @@ impl Job {
             as_is_blocker: None,
             replaces: false,
             import_how: None,
+            defer_tries: 0,
+            retry_at: None,
             created_at: now,
             updated_at: now,
         }
@@ -448,6 +486,11 @@ impl Job {
                         None
                     }
                 }),
+            defer_tries: r.get("defer_tries")?,
+            retry_at: r
+                .get::<_, Option<String>>("retry_at")?
+                .map(|t| ts_from(&t))
+                .transpose()?,
             created_at: ts_from(&r.get::<_, String>("created_at")?)?,
             updated_at: ts_from(&r.get::<_, String>("updated_at")?)?,
         })
@@ -480,6 +523,7 @@ impl JobFile {
 }
 
 fn insert_files(c: &Connection, files: &[JobFile]) -> Result<()> {
+    crate::live::note(crate::live::Topic::Jobs);
     let mut s = c.prepare_cached(
         "INSERT INTO job_files (job_id, peer, remote, size, subdir) VALUES (?1, ?2, ?3, ?4, ?5)",
     )?;
@@ -531,6 +575,7 @@ pub async fn replace_files(
         if !moved {
             return Ok(false);
         }
+        crate::live::note(crate::live::Topic::Jobs);
         tx.execute("DELETE FROM job_files WHERE job_id = ?1", params![job])?;
         insert_files(&tx, &files)?;
         tx.commit()?;
@@ -614,6 +659,29 @@ pub async fn live_grab(db: &Db, query: &str) -> Result<Option<Job>> {
     .await
 }
 
+/// A job other than `except` fetching the whole folder `folder` from
+/// `username`, or with `imported`, one that imported it in the last day:
+/// asking for it again is the same request.
+pub async fn job_of_source(
+    db: &Db,
+    username: &str,
+    folder: &str,
+    except: Option<Uuid>,
+    imported: bool,
+) -> Result<Option<Job>> {
+    let (username, folder) = (username.to_string(), folder.to_string());
+    let since = ts(&(chrono::Utc::now() - chrono::Duration::days(1)));
+    db.run(move |c| {
+        c.prepare_cached(JOB_OF_SOURCE)?
+            .query_row(
+                params![username, folder, since, except, imported],
+                Job::from_row,
+            )
+            .optional()
+    })
+    .await
+}
+
 pub async fn job_files(db: &Db, id: Uuid) -> Result<Vec<JobFile>> {
     db.run(move |c| {
         c.prepare_cached(JOB_FILES)?
@@ -687,6 +755,20 @@ pub async fn set_import_log(db: &Db, id: Uuid, log: &str) -> Result<()> {
     .await
 }
 
+/// Record how a job's album was decided, when the import chose otherwise
+/// than it was asked.
+pub async fn set_import_how(db: &Db, id: Uuid, how: &crate::jobs::How) -> Result<()> {
+    let how = how.clone();
+    db.run(move |c| {
+        c.execute(
+            "UPDATE jobs SET import_how = ?2 WHERE id = ?1",
+            params![id, Json(&how)],
+        )?;
+        Ok(())
+    })
+    .await
+}
+
 pub async fn set_file_state(
     db: &Db,
     id: Uuid,
@@ -705,22 +787,58 @@ pub async fn set_file_state(
     // completed. The transaction holds the write lock from its start, so
     // nothing changes the row between reading and updating it.
     db.run(move |c| {
+        crate::live::note(crate::live::Topic::Jobs);
         let tx = c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let prev: Option<(String, i64)> = tx
             .prepare_cached(FILE_STATE)?
             .query_row(params![id, peer, remote], |r| Ok((r.get(0)?, r.get(1)?)))
             .optional()?;
-        tx.execute(
-            "UPDATE job_files SET state = ?4, error = ?5 WHERE job_id = ?1 AND peer = ?2 AND remote = ?3",
+        // A file a person skipped stays skipped whatever the engine last
+        // said of it: only `set_file_skipped` takes it back.
+        let changed = tx.execute(
+            "UPDATE job_files SET state = ?4, error = ?5 \
+             WHERE job_id = ?1 AND peer = ?2 AND remote = ?3 AND state <> 'skipped'",
             params![id, peer, remote, state, error],
         )?;
         if let Some((was, size)) = prev
+            && changed > 0
             && state == "completed"
             && was != "completed"
         {
             add_total(&tx, "downloaded_bytes", size)?;
         }
         tx.commit()
+    })
+    .await
+}
+
+/// A file's state, if the job still has it.
+pub async fn file_state(db: &Db, id: Uuid, peer: &str, remote: &[u8]) -> Result<Option<String>> {
+    let (peer, remote) = (peer.to_string(), remote.to_vec());
+    db.run(move |c| {
+        c.prepare_cached(FILE_STATE)?
+            .query_row(params![id, peer, remote], |r| r.get(0))
+            .optional()
+    })
+    .await
+}
+
+/// Skip a file, or queue a skipped one again.
+pub async fn set_file_skipped(
+    db: &Db,
+    id: Uuid,
+    peer: &str,
+    remote: &[u8],
+    skipped: bool,
+) -> Result<()> {
+    let (peer, remote) = (peer.to_string(), remote.to_vec());
+    db.run(move |c| {
+        crate::live::note(crate::live::Topic::Jobs);
+        c.execute(
+            "UPDATE job_files SET state = ?4, error = NULL WHERE job_id = ?1 AND peer = ?2 AND remote = ?3",
+            params![id, peer, remote, if skipped { "skipped" } else { "queued" }],
+        )?;
+        Ok(())
     })
     .await
 }
@@ -1164,20 +1282,51 @@ pub async fn claim_import(
     .await
 }
 
+/// For each of `ids` that has moved to another source, why it last did and
+/// the peer it left.
+pub async fn last_moves(
+    db: &Db,
+    ids: &[Uuid],
+) -> Result<std::collections::HashMap<Uuid, (Option<String>, Option<String>)>> {
+    if ids.is_empty() {
+        return Ok(Default::default());
+    }
+    let ids = id_list(ids);
+    db.run(move |c| {
+        let mut out = std::collections::HashMap::new();
+        let mut stmt = c.prepare_cached(LAST_MOVES)?;
+        let rows = stmt.query_map([ids], |r| Ok((r.get::<_, Uuid>(0)?, r.get(1)?, r.get(2)?)))?;
+        for row in rows {
+            let (id, cause, peer) = row?;
+            out.entry(id).or_insert((cause, peer));
+        }
+        Ok(out)
+    })
+    .await
+}
+
 /// Put an `importing` job's import off until a metadata service is back:
 /// `waiting`, with `error` saying why. Refused, and `None`, once it has been
 /// put off `limit` times or when the job has moved on; otherwise the number
 /// of times so far.
-pub async fn defer_import(db: &Db, id: Uuid, error: &str, limit: u32) -> Result<Option<u32>> {
+pub async fn defer_import(
+    db: &Db,
+    id: Uuid,
+    error: &str,
+    limit: u32,
+    wait: std::time::Duration,
+) -> Result<Option<u32>> {
     let error = error.to_string();
+    let wait = format!("+{:.3} seconds", wait.as_secs_f64());
     db.run(move |c| {
         c.query_row(
             concat!(
-                "UPDATE jobs SET status = 'waiting', error = ?2, defer_tries = defer_tries + 1, updated_at = ",
+                "UPDATE jobs SET status = 'waiting', error = ?2, defer_tries = defer_tries + 1, \
+                 retry_at = strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now', ?4), updated_at = ",
                 now!(),
                 " WHERE id = ?1 AND status = 'importing' AND defer_tries < ?3 RETURNING defer_tries"
             ),
-            params![id, error, limit],
+            params![id, error, limit, wait],
             |r| r.get(0),
         )
         .optional()
@@ -1185,15 +1334,16 @@ pub async fn defer_import(db: &Db, id: Uuid, error: &str, limit: u32) -> Result<
     .await
 }
 
-const DUE_WAITING: &str = "SELECT * FROM jobs WHERE status = 'waiting' \
-     AND updated_at <= strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now', ?1)";
+const DUE_WAITING: &str = concat!(
+    "SELECT * FROM jobs WHERE status = 'waiting' AND retry_at <= ",
+    now!()
+);
 
-/// Jobs `waiting` for at least `secs`, due another try.
-pub async fn due_waiting(db: &Db, secs: u64) -> Result<Vec<Job>> {
-    let since = format!("-{secs} seconds");
+/// Jobs put off for a metadata service whose time to try again has come.
+pub async fn due_waiting(db: &Db) -> Result<Vec<Job>> {
     db.run(move |c| {
         c.prepare_cached(DUE_WAITING)?
-            .query_map([since], Job::from_row)?
+            .query_map([], Job::from_row)?
             .collect::<Result<_>>()
     })
     .await
@@ -1423,6 +1573,7 @@ mod tests {
             FILE_STATE,
             EVENTS_SINCE,
             JOB_EVENTS,
+            LAST_MOVES,
             STALLED_PEERS,
             RECENT_UPLOADS,
             UPLOAD_TOTALS,
@@ -1503,6 +1654,8 @@ mod tests {
             title.into(),
             Source::Files {
                 username: "peer".into(),
+                folder: None,
+                picked: false,
             },
             Vec::new(),
         );
@@ -1581,24 +1734,56 @@ mod tests {
         let db = Db::memory().await;
         let job = job("a", "importing");
         insert_job(&db, &job, &[]).await.unwrap();
-        assert_eq!(defer_import(&db, job.id, "down", 2).await.unwrap(), Some(1));
+        assert_eq!(
+            defer_import(&db, job.id, "down", 2, std::time::Duration::ZERO)
+                .await
+                .unwrap(),
+            Some(1)
+        );
         assert_eq!(
             super::job(&db, job.id).await.unwrap().unwrap().status,
             "waiting"
         );
-        // Not due until the wait has passed; due at once with no wait.
-        assert!(due_waiting(&db, 300).await.unwrap().is_empty());
-        assert_eq!(due_waiting(&db, 0).await.unwrap().len(), 1);
+        // Due once its wait has passed, which here is at once.
+        assert_eq!(due_waiting(&db).await.unwrap().len(), 1);
+        let later = super::tests::job("b", "importing");
+        insert_job(&db, &later, &[]).await.unwrap();
+        let wait = std::time::Duration::from_secs(300);
+        defer_import(&db, later.id, "down", 2, wait).await.unwrap();
+        assert_eq!(due_waiting(&db).await.unwrap().len(), 1, "b is not due yet");
+        let retry_at = super::job(&db, later.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .retry_at
+            .unwrap();
+        let ahead = (retry_at - chrono::Utc::now()).num_seconds();
+        assert!((295..=300).contains(&ahead), "{ahead}");
         // Back to importing from waiting keeps the count.
         let how = crate::jobs::How::Match(None);
         assert!(claim_import(&db, job.id, &["waiting"], &how).await.unwrap());
-        assert_eq!(defer_import(&db, job.id, "down", 2).await.unwrap(), Some(2));
+        assert_eq!(
+            defer_import(&db, job.id, "down", 2, std::time::Duration::ZERO)
+                .await
+                .unwrap(),
+            Some(2)
+        );
         assert!(claim_import(&db, job.id, &["waiting"], &how).await.unwrap());
-        assert_eq!(defer_import(&db, job.id, "down", 2).await.unwrap(), None);
+        assert_eq!(
+            defer_import(&db, job.id, "down", 2, std::time::Duration::ZERO)
+                .await
+                .unwrap(),
+            None
+        );
         // A person's retry from failed starts the count again.
         set_status(&db, job.id, "failed", None).await.unwrap();
         assert!(claim_import(&db, job.id, &["failed"], &how).await.unwrap());
-        assert_eq!(defer_import(&db, job.id, "down", 2).await.unwrap(), Some(1));
+        assert_eq!(
+            defer_import(&db, job.id, "down", 2, std::time::Duration::ZERO)
+                .await
+                .unwrap(),
+            Some(1)
+        );
     }
 
     #[tokio::test]
@@ -1724,6 +1909,81 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_folder_in_hand_is_found_by_peer_and_path() {
+        let db = Db::memory().await;
+        let files = |folder: &str, picked: bool| {
+            Json(Source::Files {
+                username: "teamnatour".into(),
+                folder: Some(folder.into()),
+                picked,
+            })
+        };
+        let mut j = job("Liquid", "downloading");
+        j.source = files(r"music\Recoil\Liquid", false);
+        insert_job(&db, &j, &[file(&j, "01.flac", 10)])
+            .await
+            .unwrap();
+        let found = |user: &'static str, folder: &'static str, except, imported| {
+            let db = db.clone();
+            async move {
+                job_of_source(&db, user, folder, except, imported)
+                    .await
+                    .unwrap()
+                    .map(|j| j.id)
+            }
+        };
+        let liquid = r"music\Recoil\Liquid";
+        assert_eq!(found("teamnatour", liquid, None, false).await, Some(j.id));
+        assert_eq!(found("teamnatour", liquid, Some(j.id), false).await, None);
+        assert_eq!(found("someone", liquid, None, false).await, None);
+        assert_eq!(
+            found("teamnatour", r"music\Recoil", None, false).await,
+            None
+        );
+
+        // A track picked from a folder is not the folder.
+        let mut p = job("01", "downloading");
+        p.source = files(r"music\Recoil\Bloodline", true);
+        insert_job(&db, &p, &[]).await.unwrap();
+        assert_eq!(
+            found("teamnatour", r"music\Recoil\Bloodline", None, true).await,
+            None
+        );
+
+        let mut g = job("recoil liquid", "downloading");
+        g.source = Json(Source::Soulseek {
+            username: "paper".into(),
+            folder: r"Music\Recoil\Liquid".into(),
+            folder_raw: br"Music\Recoil\Liquid".to_vec(),
+        });
+        insert_job(&db, &g, &[]).await.unwrap();
+        let paper = r"Music\Recoil\Liquid";
+        assert_eq!(found("paper", paper, None, false).await, Some(g.id));
+        move_status(&db, g.id, &["downloading"], "failed", None)
+            .await
+            .unwrap();
+        assert_eq!(
+            found("paper", paper, None, true).await,
+            None,
+            "a failed job is not in hand"
+        );
+
+        move_status(&db, j.id, &["downloading"], "imported", None)
+            .await
+            .unwrap();
+        assert_eq!(
+            found("teamnatour", liquid, None, false).await,
+            None,
+            "imported is not in hand"
+        );
+        assert_eq!(
+            found("teamnatour", liquid, None, true).await,
+            Some(j.id),
+            "but counts as taken for a fallback, for a day"
+        );
+    }
+
+    #[tokio::test]
     async fn a_new_source_does_not_revive_a_cancelled_job() {
         let db = Db::memory().await;
         let j = job("a", "cancelled");
@@ -1732,6 +1992,8 @@ mod tests {
             .unwrap();
         let source = Source::Files {
             username: "other".into(),
+            folder: None,
+            picked: false,
         };
         let moved = replace_files(&db, j.id, &source, &[], &[file(&j, "02.flac", 10)])
             .await
