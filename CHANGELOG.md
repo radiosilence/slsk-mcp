@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.20.0
+
+### Added
+
+- **Mark a download as a scam.** `markScam(id)`, or Scam on a job, bans the peer, deletes what every job holding or fetching its files downloaded, and fetches each of those albums from another peer: the job's fallbacks first, else a fresh search. A scammer usually lists many albums, so its other jobs are dealt with in the same step. Peers can also be banned and unbanned from their profile, their shares, a job's page and search results.
+
+### Fixed
+
+- **Banned peers were still chosen as sources.** `grab`, a job's fallbacks, `nextSource` and the wishlist could pick a folder from a banned peer, and `search` listed them. Their search results are now dropped as they arrive and left out of answers reused from before the ban, and no job fetches from them.
+
 ## 0.19.0
 
 ### Added
