@@ -40,13 +40,10 @@ pub(crate) const PEER_UNREAD: &str =
 /// A conversation, newest first.
 pub(crate) const THREAD: &str = "SELECT body, outgoing, at FROM messages WHERE account = ?1 AND peer = ?2 ORDER BY at DESC LIMIT ?3";
 
-/// The latest message with each peer. With max(), SQLite takes the other
-/// columns from the row holding the maximum, read off `messages_peer`.
-pub(crate) const LATEST_PER_PEER: &str = "SELECT peer, body, outgoing, max(at) AS at
-             FROM messages WHERE account = ?1 GROUP BY peer";
-
-/// One row per peer: the latest message (as `LATEST_PER_PEER`) and how many
-/// are unread, counted once per peer off `messages_unread`.
+/// One row per peer: the latest message and how many are unread. With
+/// max(), SQLite takes the other columns from the row holding the maximum,
+/// read off `messages_peer`; the unread are counted once per peer off
+/// `messages_unread`.
 pub(crate) const CONVERSATIONS: &str = "SELECT peer, body, outgoing, max(at) AS at,
                     (SELECT count(*) FROM messages u
                      WHERE u.account = ?1 AND u.peer = m.peer AND NOT u.read AND NOT u.outgoing)
@@ -253,12 +250,6 @@ fn valid(answer: &str) -> Option<String> {
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || " -_!?,'".contains(c));
     ok.then(|| answer.to_string())
-}
-
-/// Whether a download is one we still want from its peer: live, or refused
-/// (as a check refuses everything until it is answered) and not given up on.
-fn wanted(state: &str) -> bool {
-    !matches!(state, "completed" | "cancelled")
 }
 
 impl Social {
@@ -473,7 +464,9 @@ impl Social {
         let waiting = engine
             .downloads()
             .iter()
-            .any(|d| d.username == peer && wanted(d.state));
+            // Refused counts: a check refuses every file until it is
+            // answered, often before its message arrives.
+            .any(|d| d.username == peer && !matches!(d.state, "completed" | "cancelled"));
         if !waiting {
             return;
         }
@@ -684,8 +677,7 @@ impl Social {
 
     // --- Messages ------------------------------------------------------------
 
-    /// One row per peer: the latest message (as `LATEST_PER_PEER`) and how many
-    /// are unread, counted once per peer off `messages_unread`.
+    /// One row per peer: the latest message and how many are unread.
     pub async fn conversations(
         &self,
     ) -> Result<Vec<(String, String, bool, chrono::DateTime<chrono::Utc>, i64)>> {
@@ -706,45 +698,6 @@ impl Social {
                     .collect()
             })
             .await?)
-    }
-
-    /// Peers holding downloads of ours whose latest message to us is
-    /// unanswered: a check the automatic answer did not recognise, most
-    /// likely. With the files waiting on each.
-    pub async fn pending_checks(
-        &self,
-    ) -> Result<Vec<(String, String, chrono::DateTime<chrono::Utc>, i64)>> {
-        let engine = self.engine()?;
-        let mut waiting: HashMap<String, i64> = HashMap::new();
-        for d in engine.downloads() {
-            if wanted(d.state) {
-                *waiting.entry(d.username.clone()).or_default() += 1;
-            }
-        }
-        let account = engine.username();
-        let latest: Vec<(String, String, bool, chrono::DateTime<chrono::Utc>)> = self
-            .db
-            .run(move |c| {
-                c.prepare_cached(LATEST_PER_PEER)?
-                    .query_map(params![account], |r| {
-                        Ok((
-                            r.get(0)?,
-                            r.get(1)?,
-                            r.get(2)?,
-                            db::ts_from(&r.get::<_, String>(3)?)?,
-                        ))
-                    })?
-                    .collect()
-            })
-            .await?;
-        Ok(latest
-            .into_iter()
-            .filter(|(peer, _, outgoing, _)| !outgoing && waiting.contains_key(peer))
-            .map(|(peer, body, _, at)| {
-                let files = waiting[&peer];
-                (peer, body, at, files)
-            })
-            .collect())
     }
 
     pub async fn messages(

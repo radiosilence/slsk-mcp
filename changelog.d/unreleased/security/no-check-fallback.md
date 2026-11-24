@@ -1,0 +1,1 @@
+- **`pendingChecks` is gone.** It handed a stranger's message to the assistant to answer, which let a peer try to steer it into other tools or into sending the user's data from other connectors back to them. The service still answers the usual check forms itself; anything else is for the user to answer in the web UI.
