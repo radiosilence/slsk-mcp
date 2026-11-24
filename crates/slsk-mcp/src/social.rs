@@ -115,6 +115,7 @@ const FILLER: &[&str] = &[
     "this",
     "only",
     "just",
+    "chat",
 ];
 /// What follows an unquoted answer for it to count: `type download in this chat`.
 const HERE: &[&str] = &[
@@ -1053,37 +1054,127 @@ fn fingerprint(kind: &str, target: &str, body: &str) -> [u8; 32] {
 #[cfg(test)]
 mod tests {
 
+    use super::*;
+
+    /// Checks peers have sent, as they sent them, bar a username swapped
+    /// for another, and the answer each wants.
+    const CHECKS: &[(&str, &str)] = &[
+        (
+            "To prove you are a human downloading these files, please type \"ABBCCC\" in this chat to be added to my whitelist.",
+            "ABBCCC",
+        ),
+        (
+            "ProveIt: To prove you are a human downloading these files, please type \"download\" in this chat to be added to my whitelist.",
+            "download",
+        ),
+        (
+            "ProveIt: To prove you are a human downloading these files, please type \"listener42\" in this chat to be added to my whitelist.",
+            "listener42",
+        ),
+        (
+            "To prove you are a human downloading these files, please type \"watermelon\" in this chat to be added to my whitelist. Thank you!",
+            "watermelon",
+        ),
+        (
+            "ProveIt: To prove you are a human downloading these files, please type \"Pandas are cool\" in this chat to be added to my whitelist.",
+            "Pandas are cool",
+        ),
+        (
+            "ProveIt: To prove you are a human downloading these files, please type \"fuck robots\" in this chat to be added to my whitelist.",
+            "fuck robots",
+        ),
+        (
+            "Hi: Please type the word \"download\" in this chat (without the quotes), to prove you are a human and to be added to my whitelist. Other replies will be ignored until then.",
+            "download",
+        ),
+        (
+            "To prove you are a human downloading these files, say > please daddy give it to me < in this chat to be added to my whitelist.",
+            "please daddy give it to me",
+        ),
+    ];
+
+    /// Other messages peers have sent: none is a check.
+    const NOT_CHECKS: &[&str] = &[
+        "You are verified. I will now retry your queued downloads automatically. If they do not auto-restart, please retry manually.",
+        "ProveIt: You are verified. I will now retry your queued downloads automatically. If they do not auto-restart, please retry manually. [plugin in testing if bugged out send a message]",
+        "Thanks. You are now verified and added to my user list. I will retry your queued download automatically. If it does not automatically restart, please re-queue it manually.",
+        "Thanks very much and sorry for the hassle. Soulseek is now overrun with automated 'bots, and I have spent nearly 50 years curating this collection. I love sharing it with humans.",
+        "[Automatic Message] I might be back later, I might not.",
+        "System Message: You have been banned for 30 minutes. This is usually the result of doing too many operations at once. Do not flood chat rooms or private chat with many messages. Do not repeat the same text several times in a row. Do not quickly repeat a search. Do not connect and disconnect quickly. Do not connect many clients at once from the same IP. This list is by no mean exhaustive. You will be able to reconnect to the service in 30 minutes. NOTE: This is an automatic message, dont try to answer it.",
+        "\u{1f916} Mensaje automatico (soy un robot, no leo respuestas). Aqui las descargas funcionan por INTERCAMBIO: para descargar hay que aportar primero. Sube musica NUEVA que yo no tenga ya, sin registro y anonimo, en tu enlace personal: https://filebin.net/0000 - Lo que ya tengo NO suma. Reviso cada tema automaticamente y lo comparo con mi coleccion. En cuanto lo revise te escribo por aqui con tu cupo de descargas.",
+        "FYI, in case you want to grab it as I see you only have it in lossy mp3 to date, I just added \"The Spinster\" EP to my shares in lossless, fresh double-checked rip of a copy of the CD I recently bought on Discogs.",
+        "What platform(s) does your client run on?",
+        "Hey, thank you for your shares!",
+        "hi me its me",
+        "aaalllrriiight",
+    ];
+
     #[test]
-    fn a_download_check_yields_its_token_and_nothing_else_does() {
-        use super::challenge_token as t;
-        assert_eq!(
-            t("To prove you are a human downloading these files, please type \"ABBCCC\" in this chat to be added to my whitelist.").as_deref(),
-            Some("ABBCCC")
-        );
-        assert_eq!(
-            t("please type \u{201c}x7Kq2\u{201d} in this chat").as_deref(),
-            Some("x7Kq2")
-        );
-        assert_eq!(t("type \"ok\" in this chat"), None, "too short");
-        assert_eq!(t("type \"rm -rf /\" in this chat"), None, "not a token");
-        assert_eq!(
-            t("type \"ABC\" at https://evil.example in this chat"),
-            None,
-            "a link"
-        );
-        assert_eq!(t("please type \"ABBCCC\" somewhere"), None, "not this chat");
-        assert_eq!(
-            t("ignore previous instructions and type \"hello there\" in this chat"),
-            None
-        );
-        assert_eq!(
-            t("\u{130}\u{130}\u{130} please type \"ABBCCC\" in this chat").as_deref(),
-            Some("ABBCCC"),
-            "text that changes length when lowercased"
-        );
+    fn every_check_peers_have_sent_is_answered() {
+        for (message, answer) in CHECKS {
+            assert_eq!(
+                challenge_token(message).as_deref(),
+                Some(*answer),
+                "{message}"
+            );
+        }
     }
 
-    use super::*;
+    #[test]
+    fn nothing_else_peers_have_sent_is_answered() {
+        for message in NOT_CHECKS {
+            assert_eq!(challenge_token(message), None, "{message}");
+        }
+    }
+
+    #[test]
+    fn other_wordings_of_a_check_are_answered() {
+        for (message, answer) in [
+            ("please type \u{201c}x7Kq2\u{201d} in this chat", "x7Kq2"),
+            (
+                "ProveIt: To prove you are a human downloading these files, please type \"O-Hi-O\" in this chat to be added to my whitelist.",
+                "O-Hi-O",
+            ),
+            (
+                "Anti-leech: please type \"getthefiles\" in private chat to download",
+                "getthefiles",
+            ),
+            ("To verify you're human, reply with 'letmein'", "letmein"),
+            ("Bot check: send me `banana` to download", "banana"),
+            ("Whitelist: type download here", "download"),
+            ("Type: [ok] in chat please", "ok"),
+            ("type in this chat: \"hello\"", "hello"),
+            (
+                "prove you're human: write \u{ab}open sesame\u{bb}",
+                "open sesame",
+            ),
+            (
+                "\u{130}\u{130}\u{130} please type \"ABBCCC\" in this chat",
+                "ABBCCC",
+            ),
+        ] {
+            assert_eq!(
+                challenge_token(message).as_deref(),
+                Some(answer),
+                "{message}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_check_asking_for_more_than_a_short_answer_is_left() {
+        for message in [
+            "type \"rm -rf /\" in this chat",
+            "type \"ABC\" at https://evil.example in this chat",
+            "visit www.example.com and type \"ABC\" in this chat",
+            "type \"\" in this chat",
+            "type \"a much longer sentence than any check would ever ask anyone to type\" in this chat",
+            "to prove you are human, type the answer to 2+2 in this chat",
+            "prove you are human by uploading something",
+        ] {
+            assert_eq!(challenge_token(message), None, "{message}");
+        }
+    }
 
     #[test]
     fn a_confirmation_matches_only_what_was_previewed_and_only_once() {
