@@ -117,7 +117,9 @@ impl ServerHandler for SlskMcp {
                  edition, missing discs), `nextSource(id)` drops them and downloads the next copy found. When neither MusicBrainz nor Discogs has such a release \
                  (no candidates, and the files' tags look right), `importAsIs(id)` files it by those tags (a lone file with no \
                  album tag, as a store's single comes, is its own album named by its title); it is \
-                 refused, with the reason, when they do not describe one album.\n\n\
+                 refused, back in `review` with the reason in `error`, when they do not describe one album. \
+                 `resolveJob`, `importAsIs` and `approveJob` answer at once with the job `importing`; poll `job(id)` \
+                 for how it ends.\n\n\
                  Working the review queue, when the user asks you to deal with what is waiting: for each job in \
                  `review`, read `jobTracks(id)` (the files' tags) and `compareRelease(id, releaseId)` for the best \
                  candidate (track by track: title and length differences, missing tracks, extra files). A candidate \

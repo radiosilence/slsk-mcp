@@ -2121,23 +2121,8 @@ impl Jobs {
         )
     }
 
-    /// Import a suspect job despite its analysis, waiting for the outcome.
-    pub async fn approve(self: &Arc<Self>, id: Uuid) -> Result<()> {
-        self.claim(id, &How::Match(None)).await?;
-        db::set_approved(&self.db, id).await?;
-        self.import(id, None).await
-    }
-
-    /// File a job by its own tags, for a release MusicBrainz does not have,
-    /// waiting for the outcome.
-    pub async fn import_as_is(self: &Arc<Self>, id: Uuid, edits: sift::Edits) -> Result<()> {
-        let how = How::AsIs(edits);
-        self.claim(id, &how).await?;
-        self.run_import(id, how).await
-    }
-
-    /// [`Self::import_as_is`] without waiting behind other imports: the job
-    /// is claimed now and filed in the background. A refusal returns it to
+    /// File a job by its own tags, for a release MusicBrainz does not have:
+    /// the job is claimed now and filed in the background. A refusal returns it to
     /// review with the reason, which its card then shows.
     pub async fn import_as_is_soon(self: &Arc<Self>, id: Uuid, edits: sift::Edits) -> Result<()> {
         let how = How::AsIs(edits);
@@ -2191,16 +2176,10 @@ impl Jobs {
             .await?)
     }
 
-    /// Import a job as the given release, waiting for the outcome.
-    pub async fn resolve(self: &Arc<Self>, id: Uuid, release: String) -> Result<()> {
-        self.check_release(&release)?;
-        let how = How::Match(Some(release));
-        self.claim(id, &how).await?;
-        self.run_import(id, how).await
-    }
-
-    /// `approve` or `resolve` without waiting: the job reads `importing` as
-    /// soon as this returns, which is what a person tapping a button sees.
+    /// Import a job waiting on a decision, approved despite its analysis or
+    /// as a named release. The job reads `importing` as soon as this
+    /// returns and is filed in the background, so neither a tapped button
+    /// nor an API call waits behind other imports.
     pub async fn import_soon(
         self: &Arc<Self>,
         id: Uuid,

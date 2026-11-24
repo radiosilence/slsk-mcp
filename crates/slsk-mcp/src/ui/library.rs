@@ -1449,6 +1449,7 @@ fn field_label(field: &str) -> &str {
         "country" => "country",
         "media" => "media",
         "comp" => "compilation",
+        "albumtypes" => "release type",
         "mb_albumid" => "MusicBrainz release",
         "mb_releasegroupid" => "MusicBrainz release group",
         "mb_trackid" => "MusicBrainz recording",
@@ -1841,6 +1842,7 @@ const ALBUM_FIELDS: &[(&str, &str)] = &[
     ("genre", "genre"),
     ("label", "label"),
     ("catalognum", "catalogue number"),
+    ("albumtypes", "release type"),
 ];
 
 /// The album-wide fields offered for several albums at once: all but the
