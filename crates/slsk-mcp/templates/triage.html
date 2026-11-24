@@ -1,6 +1,6 @@
 <div id="triage">
   <div class="mt-2.5 flex flex-wrap items-center gap-[18px]">
-    {% for d in [7, 30, 90] %}<a class="py-1 text-control hover:no-underline {% if *d == days %}text-ink underline decoration-brand underline-offset-[5px]{% else %}text-muted hover:text-ink{% endif %}" href="/triage?days={{ d }}" data-indicator="_tri_{{ d }}" data-class:busy="$_tri_{{ d }}" data-on:click="{{ crate::ui::follow("$_tri_" ~ d, "@get(el.getAttribute('href'))") }}">{{ d }} days</a>{% endfor %}
+    {% for d in [7, 30, 90] %}<a class="py-1 text-control {% if *d == days %}text-ink underline decoration-brand underline-offset-[5px]{% else %}text-muted hover:text-ink hover:no-underline{% endif %}" href="/triage?days={{ d }}" data-indicator="_tri_{{ d }}" data-class:busy="$_tri_{{ d }}" data-on:click="{{ crate::ui::follow("$_tri_" ~ d, "@get(el.getAttribute('href'))") }}">{{ d }} days</a>{% endfor %}
   </div>
 {% match error %}{% when Some with (e) %}<p class="text-meta text-bad wrap-anywhere">{{ e }}</p>{% when None %}
   {% if causes.is_empty() %}<p class="text-meta text-muted">Everything in the last {{ days }} days landed cleanly.</p>{% endif %}
