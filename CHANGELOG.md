@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.19.0
+
+### Added
+
+- **Peers' status on search results.** Kept results can be hours old, so each folder shows whether its peer is online, away or offline.
+
+### Changed
+
+- **The download toast names the folder.** It read the search words; it now names the folder and peer being downloaded.
+- **Search again at any time.** Every finished search tab offers to search again, which asks the network afresh even within the ten minutes its answers are otherwise reused, and says when it was last searched.
+- **The accent is Soulseek's blue.** The web UI's accent comes from Soulseek's bird logo instead of the shared theme's green, in both colour schemes.
+- **askama_datastar 0.1.2.** Fragment answers sent as `Html` vary on `Datastar-Request`, so a browser's cache keeps them apart from the page at the same address.
+
+### Removed
+
+- **MCP and GraphQL requests can no longer switch the Soulseek account.** `X-Slsk-Username` and `X-Slsk-Password` on the internal port signed the one shared session in as whatever account they named, though the gateway never sent them: the account is the configured one or the one set in the UI. They are now ignored, so a caller that reaches the port can still drive the client but cannot change whose account it is.
+
+### Internal
+
+- **Dropped the unused `soulseek-rs-lib` dependency from the slsk-mcp crate.** The protocol is reached through `slsk-engine`, which keeps it.
+
 ## 0.18.7
 
 ### Security
