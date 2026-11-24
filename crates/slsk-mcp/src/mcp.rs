@@ -4,31 +4,18 @@
 //! descriptions, so a session that never mentions music pays almost nothing
 //! for having this connected.
 
-use std::sync::Arc;
-
 use rmcp::handler::server::{router::tool::ToolRouter, wrapper::Parameters};
 use rmcp::model::{
     CallToolResult, ContentBlock, Implementation, ProtocolVersion, ServerCapabilities, ServerConfig,
 };
-use rmcp::service::RequestContext;
-use rmcp::{
-    ErrorData as McpError, RoleServer, ServerHandler, schemars, tool, tool_handler, tool_router,
-};
+use rmcp::{ErrorData as McpError, ServerHandler, schemars, tool, tool_handler, tool_router};
 
-use crate::App;
 use crate::graphql::{self, SlskSchema};
 
 type ToolResult = std::result::Result<CallToolResult, McpError>;
 
-/// Set by the gateway after it has authenticated the user. Trusted without
-/// question, which is why the port serving this is reachable from the
-/// gateway alone.
-pub const USERNAME_HEADER: &str = "x-slsk-username";
-pub const PASSWORD_HEADER: &str = "x-slsk-password";
-
 #[derive(Clone)]
 pub struct SlskMcp {
-    app: Arc<App>,
     schema: SlskSchema,
     #[allow(dead_code)] // read by the #[tool_handler] expansion
     tool_router: ToolRouter<Self>,
@@ -42,34 +29,10 @@ pub struct GraphqlRequest {
     pub variables: Option<String>,
 }
 
-/// Switch to the credentials a request carries, if it carries any.
-pub async fn apply_credentials(app: &Arc<App>, headers: &http::HeaderMap) -> Result<(), String> {
-    let get = |h: &str| {
-        headers
-            .get(h)
-            .and_then(|v| v.to_str().ok())
-            .map(str::trim)
-            .filter(|v| !v.is_empty())
-    };
-    if let (Some(u), Some(p)) = (get(USERNAME_HEADER), get(PASSWORD_HEADER)) {
-        let first = app.session.engine().is_none();
-        app.session
-            .use_account(u, p)
-            .await
-            .map_err(|e| format!("{e:#}"))?;
-        // The first sign-in queues the downloads left waiting for an engine.
-        if first && let Err(e) = app.jobs.resume().await {
-            tracing::warn!(error = %e, "could not resume jobs");
-        }
-    }
-    Ok(())
-}
-
 impl SlskMcp {
-    pub fn new(app: Arc<App>, schema: SlskSchema) -> Self {
+    pub fn new(schema: SlskSchema) -> Self {
         Self {
             schema,
-            app,
             tool_router: Self::tool_router(),
         }
     }
@@ -93,16 +56,7 @@ impl SlskMcp {
         title = "Soulseek",
         description = "Run a GraphQL query or mutation against the user's Soulseek client, which shares their music library and files what it downloads into it. Use it to find and fetch albums (`grab`), search and browse other users, follow downloads and imports, resolve albums the tagger could not match, and manage uploads and bans. Get the schema from `slsk_schema` first. Variables are a JSON string."
     )]
-    async fn slsk(
-        &self,
-        ctx: RequestContext<RoleServer>,
-        Parameters(req): Parameters<GraphqlRequest>,
-    ) -> ToolResult {
-        if let Some(parts) = ctx.extensions.get::<http::request::Parts>()
-            && let Err(e) = apply_credentials(&self.app, &parts.headers).await
-        {
-            return Ok(CallToolResult::error(vec![ContentBlock::text(e)]));
-        }
+    async fn slsk(&self, Parameters(req): Parameters<GraphqlRequest>) -> ToolResult {
         let mut request = async_graphql::Request::new(req.query);
         if let Some(vars) = req.variables.filter(|v| !v.trim().is_empty()) {
             match serde_json::from_str::<serde_json::Value>(&vars) {

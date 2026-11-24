@@ -9,8 +9,8 @@ const NAME = "slsk";
 const SECRETS_NAME = "slsk-secrets";
 const UI_PORT = 8080;
 /**
- * MCP and GraphQL. Credentials arriving in headers on this port are trusted,
- * so the NetworkPolicy admits the gateway and nothing else.
+ * MCP and GraphQL, unauthenticated: anyone reaching this port drives the
+ * client, so the NetworkPolicy admits the gateway and nothing else.
  */
 export const INTERNAL_PORT = 8081;
 /** `/metrics` alone, so the scraper is let in without reaching the above. */
@@ -547,7 +547,7 @@ export function createSlsk(
             ],
             ports: [{ protocol: "TCP", port: UI_PORT }],
           },
-          // Headers carrying credentials are believed here: the gateway only.
+          // MCP and GraphQL, unauthenticated: the gateway only.
           {
             from: [peer(opts.gatewayPodLabels ?? { app: "mcp-gateway" }, opts.gatewayNamespaceLabels)],
             ports: [{ protocol: "TCP", port: INTERNAL_PORT }],

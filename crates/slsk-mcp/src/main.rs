@@ -219,15 +219,16 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// MCP and GraphQL. Credentials in headers are trusted here, so this listener
-/// is reachable from the gateway and nothing else — the deployment's
-/// NetworkPolicy is what enforces that.
+/// MCP and GraphQL, unauthenticated: the Soulseek account is the one in the
+/// configuration or set in the UI, and a request cannot change it, but anyone
+/// here can drive the client. So this listener is reachable from the gateway
+/// and nothing else — the deployment's NetworkPolicy is what enforces that.
 fn internal_router(app: Arc<App>) -> Router {
     use rmcp::transport::streamable_http_server::{
         StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
     };
     let schema = graphql::schema(app.clone());
-    let template = mcp::SlskMcp::new(app.clone(), schema.clone());
+    let template = mcp::SlskMcp::new(schema.clone());
     let service = StreamableHttpService::new(
         move || Ok(template.clone()),
         Arc::new(LocalSessionManager::default()),
@@ -239,27 +240,16 @@ fn internal_router(app: Arc<App>) -> Router {
         .nest_service("/mcp", service)
         .route(
             "/graphql",
-            post({
-                let app = app.clone();
-                move |headers: http::HeaderMap,
-                      axum::Json(req): axum::Json<async_graphql::Request>| {
-                    let (app, schema) = (app.clone(), schema.clone());
-                    async move {
-                        if let Err(e) = mcp::apply_credentials(&app, &headers).await {
-                            return axum::Json(async_graphql::Response::from_errors(vec![
-                                async_graphql::ServerError::new(e, None),
-                            ]));
-                        }
-                        axum::Json(schema.execute(req).await)
-                    }
-                }
+            post(move |axum::Json(req): axum::Json<async_graphql::Request>| {
+                let schema = schema.clone();
+                async move { axum::Json(schema.execute(req).await) }
             }),
         )
         .route("/healthz", get(|| async { "ok" }))
 }
 
 /// Metrics alone, on a listener of their own, so a scraper can be let in
-/// without being let near the port that believes credentials in headers.
+/// without being let near the port that drives the client.
 fn metrics_router(app: Arc<App>) -> Router {
     Router::new().route(
         "/metrics",
