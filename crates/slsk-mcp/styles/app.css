@@ -4,21 +4,13 @@
  *
  * The controls come from the kōan web kit (@radiosilence/theme): element defaults, the button weights, panels,
  * statuses, the meter and the toast. The pages carry their layout as utilities in the templates and in the HTML the
- * Rust code writes. What is here is what is particular to slsk-mcp: its filled primary and the tones of the statuses the server
+ * Rust code writes. What is here is what is particular to slsk-mcp: the tones of the statuses the server
  * writes into the markup.
  */
 @import "tailwindcss" source(none);
 @source "../templates";
 @source "../src";
 @import "@radiosilence/theme";
-
-/* koan's own mint is the accent. The prominent action is filled, as this app's pages carry several panels of bordered
- * controls and an outlined primary does not stand out among them. */
-@layer components {
-  .primary {
-    @apply border-transparent bg-brand text-bg hover:bg-brand hover:opacity-90 active:opacity-80;
-  }
-}
 
 @layer components {
   /* The server writes a job's, a peer's or the session's state as a class on its status, and the tone follows it. */

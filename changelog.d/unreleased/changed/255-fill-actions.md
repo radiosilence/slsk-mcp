@@ -1,0 +1,1 @@
+- **Each card's and form's main action is filled.** A job's suggested action, a result's Download, sign-in, settings and each page's form submit read first; row actions in long lists stay bordered.

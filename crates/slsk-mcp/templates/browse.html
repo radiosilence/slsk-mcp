@@ -20,7 +20,7 @@
     {% if has_files %}<form id="browse-files">
       <input type="hidden" name="username" value="{{ username }}">
       <input type="hidden" name="key" value="{{ here_key }}">
-      <button type="button" data-indicator="_dl_some" data-attr:disabled="$_dl_some" data-class:busy="$_dl_some" data-on:click="@post('/browse/files', {contentType: 'form', selector: '#browse-files'})">Download ticked</button>
+      <button type="button" class="primary" data-indicator="_dl_some" data-attr:disabled="$_dl_some" data-class:busy="$_dl_some" data-on:click="@post('/browse/files', {contentType: 'form', selector: '#browse-files'})">Download ticked</button>
     </form>{% endif %}
   </div>
   {% endif %}

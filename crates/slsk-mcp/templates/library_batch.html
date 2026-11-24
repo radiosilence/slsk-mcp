@@ -14,7 +14,7 @@
     {% endfor %}
     </div>
     <div class="mt-2.5 flex flex-wrap items-center gap-2">
-      <button type="button" data-indicator="_pv_edit" data-attr:disabled="$_pv_edit" data-class:busy="$_pv_edit" data-on:click="@post('/library/preview/edit', {contentType: 'form', selector: '#lib-batch'})">Preview edit</button>
+      <button type="button" class="primary" data-indicator="_pv_edit" data-attr:disabled="$_pv_edit" data-class:busy="$_pv_edit" data-on:click="@post('/library/preview/edit', {contentType: 'form', selector: '#lib-batch'})">Preview edit</button>
       <button type="button" class="quiet" data-on:click="document.getElementById('lib-preview').replaceChildren()">Cancel</button>
     </div>
   </form>
