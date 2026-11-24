@@ -320,14 +320,14 @@ fn signals(json: &str) -> Event {
 /// A confirmation that fades by itself; tapping it dismisses it sooner.
 fn flash_ok(msg: &str) -> String {
     format!(
-        r#"<div id="flash" class="toast border-brand text-brand animate-fade motion-reduce:[animation-timing-function:steps(1,end)]" role="status" data-on:click="el.className = ''">{}</div>"#,
+        r#"<div id="flash" class="toast brief" role="status" data-on:click="el.className = ''">{}</div>"#,
         escape(msg)
     )
 }
 
 fn flash_err(msg: &str) -> String {
     format!(
-        r#"<div id="flash" class="toast border-bad text-meta text-bad" role="alert" data-on:click="el.className = ''">{}</div>"#,
+        r#"<div id="flash" class="toast bad" role="alert" data-on:click="el.className = ''">{}</div>"#,
         escape(msg)
     )
 }
@@ -392,18 +392,18 @@ fn percent(done: u64, total: u64) -> u64 {
 
 /// The pages, in the order the nav lists them: name, address and label.
 const PAGES: &[(&str, &str, &str)] = &[
-    ("search", "/search", "Search"),
-    ("albums", "/", "Downloads"),
-    ("uploads", "/uploads", "Uploads"),
-    ("activity", "/activity", "Activity"),
-    ("wishlist", "/wishlist", "Wishlist"),
-    ("library", "/library", "Library"),
-    ("browse", "/browse", "Browse"),
-    ("chat", "/chat", "Chat"),
-    ("profile", "/profile", "Profile"),
-    ("bans", "/bans", "Bans"),
-    ("settings", "/settings", "Settings"),
-    ("triage", "/triage", "Triage"),
+    ("search", "/search", "search"),
+    ("albums", "/", "downloads"),
+    ("uploads", "/uploads", "uploads"),
+    ("activity", "/activity", "activity"),
+    ("wishlist", "/wishlist", "wishlist"),
+    ("library", "/library", "library"),
+    ("browse", "/browse", "browse"),
+    ("chat", "/chat", "chat"),
+    ("profile", "/profile", "profile"),
+    ("bans", "/bans", "bans"),
+    ("settings", "/settings", "settings"),
+    ("triage", "/triage", "triage"),
 ];
 
 /// The layout every page shares: the status line, the nav and the live
@@ -460,7 +460,7 @@ impl Page {
             PAGES
                 .iter()
                 .find(|p| p.0 == self.tab)
-                .map_or("Job", |p| p.2)
+                .map_or("job", |p| p.2)
         })
     }
 }
@@ -2383,17 +2383,18 @@ fn peer_key(username: &str) -> String {
 /// refuses the peer everything and stops them being downloaded from.
 fn ban_button(username: &str, banned: bool) -> String {
     let key = peer_key(username);
-    let (label, action, ask) = if banned {
-        ("Unban", "/peer/unban", "")
+    let (label, action, ask, tone) = if banned {
+        ("Unban", "/peer/unban", "", "quiet")
     } else {
         (
             "Ban",
             "/peer/ban",
             "confirm('Ban this user? They get nothing more from you, and nothing is downloaded from them.') && ",
+            "quiet bad",
         )
     };
     format!(
-        r#"<span data-peer-ban="{key}"><form id="pb-{key}" hidden><input type="hidden" name="username" value="{user}"></form><button type="button" class="quiet" data-indicator="_pb_{key}" data-attr:disabled="$_pb_{key}" data-class:busy="$_pb_{key}" data-on:click="{ask}@post('{action}', {{contentType: 'form', selector: '#pb-{key}'}})">{label}</button></span>"#,
+        r#"<span data-peer-ban="{key}"><form id="pb-{key}" hidden><input type="hidden" name="username" value="{user}"></form><button type="button" class="{tone}" data-indicator="_pb_{key}" data-attr:disabled="$_pb_{key}" data-class:busy="$_pb_{key}" data-on:click="{ask}@post('{action}', {{contentType: 'form', selector: '#pb-{key}'}})">{label}</button></span>"#,
         user = escape(username),
     )
 }

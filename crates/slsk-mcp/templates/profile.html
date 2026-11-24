@@ -1,11 +1,11 @@
 <div id="profile">
-  <article class="card">
+  <article class="panel">
     <div class="flex min-w-0 flex-wrap items-start gap-3">
-      {% if let Some(src) = picture %}<img class="size-32 flex-none rounded object-cover" src="{{ src }}" alt="{{ username }}'s picture">{% endif %}
+      {% if let Some(src) = picture %}<img class="size-32 flex-none object-cover" src="{{ src }}" alt="{{ username }}'s picture">{% endif %}
       <div class="grid min-w-0 flex-auto gap-1.5">
         <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
           <strong class="min-w-0 flex-auto wrap-anywhere">{{ username }}{% if mine %} (you){% endif %}</strong>
-          {% if let Some(st) = status %}<span class="pill {{ st }}">{{ st }}</span>{% endif %}{% if banned %}<span class="pill">banned</span>{% endif %}
+          {% if let Some(st) = status %}<span class="status {{ st }}">{{ st }}</span>{% endif %}{% if banned %}<span class="status bad">banned</span>{% endif %}
         </div>
         {% if !description.is_empty() %}<p class="whitespace-pre-wrap wrap-anywhere">{{ description }}</p>{% else if !mine && note.is_none() %}<p class="text-meta text-muted">No description.</p>{% endif %}
         {% if let Some(n) = note %}<p class="text-meta text-muted wrap-anywhere">{{ n }}</p>{% endif %}
@@ -33,9 +33,9 @@
   <h3>Edit</h3>
   <p class="text-meta text-muted">Peers see this when they look you up.</p>
   <form id="profile-edit" class="my-2.5 flex flex-col gap-2" enctype="multipart/form-data">
-    <textarea class="resize-y" name="description" rows="6" placeholder="About you and what you share">{{ description }}</textarea>
-    <label class="flex flex-col gap-1 text-meta text-muted">Picture, a JPEG or PNG<input type="file" name="picture" accept="image/jpeg,image/png"></label>
-    {% if picture.is_some() %}<label class="flex items-center gap-1.5 text-muted"><input type="checkbox" name="clear" value="1"> Remove the picture</label>{% endif %}
+    <label class="field"><span>about you</span><textarea class="resize-y" name="description" rows="6" placeholder="About you and what you share">{{ description }}</textarea></label>
+    <label class="field"><span>picture</span><input type="file" name="picture" accept="image/jpeg,image/png"><small>A JPEG or PNG.</small></label>
+    {% if picture.is_some() %}<label class="flex items-center gap-2"><input type="checkbox" name="clear" value="1"> remove the picture</label>{% endif %}
     <div><button type="button" class="primary" data-indicator="_prof_save" data-attr:disabled="$_prof_save" data-class:busy="$_prof_save" data-on:click="@post('/profile', {contentType: 'form', selector: '#profile-edit'})">Save</button></div>
   </form>
   {% endif %}

@@ -5,13 +5,13 @@
   <p class="text-meta text-muted">Change what needs changing; the preview lists each field as it is and as it would be. A field the files disagree on is left alone unless typed. Changing an artist clears that file's list of artists and their MusicBrainz ids; Credit artists splits it again.</p>
   <div class="my-2 grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2">
   {% for (field, label) in self.fields() %}
-    <label class="grid gap-0.5 text-meta text-muted">{{ label }}<input name="a-{{ field }}" value="{{ self.now(field) }}"{% if self.varies(field) %} placeholder="(differs between files)"{% endif %} autocomplete="off"></label>
+    <label class="field"><span>{{ label }}</span><input name="a-{{ field }}" value="{{ self.now(field) }}"{% if self.varies(field) %} placeholder="(differs between files)"{% endif %} autocomplete="off"></label>
   {% endfor %}
   </div>
-  <table class="my-2 w-full">
-    <tr class="*:px-1 *:py-0.5 *:text-left *:text-meta *:font-normal *:text-muted"><th>Disc</th><th>Track</th><th>Title</th><th>Artist</th></tr>
+  <table class="dense my-2">
+    <tr><th>disc</th><th>track</th><th>title</th><th>artist</th></tr>
   {% for t in tracks %}
-    <tr class="*:px-1 *:py-0.5 *:first:w-[4.5em] *:nth-2:w-[4.5em] [&_input:not([type=hidden])]:w-full [&_input:not([type=hidden])]:px-[7px] [&_input:not([type=hidden])]:py-[5px] [&_input:not([type=hidden])]:text-body">
+    <tr class="*:first:w-[4.5em] *:nth-2:w-[4.5em] [&_input:not([type=hidden])]:w-full [&_input:not([type=hidden])]:px-[7px] [&_input:not([type=hidden])]:py-[5px] [&_input:not([type=hidden])]:text-body">
       <td><input type="hidden" name="t{{ loop.index0 }}-file" value="{{ self.file(t) }}"><input name="t{{ loop.index0 }}-disc" value="{{ self.value(t, "disc") }}" inputmode="numeric" aria-label="Disc"></td>
       <td><input name="t{{ loop.index0 }}-track" value="{{ self.value(t, "track") }}" inputmode="numeric" aria-label="Track"></td>
       <td><input name="t{{ loop.index0 }}-title" value="{{ self.value(t, "title") }}" aria-label="Title"></td>

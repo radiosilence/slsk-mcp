@@ -520,7 +520,7 @@ async fn peers(
             };
             for id in ids {
                 yield patch(&format!(
-                    r#"<span id="peer-{id}" class="pill {word}">{word}</span>"#
+                    r#"<span id="peer-{id}" class="status {word}">{word}</span>"#
                 ));
             }
         }

@@ -1,6 +1,6 @@
 {# Drawn into the preview of `slot`: `lib` above the list for the albums ticked there, or an album's own row. #}
-<div id="{{ slot }}-preview" class="card empty:hidden{% if slot != "lib" %} mt-2{% endif %}">
-  <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5"><strong class="min-w-0 flex-auto wrap-anywhere">{{ action.name() }}: {{ shown }} album{% if shown != 1 %}s{% endif %}</strong><span class="pill">preview</span></div>
+<div id="{{ slot }}-preview" class="panel empty:hidden{% if slot != "lib" %} mt-2{% endif %}">
+  <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5"><strong class="min-w-0 flex-auto wrap-anywhere">{{ action.name() }}: {{ shown }} album{% if shown != 1 %}s{% endif %}</strong><span class="status">preview</span></div>
   <p class="my-0.5 text-meta text-muted">{{ action.about() }} Nothing has changed yet.</p>
   {% if selected > shown %}<p class="my-0.5 text-meta text-warn">Only the first {{ shown }} of the {{ selected }} selected are worked out here, and only those are applied. Apply these, then preview the rest.</p>{% endif %}
   <form id="{{ slot }}-apply" data-signals="{_apply_{{ slot }}: 0}" data-on:change="$_apply_{{ slot }} = el.querySelectorAll('input[name=path]:checked').length">

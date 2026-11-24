@@ -539,15 +539,18 @@ The network tests run real engines against `slsk-testserver` over loopback.
 To run the service locally: a `SEAL_KEY`, and
 `UI_INSECURE_NO_AUTH=1 UI_ADDR=127.0.0.1:8080`.
 
-The web UI is styled with Tailwind v4 utilities in the templates and in the
-HTML the Rust code writes. Its design tokens (palette, type scale, Geist Mono)
-come from [@radiosilence/theme](https://github.com/radiosilence/theme), shared
-with koan and the other web UIs so they look and read alike; the palette is dark
-unless the device asks for light. `crates/slsk-mcp/styles/` holds what is
-slsk-mcp's own: element defaults and the few classes the server or Datastar
-toggles. `just css` installs the theme with aube (GitHub Packages needs a token
-even to read; `just auth` writes it from the gh login), compiles the sources
-with the tailwindcss CLI pinned in `mise.toml` into
+The web UI is drawn with the kōan web kit from
+[@radiosilence/theme](https://github.com/radiosilence/theme), shared with koan
+and the other web UIs so they look and read alike: its element defaults, button
+weights, panels, statuses, meter and toast, on square corners with no shadows. The palette is dark unless the device asks for light. Layout is
+Tailwind v4 utilities in the templates and in the HTML the Rust code writes.
+`crates/slsk-mcp/styles/` holds only what is slsk-mcp's own: its accent and the
+tones of the statuses the server writes into the markup. The theme removes
+Tailwind's palette, radii, shadows and type sizes, so such a class compiles to
+nothing; `just kit-check` reports any in the templates or `src/`, and CI fails
+on one. `just css` installs the theme with aube (GitHub Packages needs a token
+even to read; `just auth` writes it from the gh login), runs kit-check, compiles
+the sources with the tailwindcss CLI pinned in `mise.toml` into
 `crates/slsk-mcp/assets/app.css`, and copies the theme's `geist-mono.woff2`
 beside it. Both are committed because the binary embeds them, so building needs
 no Node or Tailwind. Run it after changing a template's classes or the theme
