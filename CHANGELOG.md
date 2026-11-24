@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.22.1
+
+### Added
+
+- **Release type in the library editor.** The album and batch edit forms set the release type (`albumtypes`), so a DJ mix or mixtape can be marked `compilation; dj-mix`.
+
+### Fixed
+
+- **Review actions answer at once.** `resolveJob`, `importAsIs` and `approveJob` file the job in the background and return it as `importing`, as the web UI does, instead of waiting behind every other import and timing out.
+- **The Activity page draws at once.** Its trends read per-day totals kept as activity is written instead of scanning a week of events, which took seconds on a busy share and made the page look hung. Visitors are now people who browsed, opened a folder or downloaded on more than one day; matched searches, relayed from everyone, no longer count.
+
 ## 0.22.0
 
 ### Changed
