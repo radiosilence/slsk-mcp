@@ -1579,7 +1579,6 @@ mod tests {
             UPLOAD_TOTALS,
             NEWEST_UPLOAD,
             crate::social::CONVERSATIONS,
-            crate::social::LATEST_PER_PEER,
             crate::social::THREAD,
             crate::social::UNREAD,
             crate::social::PEER_UNREAD,
