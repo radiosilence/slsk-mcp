@@ -128,18 +128,25 @@ const HERE: &[&str] = &[
     "in pm",
     "in private",
 ];
-/// A message is taken for a check only if it says something like one.
-const CHECK_SIGNS: &[&str] = &[
+/// A message is taken for a check only if it says something like one: a
+/// word starting with one of these (`verify`, `verification`)…
+const CHECK_STEMS: &[&str] = &[
     "chat",
     "human",
     "prove",
     "verif",
     "whitelist",
     "robot",
-    "bot",
     "captcha",
-    "here",
 ];
+/// …or one of these words.
+const CHECK_WORDS: &[&str] = &["bot", "bots", "here"];
+/// Words that turn an ask round: `do not reply with "ok"`.
+const NEGATIONS: &[&str] = &["not", "don't", "dont", "never"];
+/// How long after answering before the refused files are asked for again:
+/// the answer goes through the server, the request straight to the peer, and
+/// a request that overtakes the answer is refused again.
+const RETRY_AFTER_ANSWER: Duration = Duration::from_secs(10);
 
 /// What an anti-bot check asks to be sent back: `type "ABBCCC" in this chat`,
 /// `say > please give it to me < in this chat`, `type the word download here`.
@@ -149,22 +156,40 @@ const CHECK_SIGNS: &[&str] = &[
 fn challenge_token(message: &str) -> Option<String> {
     // ASCII-only, so byte offsets in `lower` are offsets in `message`.
     let lower = message.to_ascii_lowercase();
-    if ["http", "www.", "://"].iter().any(|l| lower.contains(l))
-        || !CHECK_SIGNS.iter().any(|s| lower.contains(s))
-    {
+    let starts_word = |i: usize| {
+        !lower[..i]
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_alphanumeric())
+    };
+    let ends_word = |i: usize| {
+        !lower[i..]
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_alphanumeric())
+    };
+    let word_at = |i: usize, len: usize| starts_word(i) && ends_word(i + len);
+    let signed = CHECK_STEMS
+        .iter()
+        .any(|s| lower.match_indices(s).any(|(i, _)| starts_word(i)))
+        || CHECK_WORDS
+            .iter()
+            .any(|w| lower.match_indices(w).any(|(i, _)| word_at(i, w.len())));
+    if ["http", "www.", "://"].iter().any(|l| lower.contains(l)) || !signed {
         return None;
     }
-    let word_at = |i: usize, len: usize| {
-        let before = lower[..i].chars().next_back();
-        let after = lower[i + len..].chars().next();
-        !before.is_some_and(|c| c.is_alphanumeric()) && !after.is_some_and(|c| c.is_alphanumeric())
-    };
     let mut asks: Vec<usize> = ASKS
         .iter()
         .flat_map(|a| {
             lower
                 .match_indices(a)
-                .filter(|(i, _)| word_at(*i, a.len()))
+                .filter(|(i, _)| {
+                    word_at(*i, a.len())
+                        && !lower[..*i]
+                            .split_whitespace()
+                            .next_back()
+                            .is_some_and(|w| NEGATIONS.contains(&w))
+                })
                 .map(|(i, _)| i + a.len())
         })
         .collect();
@@ -177,7 +202,10 @@ fn challenge_token(message: &str) -> Option<String> {
 /// any filler words, or a single unquoted word followed by one of [`HERE`].
 fn answer_after(message: &str, lower: &str, mut at: usize) -> Option<String> {
     loop {
-        at += lower[at..].len() - lower[at..].trim_start_matches([' ', ':', ',', '-']).len();
+        at += lower[at..].len()
+            - lower[at..]
+                .trim_start_matches(|c: char| c.is_whitespace() || ":,-".contains(c))
+                .len();
         let rest = &message[at..];
         let open = rest.chars().next()?;
         let close = match open {
@@ -213,7 +241,8 @@ fn answer_after(message: &str, lower: &str, mut at: usize) -> Option<String> {
         return HERE
             .iter()
             .any(|h| after.starts_with(h))
-            .then(|| rest[..len].to_string());
+            .then(|| valid(&rest[..len]))
+            .flatten();
     }
 }
 
@@ -433,8 +462,8 @@ impl Social {
     /// downloads it is holding go ahead, and ask again for those it refused.
     ///
     /// Decided by code, never by a model: the only thing taken from the
-    /// message is a short alphanumeric token, and it goes back to the same
-    /// peer and nowhere else. Only for a peer we have downloads queued,
+    /// message is the short answer [`challenge_token`] allows, and it goes
+    /// back to the same peer and nowhere else. Only for a peer we have downloads queued,
     /// running or refused with, and at most once a day each, so a stranger cannot make
     /// us message anyone and a peer cannot make us loop.
     async fn answer_challenge(&self, engine: &Engine, peer: &str, message: &str) {
@@ -466,20 +495,26 @@ impl Social {
             })
             .is_err()
         {
+            // Not answered, so a repeat of the check after a reconnect is.
+            self.answered.lock().remove(peer);
             return;
         }
         tracing::info!(peer, token, "answered a peer's download check");
         // A check refuses every file until it is answered, and a peer that
         // retries by itself offers files we have marked failed, which are
         // turned away: ask for them again.
-        for d in engine.downloads() {
-            if d.username == peer && d.state == "failed" {
-                engine.retry_download(peer, &d.filename);
-            }
-        }
         let _ = self
             .record_sent(engine.username(), peer.into(), token)
             .await;
+        let (engine, peer) = (engine.clone(), peer.to_string());
+        tokio::spawn(async move {
+            tokio::time::sleep(RETRY_AFTER_ANSWER).await;
+            for d in engine.downloads() {
+                if d.username == peer && d.state == "failed" {
+                    engine.retry_download(&peer, &d.filename);
+                }
+            }
+        });
     }
 
     async fn record_sent(&self, account: String, peer: String, body: String) -> db::Result<()> {
@@ -1152,6 +1187,14 @@ mod tests {
                 "\u{130}\u{130}\u{130} please type \"ABBCCC\" in this chat",
                 "ABBCCC",
             ),
+            (
+                "To prove you are human please type\n\"ABBCCC\" in this chat",
+                "ABBCCC",
+            ),
+            (
+                "Bot check: do not reply with 'ok'. Please type \"ABBCCC\" in this chat.",
+                "ABBCCC",
+            ),
         ] {
             assert_eq!(
                 challenge_token(message).as_deref(),
@@ -1171,6 +1214,10 @@ mod tests {
             "type \"a much longer sentence than any check would ever ask anyone to type\" in this chat",
             "to prove you are human, type the answer to 2+2 in this chat",
             "prove you are human by uploading something",
+            "please type \"ABBCCC\" somewhere",
+            "Could you send me 'Unknown Pleasures' too? There's no rush.",
+            "I'd approve of that, say 'cheers' about it",
+            &format!("bot check: type {} here", "A".repeat(5000)),
         ] {
             assert_eq!(challenge_token(message), None, "{message}");
         }
