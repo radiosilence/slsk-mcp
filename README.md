@@ -417,7 +417,11 @@ or downloaded from, and people who came back on more than one day.
 Browses, opened folders and answered searches are kept a row each for 90
 days. The distributed network relays many searches a second, so every search
 is otherwise only counted by its normalised words per hour, held in memory
-for the hour and written as that hour's thousand most searched when it ends.
+for the hour and written as that hour's thousand most searched when it ends. The
+trends read per-day totals kept as rows are written, so the page draws in
+milliseconds however busy the network is; a visitor is someone who browsed,
+opened a folder or downloaded on more than one day, since matched searches
+arrive from everyone the distributed network reaches.
 GraphQL has the same: `shareActivity`, `shareLog` and `shareTrends`, for an
 assistant asked what people have been looking for lately.
 

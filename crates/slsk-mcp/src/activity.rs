@@ -6,6 +6,10 @@
 //! search is also counted by its normalised words per hour; the distributed
 //! network relays many searches a second, so the counts are held in memory
 //! for the hour and only its most frequent words are written when it ends.
+//!
+//! Trends read per-day rollups (`visitor_days`, `folder_days`, `term_days`)
+//! that triggers keep as rows are written, so a week of trends sums a few
+//! thousand rows however many searches arrived.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
@@ -28,6 +32,8 @@ const KEEP_TERMS: usize = 1000;
 const MAX_TERMS: usize = 100_000;
 /// How long kept events and counts last.
 const KEEP_DAYS: i64 = 90;
+/// Words kept per day in `term_days`, most searched first.
+const KEEP_DAY_TERMS: u32 = 2000;
 /// How often new rows are written, in one transaction.
 const FLUSH: Duration = Duration::from_secs(5);
 /// Rows kept per user a minute; the rest still show on the feed.
@@ -71,7 +77,9 @@ pub struct FolderInterest {
 #[derive(Debug, Clone, PartialEq, async_graphql::SimpleObject)]
 pub struct Visitor {
     pub username: String,
-    /// Distinct days they browsed, searched our shares or downloaded.
+    /// Distinct days they browsed, opened a folder or were sent a file.
+    /// Matched searches do not count: the distributed network relays them
+    /// from everyone.
     pub days: u64,
     pub events: u64,
     pub last: DateTime<Utc>,
@@ -152,11 +160,6 @@ fn hour_of(t: DateTime<Utc>) -> DateTime<Utc> {
         .and_then(|t| t.with_second(0))
         .and_then(|t| t.with_nanosecond(0))
         .unwrap_or(t)
-}
-
-/// The folder a share path names its file in.
-fn folder_of(path: &str) -> &str {
-    path.rsplit_once('\\').map_or(path, |(f, _)| f)
 }
 
 /// Searches, matched and relayed by the distributed network, in an hour.
@@ -437,6 +440,22 @@ impl Activity {
                         let hour_cutoff = cutoff.format("%Y-%m-%dT%H").to_string();
                         tx.execute("DELETE FROM search_terms WHERE hour < ?1", [&hour_cutoff])?;
                         tx.execute("DELETE FROM search_hours WHERE hour < ?1", [&hour_cutoff])?;
+                        let day_cutoff = cutoff.format("%Y-%m-%d").to_string();
+                        for table in ["visitor_days", "folder_days", "term_days"] {
+                            tx.execute(&format!("DELETE FROM {table} WHERE day < ?1"), [&day_cutoff])?;
+                        }
+                        // Only yesterday and today can have grown past the
+                        // limit since the last hour ended.
+                        let recent = (now - chrono::Duration::days(1)).format("%Y-%m-%d").to_string();
+                        tx.execute(
+                            "DELETE FROM term_days WHERE (day, term) IN ( \
+                               SELECT day, term FROM ( \
+                                 SELECT day, term, row_number() OVER (PARTITION BY day ORDER BY searches DESC, term) AS n \
+                                 FROM term_days WHERE day >= ?1 \
+                               ) WHERE n > ?2 \
+                             )",
+                            params![recent, KEEP_DAY_TERMS],
+                        )?;
                     }
                     tx.commit()?;
                     Ok(())
@@ -498,7 +517,8 @@ impl Activity {
     pub async fn trends(&self, days: u32) -> Result<Trends> {
         let days = days.clamp(1, KEEP_DAYS as u32);
         let since = Utc::now() - chrono::Duration::days(i64::from(days));
-        let (since_at, since_hour) = (stamp(since), since.format("%Y-%m-%dT%H").to_string());
+        let since_hour = since.format("%Y-%m-%dT%H").to_string();
+        let since_day = since.format("%Y-%m-%d").to_string();
         let (mut totals, mut terms, folders, visitors) = self
             .db
             .run(move |c| {
@@ -510,39 +530,31 @@ impl Activity {
                 )?;
                 let terms: HashMap<String, (u64, u64)> = c
                     .prepare_cached(
-                        "SELECT term, SUM(searches), SUM(matched) FROM search_terms WHERE hour >= ?1 \
+                        "SELECT term, SUM(searches), SUM(matched) FROM term_days WHERE day >= ?1 \
                          GROUP BY term ORDER BY SUM(searches) DESC LIMIT 2000",
                     )?
-                    .query_map([&since_hour], |r| Ok((r.get(0)?, (count(r, 1)?, count(r, 2)?))))?
+                    .query_map([&since_day], |r| Ok((r.get(0)?, (count(r, 1)?, count(r, 2)?))))?
                     .collect::<rusqlite::Result<_>>()?;
-                let mut folders: HashMap<String, (u64, u64)> = HashMap::new();
-                for row in c
+                let folders: Vec<FolderInterest> = c
                     .prepare_cached(
-                        "SELECT detail, COUNT(*) FROM share_events WHERE kind = 'folder' AND at >= ?1 GROUP BY detail",
+                        "SELECT folder, SUM(opens), SUM(downloads) FROM folder_days WHERE day >= ?1 \
+                         GROUP BY folder ORDER BY SUM(opens) + SUM(downloads) DESC, folder LIMIT 20",
                     )?
-                    .query_map([&since_at], |r| Ok((r.get::<_, String>(0)?, count(r, 1)?)))?
-                {
-                    let (folder, n) = row?;
-                    folders.entry(folder).or_default().0 += n;
-                }
-                for row in c
-                    .prepare_cached(
-                        "SELECT filename FROM uploads WHERE state = 'completed' AND finished_at >= ?1 \
-                         ORDER BY finished_at DESC LIMIT 20000",
-                    )?
-                    .query_map([&since_at], |r| r.get::<_, String>(0))?
-                {
-                    let file = row?;
-                    folders.entry(folder_of(&file).to_string()).or_default().1 += 1;
-                }
+                    .query_map([&since_day], |r| {
+                        Ok(FolderInterest {
+                            folder: r.get(0)?,
+                            opens: count(r, 1)?,
+                            downloads: count(r, 2)?,
+                        })
+                    })?
+                    .collect::<rusqlite::Result<_>>()?;
                 let visitors: Vec<Visitor> = c
                     .prepare_cached(
-                        "SELECT MAX(username), COUNT(DISTINCT substr(at, 1, 10)) AS days, COUNT(*), MAX(at) FROM ( \
-                           SELECT username, at FROM share_events WHERE at >= ?1 \
-                           UNION ALL SELECT username, finished_at FROM uploads WHERE finished_at >= ?1 \
-                         ) GROUP BY lower(username) HAVING days > 1 ORDER BY days DESC, COUNT(*) DESC LIMIT 20",
+                        "SELECT MAX(username), COUNT(*) AS days, SUM(events), MAX(last) FROM visitor_days \
+                         WHERE day >= ?1 GROUP BY user_key HAVING days > 1 \
+                         ORDER BY days DESC, SUM(events) DESC LIMIT 20",
                     )?
-                    .query_map([&since_at], |r| {
+                    .query_map([&since_day], |r| {
                         Ok(Visitor {
                             username: r.get(0)?,
                             days: count(r, 1)?,
@@ -595,20 +607,6 @@ impl Activity {
             .cloned()
             .collect();
         terms.truncate(20);
-        let mut folders: Vec<FolderInterest> = folders
-            .into_iter()
-            .map(|(folder, (opens, downloads))| FolderInterest {
-                folder,
-                opens,
-                downloads,
-            })
-            .collect();
-        folders.sort_by(|a, b| {
-            (b.downloads + b.opens)
-                .cmp(&(a.downloads + a.opens))
-                .then_with(|| a.folder.cmp(&b.folder))
-        });
-        folders.truncate(20);
         Ok(Trends {
             days,
             searches: totals.0,
@@ -680,9 +678,48 @@ mod tests {
         assert!(kept[0].distributed, "kept with the route it came by");
     }
 
-    #[test]
-    fn an_upload_names_its_folder() {
-        assert_eq!(folder_of("Music\\A\\B\\01.flac"), "Music\\A\\B");
-        assert_eq!(folder_of("loose.flac"), "loose.flac");
+    #[tokio::test]
+    async fn visitors_and_folders_are_counted_by_day_as_rows_are_written() {
+        let db = Db::memory().await;
+        let a = Activity::new(db.clone());
+        let (yesterday, today) = (
+            stamp(Utc::now() - chrono::Duration::days(1)),
+            stamp(Utc::now()),
+        );
+        db.run(move |c| {
+            let event = "INSERT INTO share_events (at, kind, username, detail, distributed) VALUES (?1, ?2, ?3, ?4, 0)";
+            c.execute(event, params![yesterday, "folder", "Ann", "Music\\BoC\\Geogaddi"])?;
+            c.execute(event, params![today, "browse", "ann", None::<String>])?;
+            c.execute(event, params![yesterday, "search", "Bob", "geogaddi"])?;
+            c.execute(event, params![today, "search", "Bob", "geogaddi"])?;
+            let upload = "INSERT INTO uploads (username, filename, size, bytes, state, finished_at) \
+                          VALUES (?1, ?2, 1, 1, ?3, ?4)";
+            c.execute(upload, params!["Cat", "Music\\BoC\\Geogaddi\\01.flac", "completed", today])?;
+            c.execute(upload, params!["Cat", "loose.flac", "completed", today])?;
+            c.execute(upload, params!["Cat", "Music\\BoC\\Geogaddi\\02.flac", "failed", today])?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+        let trends = a.trends(7).await.unwrap();
+        assert_eq!(
+            trends
+                .visitors
+                .iter()
+                .map(|v| (v.username.as_str(), v.days, v.events))
+                .collect::<Vec<_>>(),
+            [("ann", 2, 2)],
+            "one person whatever the case, and matched searches are not visits"
+        );
+        let folders: Vec<_> = trends
+            .folders
+            .iter()
+            .map(|f| (f.folder.as_str(), f.opens, f.downloads))
+            .collect();
+        assert_eq!(
+            folders,
+            [("Music\\BoC\\Geogaddi", 1, 1), ("loose.flac", 0, 1)],
+            "opens and completed uploads, by the file's folder"
+        );
     }
 }

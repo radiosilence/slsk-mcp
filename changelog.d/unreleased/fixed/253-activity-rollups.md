@@ -1,0 +1,1 @@
+- **The Activity page draws at once.** Its trends read per-day totals kept as activity is written instead of scanning a week of events, which took seconds on a busy share and made the page look hung. Visitors are now people who browsed, opened a folder or downloaded on more than one day; matched searches, relayed from everyone, no longer count.
