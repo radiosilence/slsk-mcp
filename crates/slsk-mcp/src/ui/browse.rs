@@ -25,7 +25,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use slsk_engine::slsk_proto::RawStr;
 use slsk_engine::slsk_proto::peer::Directory;
 
-use super::{UiState, failed, fields, flash_ok, human, many, one, patch, sse};
+use super::{UiState, failed, fields, flash_ok, human, one, patch};
 
 pub(super) fn routes() -> Router<UiState> {
     Router::new()
@@ -525,19 +525,19 @@ fn browse_at(s: UiState, q: &BrowseQuery) -> Response {
     let cache = s.browsed.clone();
     if engine.username() == p.username {
         let listing = cache.own(&engine, fresh);
-        return many(vec![
+        return askama_datastar::events(vec![
             here,
             patch(&render(&p, &listing, None, true)),
             patch("<div id=\"flash\"></div>"),
         ]);
     }
-    sse(async_stream::stream! {
+    askama_datastar::stream(async_stream::stream! {
         let username = p.username.clone();
-        yield Ok(here);
+        yield here;
         let listing = match cache.get(&username).filter(|_| !fresh) {
             Some(l) => l,
             None => {
-                yield Ok(patch(&note(&username, format!("Asking {username} for their shares…"))));
+                yield patch(&note(&username, format!("Asking {username} for their shares…")));
                 let info = tokio::time::timeout(Duration::from_secs(20), engine.user_info(&username));
                 let (dirs, info) = tokio::join!(engine.browse(&username), info);
                 match dirs {
@@ -550,18 +550,18 @@ fn browse_at(s: UiState, q: &BrowseQuery) -> Response {
                             queue: i.queue_size,
                             free: i.slots_free,
                         });
-                        yield Ok(patch(&render(&p, &l, info, false)));
+                        yield patch(&render(&p, &l, info, false));
                         return;
                     }
                     Err(e) => {
-                        yield Ok(patch(&note(&username, format!("{username} did not send their shares: {e}"))));
+                        yield patch(&note(&username, format!("{username} did not send their shares: {e}")));
                         return;
                     }
                 }
             }
         };
-        yield Ok(patch(&render(&p, &listing, None, false)));
-        yield Ok(patch("<div id=\"flash\"></div>"));
+        yield patch(&render(&p, &listing, None, false));
+        yield patch("<div id=\"flash\"></div>");
     })
     .into_response()
 }

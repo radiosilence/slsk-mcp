@@ -13,7 +13,7 @@ use axum::extract::{Query, State};
 use axum::response::Response;
 use axum::routing::{get, post};
 
-use super::{UiState, failed, fields, flash_ok, many, one, patch, signals};
+use super::{UiState, failed, fields, flash_ok, one, patch, signals};
 use crate::App;
 use crate::social::RoomLine;
 
@@ -391,7 +391,7 @@ async fn view(State(s): State<UiState>, Query(q): Query<Poll>) -> Response {
     html.push('\n');
     html.push_str(&count_html(&s.app).await);
     match thread.filter(|_| !q.poll) {
-        Some(t) => many(vec![patch(&html), super::place(&t.url())]),
+        Some(t) => askama_datastar::events(vec![patch(&html), super::place(&t.url())]),
         None => one(html),
     }
 }
@@ -418,7 +418,7 @@ async fn open(State(s): State<UiState>, body: Bytes) -> Response {
 /// The conversation drawn afresh, the lists (its unread count now zero) and
 /// the composer emptied.
 async fn opened(app: &App, t: &Thread, flash: Option<String>) -> Response {
-    many(vec![
+    askama_datastar::events(vec![
         patch(&format!(
             "{}\n{}\n{}\n{}",
             thread_html(app, Some(t)).await,
@@ -479,7 +479,7 @@ async fn leave(State(s): State<UiState>, body: Bytes) -> Response {
         return failed(&anyhow::anyhow!("Say which room."));
     };
     match s.app.social.leave_room(room).await {
-        Ok(()) => many(vec![
+        Ok(()) => askama_datastar::events(vec![
             patch(&format!(
                 "{}\n{}\n{}",
                 thread_html(&s.app, None).await,
@@ -499,7 +499,7 @@ async fn add_buddy(State(s): State<UiState>, body: Bytes) -> Response {
     };
     let note = super::field(&form, "note").unwrap_or_default().trim();
     match s.app.social.add_buddy(user, note).await {
-        Ok(()) => many(vec![
+        Ok(()) => askama_datastar::events(vec![
             patch(&format!(
                 "{}\n{}",
                 side_html(&s.app).await,

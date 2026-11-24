@@ -8,7 +8,7 @@ use axum::response::Response;
 use axum::routing::{get, post};
 use uuid::Uuid;
 
-use super::{UiState, failed, flash_ok, many, one, patch, signals};
+use super::{UiState, failed, flash_ok, one, patch, signals};
 use crate::App;
 use crate::social::Wish;
 
@@ -124,7 +124,7 @@ async fn add(State(s): State<UiState>, axum::Form(f): axum::Form<AddForm>) -> Re
         return failed(&anyhow::anyhow!("Say what to look for."));
     }
     match s.app.social.add_wish(q, f.lossless, f.grab).await {
-        Ok(_) => many(vec![
+        Ok(_) => askama_datastar::events(vec![
             patch(&format!(
                 "{}\n{}",
                 html(&s.app).await,

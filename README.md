@@ -365,7 +365,10 @@ re-file, credit, enrich, re-import, edit or bin), browsing a user's shares, prof
 settings and triage. Each has its own address, and the server draws that
 page whole around a shared layout, so a link or a reload costs one request
 and nothing for the other pages; Datastar then patches parts of it in place,
-and a live stream updates only what that page shows. Each action calls the
+and a live stream updates only what that page shows. The patches, the streams,
+the request checks and Datastar's script itself come from
+[askama_datastar](https://github.com/radiosilence/askama-datastar), which
+radiosilence's other web UIs share. Each action calls the
 same Rust the GraphQL resolvers call. Buttons show busy while their request is in flight and then the
 server's answer, never a guess. Anything that changes the library or reaches
 other people (binning, re-filing, enriching, banning, sending a message) asks

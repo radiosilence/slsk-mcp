@@ -21,7 +21,7 @@ use slsk_engine::slsk_proto::peer::UserInfo;
 use slsk_engine::slsk_proto::server::{FromServer, ToServer, UserStats, UserStatus};
 use slsk_engine::{Engine, Event, Profile};
 
-use super::{UiState, failed, flash_ok, human, many, patch, sse};
+use super::{UiState, failed, flash_ok, human, patch};
 
 pub(super) fn routes() -> Router<UiState> {
     Router::new()
@@ -194,7 +194,7 @@ async fn profile(State(s): State<UiState>, Query(q): Query<ProfileQuery>) -> Res
     };
     let username = q.username.trim().to_string();
     if username.is_empty() || username == engine.username() {
-        return many(vec![patch(&own(&s, &engine).await)]);
+        return askama_datastar::events(vec![patch(&own(&s, &engine).await)]);
     }
     let cached = s.profiles.get(&username).filter(|_| q.fresh.is_none());
     let cache = s.profiles.clone();
@@ -217,11 +217,11 @@ async fn profile(State(s): State<UiState>, Query(q): Query<ProfileQuery>) -> Res
             }
         })
     };
-    sse(async_stream::stream! {
+    askama_datastar::stream(async_stream::stream! {
         let server = from_server(&engine, &username).await;
         if !asking.is_finished() {
             let note = format!("Asking {username} for their profile…");
-            yield Ok(patch(&peer(&username, &server, None, Some(note))));
+            yield patch(&peer(&username, &server, None, Some(note)));
         }
         let html = match asking.await.map_err(|e| e.to_string()).and_then(|r| r) {
             Ok(info) => peer(&username, &server, Some(&info), None),
@@ -230,7 +230,7 @@ async fn profile(State(s): State<UiState>, Query(q): Query<ProfileQuery>) -> Res
                 peer(&username, &server, None, Some(note))
             }
         };
-        yield Ok(patch(&html));
+        yield patch(&html);
     })
     .into_response()
 }
@@ -390,7 +390,7 @@ async fn save(State(s): State<UiState>, mut multipart: Multipart) -> Response {
         return failed(&e.into());
     }
     engine.set_profile(profile);
-    many(vec![
+    askama_datastar::events(vec![
         patch(&own(&s, &engine).await),
         patch(&flash_ok("Profile saved.")),
     ])

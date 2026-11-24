@@ -12,9 +12,8 @@ use std::time::Duration;
 
 use askama::Template;
 use axum::Router;
-use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
-use axum::response::{IntoResponse, Response};
+use axum::response::Response;
 use axum::routing::post;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -22,11 +21,12 @@ use slsk_engine::slsk_proto::RawStr;
 use slsk_engine::slsk_proto::peer::SearchResponse;
 use uuid::Uuid;
 
-use super::{UiState, browse, escape, failed, human, one, patch, place_url, shown_of, sse};
+use super::{Shown, UiState, browse, escape, failed, human, one, patch, place_url};
 use crate::App;
 use crate::db::{self, SearchTab};
 use crate::folders::{Filter, Folder};
 use crate::graphql;
+use askama_datastar::Signals;
 
 pub(super) fn routes() -> Router<UiState> {
     Router::new()
@@ -395,7 +395,7 @@ pub(super) async fn results(State(s): State<UiState>, Query(view): Query<SearchQ
     if tab.searched_at.is_some() {
         let mut events = vec![patch(&kept(&s.app, &tab, shown).await)];
         events.extend(around);
-        return super::many(events);
+        return askama_datastar::events(events);
     }
     let Some(engine) = s.app.session.engine().cloned() else {
         return one(
@@ -408,7 +408,7 @@ pub(super) async fn results(State(s): State<UiState>, Query(view): Query<SearchQ
     let next = next(&tab, shown);
     let events = async_stream::stream! {
         for e in around {
-            yield Ok(e);
+            yield e;
         }
         let mut heard = graphql::listen(&engine, &tab.query, LISTEN);
         loop {
@@ -430,13 +430,13 @@ pub(super) async fn results(State(s): State<UiState>, Query(view): Query<SearchQ
                 error: error.map(|e| e.to_string()),
                 age: None,
             };
-            yield Ok(patch(&view.render().unwrap_or_default()));
+            yield patch(&view.render().unwrap_or_default());
             if done || heard.changed().await.is_err() {
                 break;
             }
         }
     };
-    sse(events).into_response()
+    askama_datastar::stream(events)
 }
 
 /// Send the browser to `url`, a page of the app's own.
@@ -448,8 +448,8 @@ fn go(url: &str) -> Response {
 }
 
 /// The strip redrawn, or the page moved when the tab it showed was closed.
-async fn redraw(app: &App, body: &Bytes) -> Response {
-    let active = Uuid::parse_str(&shown_of(body).tab).ok();
+async fn redraw(app: &App, shown: &Shown) -> Response {
+    let active = Uuid::parse_str(&shown.tab).ok();
     let tabs = db::search_tabs(&app.db).await.unwrap_or_default();
     match active {
         Some(id) if !tabs.iter().any(|t| t.id == id) => go(&match tabs.first() {
@@ -460,26 +460,34 @@ async fn redraw(app: &App, body: &Bytes) -> Response {
     }
 }
 
-async fn pin(State(s): State<UiState>, Path(id): Path<Uuid>, body: Bytes) -> Response {
+async fn pin(
+    State(s): State<UiState>,
+    Path(id): Path<Uuid>,
+    Signals(shown): Signals<Shown>,
+) -> Response {
     let pinned = match db::search_tab(&s.app.db, id).await {
         Ok(Some(t)) => !t.pinned,
-        Ok(None) => return redraw(&s.app, &body).await,
+        Ok(None) => return redraw(&s.app, &shown).await,
         Err(e) => return failed(&e.into()),
     };
     if let Err(e) = db::pin_search_tab(&s.app.db, id, pinned).await {
         return failed(&e.into());
     }
-    redraw(&s.app, &body).await
+    redraw(&s.app, &shown).await
 }
 
 /// Closing the tab the page shows moves to the one after it, or else the
 /// one before.
-async fn close(State(s): State<UiState>, Path(id): Path<Uuid>, body: Bytes) -> Response {
+async fn close(
+    State(s): State<UiState>,
+    Path(id): Path<Uuid>,
+    Signals(shown): Signals<Shown>,
+) -> Response {
     let tabs = db::search_tabs(&s.app.db).await.unwrap_or_default();
     if let Err(e) = db::close_search_tabs(&s.app.db, Some(id)).await {
         return failed(&e.into());
     }
-    let active = Uuid::parse_str(&shown_of(&body).tab).ok();
+    let active = Uuid::parse_str(&shown.tab).ok();
     if active == Some(id)
         && let Some(i) = tabs.iter().position(|t| t.id == id)
     {
@@ -488,14 +496,14 @@ async fn close(State(s): State<UiState>, Path(id): Path<Uuid>, body: Bytes) -> R
             .or(i.checked_sub(1).and_then(|i| tabs.get(i)));
         return go(&neighbour.map_or("/search".to_string(), |t| format!("/search?tab={}", t.id)));
     }
-    redraw(&s.app, &body).await
+    redraw(&s.app, &shown).await
 }
 
-async fn close_unpinned(State(s): State<UiState>, body: Bytes) -> Response {
+async fn close_unpinned(State(s): State<UiState>, Signals(shown): Signals<Shown>) -> Response {
     if let Err(e) = db::close_search_tabs(&s.app.db, None).await {
         return failed(&e.into());
     }
-    redraw(&s.app, &body).await
+    redraw(&s.app, &shown).await
 }
 
 async fn again(State(s): State<UiState>, Path(id): Path<Uuid>) -> Response {
