@@ -13,7 +13,7 @@
       <nav class="flex min-w-0 flex-[1_1_60%] flex-wrap items-baseline gap-x-1 gap-y-0.5 wrap-anywhere" title="Browse {{ f.username }} from here">{% for c in self.crumbs(f) %}{% if !loop.first %}<span class="text-meta text-muted">/</span>{% endif %}<a class="wrap-anywhere" target="_blank" rel="noopener" href="{{ crate::ui::browse_href(f.username, c.key) }}">{{ c.name }}</a>{% else %}<a class="wrap-anywhere" target="_blank" rel="noopener" href="{{ crate::ui::browse_href(f.username, "") }}">top</a>{% endfor %}</nav>
       <span class="flex-1 max-sm:hidden"></span>
       {{ crate::ui::ban_button(f.username, false)|safe }}
-      <button data-indicator="_dl_{{ loop.index }}" data-attr:disabled="$_dl_{{ loop.index }}" data-class:busy="$_dl_{{ loop.index }}" data-on:click="@post('/download', {contentType: 'form', selector: '#dl-{{ loop.index }}'})">Download</button>
+      <button class="primary" data-indicator="_dl_{{ loop.index }}" data-attr:disabled="$_dl_{{ loop.index }}" data-class:busy="$_dl_{{ loop.index }}" data-on:click="@post('/download', {contentType: 'form', selector: '#dl-{{ loop.index }}'})">Download</button>
     </div>
     <div class="text-meta text-muted wrap-anywhere">
       <a class="wrap-anywhere" target="_blank" rel="noopener" href="{{ crate::ui::profile_href(f.username) }}">{{ f.username }}</a> <span id="peer-{{ self.id(f) }}"></span> · {{ f.audio_files }} tracks · {{ self.quality(f) }} · {{ self.size(f.total_size) }} ·
