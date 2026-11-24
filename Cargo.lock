@@ -3170,7 +3170,6 @@ dependencies = [
  "sift-music",
  "slsk-engine",
  "slsk-testserver",
- "soulseek-rs-lib",
  "symphonia",
  "thiserror",
  "tokio",

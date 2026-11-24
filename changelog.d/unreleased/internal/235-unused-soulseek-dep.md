@@ -1,0 +1,1 @@
+- **Dropped the unused `soulseek-rs-lib` dependency from the slsk-mcp crate.** The protocol is reached through `slsk-engine`, which keeps it.
