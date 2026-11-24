@@ -1,6 +1,6 @@
 {
   "private": true,
   "devDependencies": {
-    "@radiosilence/theme": "0.2.1"
+    "@radiosilence/theme": "0.2.3"
   }
 }

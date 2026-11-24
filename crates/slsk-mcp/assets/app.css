@@ -742,6 +742,10 @@
     margin-top: 0;
   }
 
+  .panel > :last-child {
+    margin-bottom: 0;
+  }
+
   .notice {
     margin-block: calc(var(--spacing) * 4);
     align-items: baseline;
@@ -1031,6 +1035,7 @@
     width: auto;
     max-width: none;
     max-height: min(85dvh, calc(100dvh - var(--keyboard-inset, 0px) - 1rem));
+    padding-bottom: max(var(--sheet-padding-bottom, 0px), env(safe-area-inset-bottom));
     border-width: 1px 0 0;
     margin: 0;
     position: fixed;
@@ -1040,8 +1045,9 @@
     dialog.sheet {
       width: 100%;
       max-width: var(--container-panel);
-      border-width: 1px;
       max-height: 85dvh;
+      padding-bottom: var(--sheet-padding-bottom, 0px);
+      border-width: 1px;
       margin: auto;
       inset: 0;
     }
