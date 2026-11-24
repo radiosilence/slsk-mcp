@@ -383,6 +383,7 @@ struct Crumb {
 struct BrowseView {
     username: String,
     mine: bool,
+    banned: bool,
     folders: usize,
     /// The top, then each folder down to the open one.
     crumbs: Vec<Crumb>,
@@ -414,7 +415,7 @@ fn quality(f: &slsk_engine::slsk_proto::peer::FileEntry) -> String {
     }
 }
 
-fn render(p: &Place, dirs: &[Directory], info: Option<Info>, mine: bool) -> String {
+fn render(p: &Place, dirs: &[Directory], info: Option<Info>, mine: bool, banned: bool) -> String {
     let mut crumbs = vec![Crumb {
         name: "top".into(),
         href: p.go(b""),
@@ -427,6 +428,7 @@ fn render(p: &Place, dirs: &[Directory], info: Option<Info>, mine: bool) -> Stri
     BrowseView {
         username: p.username.clone(),
         mine,
+        banned,
         folders: dirs.len(),
         crumbs,
         up,
@@ -452,6 +454,7 @@ fn note(username: &str, error: String) -> String {
     BrowseView {
         username: username.to_string(),
         mine: false,
+        banned: false,
         folders: 0,
         crumbs: Vec::new(),
         up: None,
@@ -527,7 +530,7 @@ fn browse_at(s: UiState, q: &BrowseQuery) -> Response {
         let listing = cache.own(&engine, fresh);
         return askama_datastar::events(vec![
             here,
-            patch(&render(&p, &listing, None, true)),
+            patch(&render(&p, &listing, None, true, false)),
             patch("<div id=\"flash\"></div>"),
         ]);
     }
@@ -550,7 +553,7 @@ fn browse_at(s: UiState, q: &BrowseQuery) -> Response {
                             queue: i.queue_size,
                             free: i.slots_free,
                         });
-                        yield patch(&render(&p, &l, info, false));
+                        yield patch(&render(&p, &l, info, false, engine.is_banned(&username)));
                         return;
                     }
                     Err(e) => {
@@ -560,7 +563,7 @@ fn browse_at(s: UiState, q: &BrowseQuery) -> Response {
                 }
             }
         };
-        yield patch(&render(&p, &listing, None, false));
+        yield patch(&render(&p, &listing, None, false, engine.is_banned(&username)));
         yield patch("<div id=\"flash\"></div>");
     })
     .into_response()

@@ -5,7 +5,7 @@
       <div class="grid min-w-0 flex-auto gap-1.5">
         <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
           <strong class="min-w-0 flex-auto wrap-anywhere">{{ username }}{% if mine %} (you){% endif %}</strong>
-          {% if let Some(st) = status %}<span class="pill {{ st }}">{{ st }}</span>{% endif %}
+          {% if let Some(st) = status %}<span class="pill {{ st }}">{{ st }}</span>{% endif %}{% if banned %}<span class="pill">banned</span>{% endif %}
         </div>
         {% if !description.is_empty() %}<p class="whitespace-pre-wrap wrap-anywhere">{{ description }}</p>{% else if !mine && note.is_none() %}<p class="text-meta text-muted">No description.</p>{% endif %}
         {% if let Some(n) = note %}<p class="text-meta text-muted wrap-anywhere">{{ n }}</p>{% endif %}
@@ -17,6 +17,7 @@
       <a class="button quiet" href="{{ crate::ui::chat_href("pm", username) }}">Message</a>
       <form id="profile-peer" hidden><input type="hidden" name="username" value="{{ username }}"></form>
       <button type="button" class="quiet" data-indicator="_prof_bud" data-attr:disabled="$_prof_bud" data-class:busy="$_prof_bud" data-on:click="@post('/chat/buddy/add', {contentType: 'form', selector: '#profile-peer'})">Add buddy</button>
+      {{ crate::ui::ban_button(username, *banned)|safe }}
       <button type="button" class="quiet" data-indicator="_prof_refresh" data-attr:disabled="$_prof_refresh" data-class:busy="$_prof_refresh" data-on:click="@get('{{ self.refresh() }}')">Refresh</button>
       {% endif %}
     </div>

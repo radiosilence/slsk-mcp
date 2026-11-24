@@ -183,6 +183,16 @@ In the web UI each job's page (`/jobs/<id>`) lists that history beside its
 source and the other copies found, and stays readable after the
 job is removed, so a failed or suspect job can be judged without the logs.
 
+Some peers list an album and send something else. Marking such a job as a
+scam (`markScam`, or Scam on its card) bans the peer, deletes what every job
+holding or fetching its files downloaded, and fetches each of those albums
+again from another peer, trying the job's fallbacks before a fresh search.
+Doing all of that at once matters because a scammer usually lists many
+albums, and its other jobs are as bad as the one noticed. A banned peer is
+never taken as a source by `grab`, a fallback, `nextSource` or the
+wishlist, and its folders are left out of search results, including answers
+reused from a search made before the ban.
+
 ### The library after import
 
 sift keeps an index of the whole library, derived from the files, so the
@@ -361,7 +371,8 @@ the other, and nothing else to either.
 
 The UI reaches everything GraphQL and MCP do, so a phone is a full client:
 search, downloads and uploads, then the wishlist, the library (one list of albums to
-re-file, credit, enrich, re-import, edit or bin), browsing a user's shares, profiles, rooms and private messages, bans,
+re-file, credit, enrich, re-import, edit or bin), browsing a user's shares, profiles, rooms and private messages, bans
+(from the bans page, or wherever a peer is shown: its profile, its shares, a job's page and a search result),
 settings and triage. Each has its own address, and the server draws that
 page whole around a shared layout, so a link or a reload costs one request
 and nothing for the other pages; Datastar then patches parts of it in place,

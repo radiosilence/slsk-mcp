@@ -96,6 +96,7 @@ pub(super) fn page(s: &UiState, username: &str) -> String {
 struct View {
     username: String,
     mine: bool,
+    banned: bool,
     status: Option<&'static str>,
     picture: Option<String>,
     description: String,
@@ -221,13 +222,13 @@ async fn profile(State(s): State<UiState>, Query(q): Query<ProfileQuery>) -> Res
         let server = from_server(&engine, &username).await;
         if !asking.is_finished() {
             let note = format!("Asking {username} for their profile…");
-            yield patch(&peer(&username, &server, None, Some(note)));
+            yield patch(&peer(&username, engine.is_banned(&username), &server, None, Some(note)));
         }
         let html = match asking.await.map_err(|e| e.to_string()).and_then(|r| r) {
-            Ok(info) => peer(&username, &server, Some(&info), None),
+            Ok(info) => peer(&username, engine.is_banned(&username), &server, Some(&info), None),
             Err(e) => {
                 let note = format!("{username} did not send their profile: {e}");
-                peer(&username, &server, None, Some(note))
+                peer(&username, engine.is_banned(&username), &server, None, Some(note))
             }
         };
         yield patch(&html);
@@ -237,6 +238,7 @@ async fn profile(State(s): State<UiState>, Query(q): Query<ProfileQuery>) -> Res
 
 pub(super) fn peer(
     username: &str,
+    banned: bool,
     server: &Server,
     info: Option<&UserInfo>,
     note: Option<String>,
@@ -265,6 +267,7 @@ pub(super) fn peer(
     View {
         username: username.to_string(),
         mine: false,
+        banned,
         status: server.status.map(status_word),
         picture: info
             .and_then(|i| i.picture.as_deref())
@@ -326,6 +329,7 @@ async fn own(s: &UiState, engine: &Engine) -> String {
         picture: profile.picture.as_deref().map(|p| picture_href(&me, p)),
         username: me,
         mine: true,
+        banned: false,
         status: server.status.map(status_word),
         description: profile.description,
         stats,

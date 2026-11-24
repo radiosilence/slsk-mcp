@@ -124,6 +124,32 @@ async fn two_engines_search_and_download() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_banned_peers_search_results_are_dropped() {
+    let server = TestServer::start().await;
+    let tmp = tempfile::tempdir().unwrap();
+    let music = tmp.path().join("music");
+    album(&music);
+
+    let alice = engine(&server, "alice", vec![music.clone()], tmp.path()).await;
+    wait_for_shares(&alice, 2).await;
+    let bob = engine(&server, "bob", vec![], tmp.path()).await;
+    bob.set_banned(["Alice".to_string()]);
+    assert!(bob.is_banned("alice"));
+
+    let mut results = bob.search("geogaddi ready").unwrap();
+    let heard = tokio::time::timeout(Duration::from_secs(3), results.recv()).await;
+    assert!(heard.is_err(), "a banned peer's result arrived: {heard:?}");
+
+    bob.set_banned([]);
+    let mut results = bob.search("geogaddi music").unwrap();
+    let response = tokio::time::timeout(Duration::from_secs(10), results.recv())
+        .await
+        .expect("no search result once unbanned")
+        .unwrap();
+    assert_eq!(response.username, "alice");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_profile_set_at_runtime_is_what_peers_see() {
     let server = TestServer::start().await;
     let tmp = tempfile::tempdir().unwrap();

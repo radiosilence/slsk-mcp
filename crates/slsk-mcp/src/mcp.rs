@@ -135,6 +135,9 @@ impl ServerHandler for SlskMcp {
                  source, or were upsampled; `error` says why and `analysis` has the per-track evidence. Tell the \
                  user, and prefer `nextSource(id)` (while `alternates` > 0) or grabbing again over `approveJob`, \
                  which imports it anyway.\n\n\
+                 When what a peer sent is not the album it listed (other music, a different album, junk under the \
+                 right names), the peer is a scammer: `markScam(id)` bans it and moves every job taking files from \
+                 it to another peer. Use it only on that evidence, not for a merely bad or lossy copy.\n\n\
                  `search` returns folders grouped by user, best first, for when the user wants to choose. Searching \
                  waits several seconds for peers to answer.\n\n\
                  Every search is relayed to thousands of peers, so they are rationed: a burst of four \

@@ -493,6 +493,9 @@ fn on_message(inner: &Arc<Inner>, username: &str, msg: PeerMessage, reply: &mpsc
             }
         }
         PeerMessage::SearchResponse(resp) => {
+            if inner.is_banned(username) || inner.is_banned(&resp.username) {
+                return;
+            }
             if let Some(tx) = inner.searches.get(&resp.token).map(|t| t.clone())
                 && tx.try_send(resp).is_err()
                 && tx.is_closed()

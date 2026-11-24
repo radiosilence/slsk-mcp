@@ -1,0 +1,1 @@
+- **Banned peers were still chosen as sources.** `grab`, a job's fallbacks, `nextSource` and the wishlist could pick a folder from a banned peer, and `search` listed them. Their search results are now dropped as they arrive and left out of answers reused from before the ban, and no job fetches from them.
