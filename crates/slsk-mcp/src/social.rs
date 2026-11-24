@@ -93,33 +93,142 @@ pub struct Social {
 /// How long before the same peer's check is answered again.
 const CHALLENGE_EVERY: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
 
-/// The token an anti-bot check asks to be typed back: `type "ABBCCC" in this
-/// chat`, with straight or curly quotes. `None` unless the message is plainly
-/// that and the token is 3–16 ASCII letters or digits; a link, or anything
-/// else asked for, is not answered.
+/// Words a check asks with, each followed by what to send back.
+const ASKS: &[&str] = &[
+    "type", "say", "write", "send", "reply", "respond", "answer", "enter",
+];
+/// Words between the ask and the answer: `type the word "x"`, `reply with "x"`.
+const FILLER: &[&str] = &[
+    "me",
+    "back",
+    "in",
+    "with",
+    "the",
+    "word",
+    "words",
+    "phrase",
+    "code",
+    "password",
+    "following",
+    "text",
+    "exactly",
+    "this",
+    "only",
+    "just",
+];
+/// What follows an unquoted answer for it to count: `type download in this chat`.
+const HERE: &[&str] = &[
+    "in this chat",
+    "in the chat",
+    "in chat",
+    "here",
+    "to me",
+    "back",
+    "in pm",
+    "in private",
+];
+/// A message is taken for a check only if it says something like one.
+const CHECK_SIGNS: &[&str] = &[
+    "chat",
+    "human",
+    "prove",
+    "verif",
+    "whitelist",
+    "robot",
+    "bot",
+    "captcha",
+    "here",
+];
+
+/// What an anti-bot check asks to be sent back: `type "ABBCCC" in this chat`,
+/// `say > please give it to me < in this chat`, `type the word download here`.
+/// `None` unless the message reads as a check, carries no link, and the
+/// answer is 1–48 characters of letters, digits, spaces and `-_!?,'`. The
+/// answer is the only thing taken from the message.
 fn challenge_token(message: &str) -> Option<String> {
     // ASCII-only, so byte offsets in `lower` are offsets in `message`.
     let lower = message.to_ascii_lowercase();
-    if lower.contains("http") || lower.contains("www.") || !lower.contains("chat") {
+    if ["http", "www.", "://"].iter().any(|l| lower.contains(l))
+        || !CHECK_SIGNS.iter().any(|s| lower.contains(s))
+    {
         return None;
     }
-    let at = lower.find("type ")? + "type ".len();
-    let rest = &message[at..];
-    let open = rest.chars().next()?;
-    let close = match open {
-        '"' => '"',
-        '\'' => '\'',
-        '\u{201c}' => '\u{201d}',
-        '\u{2018}' => '\u{2019}',
-        _ => return None,
+    let word_at = |i: usize, len: usize| {
+        let before = lower[..i].chars().next_back();
+        let after = lower[i + len..].chars().next();
+        !before.is_some_and(|c| c.is_alphanumeric()) && !after.is_some_and(|c| c.is_alphanumeric())
     };
-    let inner = &rest[open.len_utf8()..];
-    let token: String = inner.chars().take_while(|&c| c != close).collect();
-    let closed = inner[token.len()..].starts_with(close);
-    let ok = closed
-        && (3..=16).contains(&token.len())
-        && token.chars().all(|c| c.is_ascii_alphanumeric());
-    ok.then_some(token)
+    let mut asks: Vec<usize> = ASKS
+        .iter()
+        .flat_map(|a| {
+            lower
+                .match_indices(a)
+                .filter(|(i, _)| word_at(*i, a.len()))
+                .map(|(i, _)| i + a.len())
+        })
+        .collect();
+    asks.sort_unstable();
+    asks.into_iter()
+        .find_map(|at| answer_after(message, &lower, at))
+}
+
+/// The answer an ask ending at `at` wants: the quoted text after it, past
+/// any filler words, or a single unquoted word followed by one of [`HERE`].
+fn answer_after(message: &str, lower: &str, mut at: usize) -> Option<String> {
+    loop {
+        at += lower[at..].len() - lower[at..].trim_start_matches([' ', ':', ',', '-']).len();
+        let rest = &message[at..];
+        let open = rest.chars().next()?;
+        let close = match open {
+            '"' => '"',
+            '\'' => '\'',
+            '`' => '`',
+            '*' => '*',
+            '\u{201c}' => '\u{201d}',
+            '\u{2018}' => '\u{2019}',
+            '\u{ab}' => '\u{bb}',
+            '>' => '<',
+            '<' => '>',
+            '[' => ']',
+            _ => '\0',
+        };
+        if close != '\0' {
+            let inner = &rest[open.len_utf8()..];
+            let end = inner.find(close)?;
+            return valid(inner[..end].trim());
+        }
+        let len = rest
+            .find(|c: char| !c.is_ascii_alphanumeric())
+            .unwrap_or(rest.len());
+        if len == 0 {
+            return None;
+        }
+        let word = &lower[at..at + len];
+        at += len;
+        if FILLER.contains(&word) {
+            continue;
+        }
+        let after = lower[at..].trim_start();
+        return HERE
+            .iter()
+            .any(|h| after.starts_with(h))
+            .then(|| rest[..len].to_string());
+    }
+}
+
+fn valid(answer: &str) -> Option<String> {
+    let ok = (1..=48).contains(&answer.len())
+        && answer.chars().any(|c| c.is_ascii_alphanumeric())
+        && answer
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || " -_!?,'".contains(c));
+    ok.then(|| answer.to_string())
+}
+
+/// Whether a download is one we still want from its peer: live, or refused
+/// (as a check refuses everything until it is answered) and not given up on.
+fn wanted(state: &str) -> bool {
+    !matches!(state, "completed" | "cancelled")
 }
 
 impl Social {
@@ -320,20 +429,21 @@ impl Social {
     }
 
     /// Answer a peer's anti-bot check ("type "ABBCCC" in this chat") so the
-    /// downloads it is holding go ahead.
+    /// downloads it is holding go ahead, and ask again for those it refused.
     ///
     /// Decided by code, never by a model: the only thing taken from the
     /// message is a short alphanumeric token, and it goes back to the same
-    /// peer and nowhere else. Only for a peer we have downloads queued or
-    /// running with, and at most once a day each, so a stranger cannot make
+    /// peer and nowhere else. Only for a peer we have downloads queued,
+    /// running or refused with, and at most once a day each, so a stranger cannot make
     /// us message anyone and a peer cannot make us loop.
     async fn answer_challenge(&self, engine: &Engine, peer: &str, message: &str) {
         let Some(token) = challenge_token(message) else {
             return;
         };
-        let waiting = engine.downloads().iter().any(|d| {
-            d.username == peer && !matches!(d.state, "completed" | "failed" | "cancelled")
-        });
+        let waiting = engine
+            .downloads()
+            .iter()
+            .any(|d| d.username == peer && wanted(d.state));
         if !waiting {
             return;
         }
@@ -358,6 +468,14 @@ impl Social {
             return;
         }
         tracing::info!(peer, token, "answered a peer's download check");
+        // A check refuses every file until it is answered, and a peer that
+        // retries by itself offers files we have marked failed, which are
+        // turned away: ask for them again.
+        for d in engine.downloads() {
+            if d.username == peer && d.state == "failed" {
+                engine.retry_download(peer, &d.filename);
+            }
+        }
         let _ = self
             .record_sent(engine.username(), peer.into(), token)
             .await;
@@ -563,7 +681,7 @@ impl Social {
         let engine = self.engine()?;
         let mut waiting: HashMap<String, i64> = HashMap::new();
         for d in engine.downloads() {
-            if !matches!(d.state, "completed" | "failed" | "cancelled") {
+            if wanted(d.state) {
                 *waiting.entry(d.username.clone()).or_default() += 1;
             }
         }
