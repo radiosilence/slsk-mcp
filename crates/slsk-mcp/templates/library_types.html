@@ -1,0 +1,5 @@
+<div class="flex flex-wrap gap-1.5" role="group" aria-label="Secondary release types">
+{% for (t, on) in self.type_choices() %}
+  <label class="inline-flex cursor-pointer items-center border border-rule px-2 py-1 text-meta text-muted hover:bg-hover has-checked:border-brand has-checked:text-strong has-focus-visible:outline-2 has-focus-visible:outline-offset-2 has-focus-visible:outline-brand"><input class="sr-only" type="checkbox" name="type-secondary" value="{{ t }}"{% if on %} checked{% endif %}>{{ t }}</label>
+{% endfor %}
+</div>

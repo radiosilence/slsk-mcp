@@ -994,6 +994,15 @@ impl EditView<'_> {
     fn varies(&self, field: &str) -> bool {
         consensus(&self.tracks, field).1
     }
+    fn primary(&self) -> Option<String> {
+        primary_type(consensus(&self.tracks, "albumtypes").0)
+    }
+    fn primaries(&self) -> &'static [&'static str] {
+        PRIMARY_TYPES
+    }
+    fn type_choices(&self) -> Vec<(String, bool)> {
+        type_choices(consensus(&self.tracks, "albumtypes").0)
+    }
     fn value(&self, t: &sift::meta::Track, field: &str) -> String {
         t.field(field).unwrap_or_default()
     }
@@ -1032,6 +1041,12 @@ struct BatchView<'a> {
 impl BatchView<'_> {
     fn fields(&self) -> Vec<(&'static str, &'static str)> {
         batch_fields().collect()
+    }
+    fn primaries(&self) -> &'static [&'static str] {
+        PRIMARY_TYPES
+    }
+    fn type_choices(&self) -> Vec<(String, bool)> {
+        type_choices(None)
     }
 }
 
@@ -1858,20 +1873,103 @@ const TRACK_FIELDS: &[&str] = &["disc", "track", "title", "artist"];
 /// Of those, the ones that hold a number.
 const NUMBERS: &[&str] = &["disc", "track"];
 
-/// A value typed into the form as sift will write it, so one that differs
-/// only in spelling from what the files hold is not taken for a change.
-/// Release types are lower case, "; " between them.
+/// MusicBrainz's primary release group types, as Picard writes them. A
+/// release group has one at most.
+const PRIMARY_TYPES: &[&str] = &["album", "single", "ep", "broadcast", "other"];
+
+/// MusicBrainz's secondary release group types, as Picard writes them. Any
+/// number of them go with a primary type.
+const SECONDARY_TYPES: &[&str] = &[
+    "compilation",
+    "soundtrack",
+    "spokenword",
+    "interview",
+    "audiobook",
+    "audio drama",
+    "live",
+    "remix",
+    "dj-mix",
+    "mixtape/street",
+    "demo",
+    "field recording",
+];
+
+/// A value as sift will write it, so one that differs only in spelling or
+/// order from what the files hold is not taken for a change. Release types
+/// are lower case, "; " between them, the primary type first and then the
+/// secondary types in MusicBrainz's order; a type MusicBrainz lacks keeps
+/// its place after them.
 fn typed_as_written(field: &str, typed: String) -> String {
     if field != "albumtypes" {
         return typed;
     }
-    typed
-        .split(';')
-        .map(str::trim)
-        .filter(|t| !t.is_empty())
-        .map(str::to_lowercase)
+    let mut types: Vec<String> = Vec::new();
+    for t in typed.split(';').map(|t| t.trim().to_lowercase()) {
+        if !t.is_empty() && !types.contains(&t) {
+            types.push(t);
+        }
+    }
+    let rank = |t: &String| {
+        PRIMARY_TYPES
+            .iter()
+            .chain(SECONDARY_TYPES)
+            .position(|k| k == t)
+            .unwrap_or(usize::MAX)
+    };
+    types.sort_by_key(rank);
+    types.join("; ")
+}
+
+/// A release type's primary type, when it starts with one.
+fn primary_type(types: Option<String>) -> Option<String> {
+    let types = typed_as_written("albumtypes", types?);
+    let first = types.split("; ").next()?;
+    PRIMARY_TYPES.contains(&first).then(|| first.to_string())
+}
+
+/// The release type the form's type controls ask for, as sift writes it, or
+/// `None` for no change: a form without them, or one keeping the type as it
+/// is. Secondary types chosen with the primary type kept go with `kept`.
+fn typed_release_type(form: &[(String, String)], kept: Option<String>) -> Option<String> {
+    let primary = super::field(form, "type-primary")?;
+    let secondary = form
+        .iter()
+        .filter(|(k, _)| k == "type-secondary")
+        .map(|(_, v)| v.as_str());
+    let primary = match primary {
+        "keep" if !form.iter().any(|(k, _)| k == "type-secondary") => return None,
+        "keep" => kept.unwrap_or_default(),
+        p => p.to_string(),
+    };
+    let typed = std::iter::once(primary.as_str())
+        .chain(secondary)
         .collect::<Vec<_>>()
-        .join("; ")
+        .join(";");
+    Some(typed_as_written("albumtypes", typed))
+}
+
+/// The secondary types to offer as toggles, each with whether `current`
+/// has it: MusicBrainz's, then any other type the files hold, so it can be
+/// taken off.
+fn type_choices(current: Option<String>) -> Vec<(String, bool)> {
+    let current: Vec<String> = typed_as_written("albumtypes", current.unwrap_or_default())
+        .split("; ")
+        .filter(|t| !t.is_empty())
+        .map(str::to_string)
+        .collect();
+    let has = |t: &str| current.iter().any(|c| c == t);
+    SECONDARY_TYPES
+        .iter()
+        .map(|t| (t.to_string(), has(t)))
+        .chain(
+            current
+                .iter()
+                .filter(|c| {
+                    !PRIMARY_TYPES.contains(&c.as_str()) && !SECONDARY_TYPES.contains(&c.as_str())
+                })
+                .map(|c| (c.clone(), true)),
+        )
+        .collect()
 }
 
 /// What every file has for `field`, and whether they disagree.
@@ -1898,11 +1996,20 @@ pub(super) fn edits_from(
     };
     let mut edits = TagEdits::default();
     for (field, _) in ALBUM_FIELDS {
-        let Some(typed) = raw(&format!("a-{field}")).map(|v| typed_as_written(field, v)) else {
+        let typed = match *field {
+            "albumtypes" => typed_release_type(
+                form,
+                primary_type(tracks.first().and_then(|t| t.field(field))),
+            ),
+            _ => raw(&format!("a-{field}")),
+        };
+        let Some(typed) = typed else {
             continue;
         };
         let (now, varies) = consensus(tracks, field);
-        if (varies && typed.is_empty()) || (!varies && typed == now.unwrap_or_default().trim()) {
+        let now = typed_as_written(field, now.unwrap_or_default().trim().to_string());
+        // A release type is chosen rather than typed, so none chosen is a choice.
+        if (varies && typed.is_empty() && *field != "albumtypes") || (!varies && typed == now) {
             continue;
         }
         edits
@@ -1950,9 +2057,14 @@ pub(super) fn batch_edits_from(
     let mut edits = TagEdits::default();
     let mut asked = false;
     for (field, label) in batch_fields() {
-        let typed = super::field(form, &format!("a-{field}"))
-            .map(|v| typed_as_written(field, v.trim().to_string()))
-            .unwrap_or_default();
+        let typed = match field {
+            "albumtypes" => typed_release_type(
+                form,
+                primary_type(tracks.first().and_then(|t| t.field(field))),
+            ),
+            _ => super::field(form, &format!("a-{field}")).map(|v| v.trim().to_string()),
+        }
+        .unwrap_or_default();
         let typed = typed.as_str();
         let clear = super::field(form, &format!("clear-{field}")).is_some();
         let value = match (typed.is_empty(), clear) {
@@ -1962,10 +2074,11 @@ pub(super) fn batch_edits_from(
             (false, false) => Some(typed.to_string()),
         };
         asked = true;
-        if tracks
-            .iter()
-            .all(|t| t.field(field).map(|v| v.trim().to_string()) == value)
-        {
+        if tracks.iter().all(|t| {
+            t.field(field)
+                .map(|v| typed_as_written(field, v.trim().to_string()))
+                == value
+        }) {
             continue;
         }
         edits.album.push((field.to_string(), value));
