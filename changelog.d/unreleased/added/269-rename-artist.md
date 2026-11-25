@@ -1,1 +1,1 @@
-- **Rename an artist across albums.** The batch edit form renames an artist wherever a selected file's artist or album artist is exactly that name, leaving collaborations that include it alone.
+- **Rename an artist across albums.** The batch edit form renames an artist wherever a selected file's artist or album artist is that name, in any case, leaving collaborations that include it alone. A queued edit that changes single files now follows albums an earlier action moved.

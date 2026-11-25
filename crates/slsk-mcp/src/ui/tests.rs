@@ -668,7 +668,36 @@ mod library {
             ],
             "a collaboration naming the artist is left alone"
         );
+        assert_eq!(
+            batch_edits_from(
+                &tracks,
+                &form(&[("rename-from", "jay z"), ("rename-to", "JAY-Z")])
+            )
+            .unwrap()
+            .tracks
+            .len(),
+            3,
+            "the name is found in any case"
+        );
+        assert!(
+            batch_edits_from(
+                &tracks,
+                &form(&[("rename-from", "Jay Z"), ("rename-to", "Jay Z")])
+            )
+            .unwrap()
+            .is_empty(),
+            "renamed to itself, nothing changes"
+        );
         assert!(batch_edits_from(&tracks, &form(&[("rename-from", "Jay Z")])).is_err());
+        assert!(batch_edits_from(&tracks, &form(&[("rename-to", "JAY-Z")])).is_err());
+        assert!(
+            batch_edits_from(
+                &tracks,
+                &form(&[("rename-from", "  "), ("rename-to", "Foo")])
+            )
+            .is_err(),
+            "a blank old name is no name"
+        );
         assert!(
             batch_edits_from(
                 &tracks,

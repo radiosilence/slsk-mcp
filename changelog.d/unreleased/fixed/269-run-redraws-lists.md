@@ -1,1 +1,1 @@
-- **Library lists catch up when a run ends.** A page reloaded while a library action ran, or another tab, now reads its list again when the run ends instead of showing the albums as they were before it.
+- **Library lists catch up when a run ends.** Every page showing the library, including one reloaded while the action ran and other tabs, redraws the rows each run changed, with albums open among them kept open, instead of showing those albums as they were before it.
