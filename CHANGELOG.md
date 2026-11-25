@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.24.0
+
+### Changed
+
+- **Forms submit.** Every action that sends a form is now its submit button, so Enter submits and required fields are checked before anything is sent. Enter in an artist-split field runs Credit artists.
+
 ## 0.23.0
 
 ### Changed
