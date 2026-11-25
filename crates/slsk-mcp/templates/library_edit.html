@@ -9,7 +9,7 @@
     <div class="field col-span-full">
       <label for="{{ slot }}-type"><span>{{ label }}</span></label>
       <div class="flex flex-wrap items-center gap-2">
-        <select id="{{ slot }}-type" name="type-primary">
+        <select id="{{ slot }}-type" name="type-primary" data-on:change="el.closest('.field').querySelectorAll('[data-primary]').forEach(c => c.checked = false)">
         {% if self.varies(field) %}<option value="keep" selected>(differs between files)</option>{% endif %}
           <option value="none"{% if !self.varies(field) && self.primary().is_none() %} selected{% endif %}>none</option>
         {% for p in self.primaries() %}

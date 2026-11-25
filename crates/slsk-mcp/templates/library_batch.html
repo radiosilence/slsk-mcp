@@ -18,7 +18,7 @@
           {% endfor %}
           </select>
           {% include "library_types.html" %}
-          <label class="flex items-center gap-1.5 text-meta text-muted"><input type="checkbox" name="clear-{{ field }}" value="1" data-on:change="el.closest('.field').querySelectorAll('select, [name=type-secondary]').forEach(c => c.disabled = el.checked)"> clear</label>
+          <label class="flex items-center gap-1.5 text-meta text-muted"><input type="checkbox" name="clear-{{ field }}" value="1" data-init="el.closest('.field').querySelectorAll('select, [name=type-secondary]').forEach(c => c.disabled = el.checked)" data-on:change="el.closest('.field').querySelectorAll('select, [name=type-secondary]').forEach(c => c.disabled = el.checked)"> clear</label>
         </div>
       </div>
       {% else %}

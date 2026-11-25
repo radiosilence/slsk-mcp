@@ -569,7 +569,7 @@ mod library {
             "a second primary type is offered, so saving the form keeps it"
         );
         let differ = [
-            typed(&[]),
+            typed(&["album"]),
             sift::meta::Track {
                 path: "/m/a/2.flac".into(),
                 ..typed(&["ep"])
@@ -581,6 +581,32 @@ mod library {
             "one file's primary type is not given to the rest"
         );
         assert!(batch_edits_from(&differ, &keep_live).is_err());
+        let untyped = [
+            typed(&[]),
+            sift::meta::Track {
+                path: "/m/a/2.flac".into(),
+                ..typed(&["ep"])
+            },
+        ];
+        assert_eq!(
+            batch_edits_from(&untyped, &keep_live).unwrap().album,
+            [("albumtypes".to_string(), Some("ep; live".to_string()))],
+            "a file with no type takes the others' primary type"
+        );
+        assert_eq!(
+            batch_edits_from(
+                &differ,
+                &form(&[
+                    ("type-primary", "keep"),
+                    ("type-secondary", "live"),
+                    ("clear-albumtypes", "1")
+                ])
+            )
+            .unwrap()
+            .album,
+            [("albumtypes".to_string(), None)],
+            "Clear wins over the type's other controls"
+        );
         assert!(
             edits_from(&differ, &form(&[("type-primary", "keep")]))
                 .unwrap()

@@ -1000,6 +1000,9 @@ impl EditView<'_> {
     fn primaries(&self) -> &'static [&'static str] {
         PRIMARY_TYPES
     }
+    fn is_primary(&self, t: &str) -> bool {
+        PRIMARY_TYPES.contains(&t)
+    }
     fn type_choices(&self) -> Vec<(String, bool)> {
         type_choices(consensus(&self.tracks, "albumtypes").0)
     }
@@ -1044,6 +1047,9 @@ impl BatchView<'_> {
     }
     fn primaries(&self) -> &'static [&'static str] {
         PRIMARY_TYPES
+    }
+    fn is_primary(&self, t: &str) -> bool {
+        PRIMARY_TYPES.contains(&t)
     }
     fn type_choices(&self) -> Vec<(String, bool)> {
         type_choices(None)
@@ -1927,18 +1933,18 @@ fn primary_type(types: Option<String>) -> Option<String> {
     PRIMARY_TYPES.contains(&first).then(|| first.to_string())
 }
 
-/// The primary type every file of an album has, for secondary types chosen
-/// with the primary type kept. Refused when the files differ, since one
-/// value is written to them all.
+/// The primary type an album's files have, for secondary types chosen with
+/// the primary type kept; a file with none takes the others'. Refused when
+/// two files have different ones, since one value is written to them all.
 fn kept_primary(tracks: &[sift::meta::Track]) -> anyhow::Result<Option<String>> {
-    let mut primaries = tracks.iter().map(|t| primary_type(t.field("albumtypes")));
-    let first = primaries.next().flatten();
-    if primaries.any(|p| p != first) {
+    let mut primaries = tracks
+        .iter()
+        .filter_map(|t| primary_type(t.field("albumtypes")));
+    let first = primaries.next();
+    if primaries.any(|p| Some(&p) != first.as_ref()) {
         let album = tracks
-            .first()
-            .and_then(|t| t.path.parent())
-            .and_then(|d| d.file_name())
-            .map(|d| d.to_string_lossy().into_owned())
+            .iter()
+            .find_map(|t| t.album.clone())
             .unwrap_or_default();
         anyhow::bail!(
             "{album}: its files have different primary release types, so choose one to go with the secondary types"
@@ -2086,13 +2092,15 @@ pub(super) fn batch_edits_from(
     let mut edits = TagEdits::default();
     let mut asked = false;
     for (field, label) in batch_fields() {
+        let clear = super::field(form, &format!("clear-{field}")).is_some();
         let typed = match field {
+            // Cleared, the type's other controls are not read.
+            "albumtypes" if clear => None,
             "albumtypes" => typed_release_type(form, tracks)?,
             _ => super::field(form, &format!("a-{field}")).map(|v| v.trim().to_string()),
         }
         .unwrap_or_default();
         let typed = typed.as_str();
-        let clear = super::field(form, &format!("clear-{field}")).is_some();
         let value = match (typed.is_empty(), clear) {
             (true, false) => continue,
             (false, true) => anyhow::bail!("{label}: type a value or tick Clear, not both"),
