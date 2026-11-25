@@ -2357,6 +2357,8 @@ async fn apply(State(s): State<UiState>, Path(action): Path<String>, body: Bytes
         .filter_map(|(k, v)| Some((k.strip_prefix("with-")?.to_string(), v.clone())))
         .collect();
     let split = super::field(&form, "split").unwrap_or_default().to_string();
+    // Held from the ticket to the queue, so actions queue in ticket order.
+    let queueing = s.queueing.lock().await;
     let ticket = match crate::db::queue_library_action(
         &s.app.db,
         action.slug(),
@@ -2386,6 +2388,7 @@ async fn apply(State(s): State<UiState>, Path(action): Path<String>, body: Bytes
             },
         );
     }
+    drop(queueing);
     run_next(&s);
     askama_datastar::stream(async_stream::stream! {
         yield patch(&run_html(&s));
@@ -2485,13 +2488,7 @@ fn run_next(s: &UiState) {
                 .collect();
             ((moved, run.done, run.failed()), waiting)
         };
-        let db = &app.db;
-        for (t, paths, with) in waiting {
-            if let Err(e) = crate::db::requeue_library_action(db, t, &paths, &with).await {
-                tracing::warn!(error = %e, "could not save the library queue");
-            }
-        }
-        if let Err(e) = crate::db::end_library_action(db, ticket).await {
+        if let Err(e) = crate::db::finish_library_action(&app.db, ticket, waiting).await {
             tracing::warn!(error = %e, "could not save the library queue");
         }
         if let Some(tx) = ended {
@@ -2501,8 +2498,10 @@ fn run_next(s: &UiState) {
 }
 
 /// Take up the library actions a restart interrupted, each from the first
-/// album it had not finished, and those queued behind them.
-pub(super) async fn resume(s: UiState) {
+/// album it had not finished, and those queued behind them. `queueing` is
+/// held from before the server answers, so nothing asked for since queues
+/// ahead of them.
+pub(super) async fn resume(s: UiState, queueing: tokio::sync::OwnedMutexGuard<()>) {
     let queued = match crate::db::library_queue(&s.app.db).await {
         Ok(q) => q,
         Err(e) => {
@@ -2512,8 +2511,9 @@ pub(super) async fn resume(s: UiState) {
     };
     let mut moved: HashMap<String, String> = HashMap::new();
     for q in queued {
+        let end = |t| crate::db::finish_library_action(&s.app.db, t, Vec::new());
         let Some(action) = Action::parse(&q.action) else {
-            let _ = crate::db::end_library_action(&s.app.db, q.ticket).await;
+            let _ = end(q.ticket).await;
             continue;
         };
         let mut next = Queued {
@@ -2535,7 +2535,18 @@ pub(super) async fn resume(s: UiState) {
                 .filter_map(|(from, to)| Some((from, to?))),
         );
         if next.paths.is_empty() {
-            let _ = crate::db::end_library_action(&s.app.db, q.ticket).await;
+            let _ = end(q.ticket).await;
+            continue;
+        }
+        if action == Action::SetArt {
+            // The image chosen was held in memory only.
+            let _ = end(q.ticket).await;
+            let mut run = s.run.lock();
+            run.id += 1;
+            run.action = Some(action);
+            run.total = next.paths.len();
+            run.error =
+                Some("A restart stopped this before it finished; choose the image again.".into());
             continue;
         }
         tracing::info!(
@@ -2546,10 +2557,12 @@ pub(super) async fn resume(s: UiState) {
         {
             let mut run = s.run.lock();
             run.tickets = run.tickets.max(next.ticket);
-            run.waiting.push(next);
+            let at = run.waiting.partition_point(|q| q.ticket < next.ticket);
+            run.waiting.insert(at, next);
         }
         run_next(&s);
     }
+    drop(queueing);
 }
 
 /// The rows of `paths` drawn again after an action: under the path each
@@ -2619,6 +2632,8 @@ fn edited(path: String) -> Outcome {
     }
 }
 
+/// Run an action, saving each album as it finishes, in order, and every
+/// one saved before the run is over.
 #[allow(clippy::too_many_arguments)]
 async fn run(
     app: &crate::App,
@@ -2630,16 +2645,36 @@ async fn run(
     with: &HashMap<String, String>,
     split: &str,
 ) -> anyhow::Result<()> {
-    let library = &app.library;
-    let root = library.root().to_string_lossy().into_owned();
-    let record = |o: Outcome| {
-        let db = app.db.clone();
-        let (path, to) = (o.path.clone(), o.to.clone());
-        tokio::spawn(async move {
+    let (saves, mut saving) = tokio::sync::mpsc::unbounded_channel::<(String, Option<String>)>();
+    let db = app.db.clone();
+    let writer = tokio::spawn(async move {
+        while let Some((path, to)) = saving.recv().await {
             if let Err(e) = crate::db::library_action_did(&db, ticket, &path, to.as_deref()).await {
                 tracing::warn!(error = %e, "could not save the library queue");
             }
-        });
+        }
+    });
+    let ran = run_albums(app, state, art, &saves, action, paths, with, split).await;
+    drop(saves);
+    let _ = writer.await;
+    ran
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_albums(
+    app: &crate::App,
+    state: &crate::live::Watched<LibraryRun>,
+    art: &ArtStash,
+    saves: &tokio::sync::mpsc::UnboundedSender<(String, Option<String>)>,
+    action: Action,
+    paths: &[String],
+    with: &HashMap<String, String>,
+    split: &str,
+) -> anyhow::Result<()> {
+    let library = &app.library;
+    let root = library.root().to_string_lossy().into_owned();
+    let record = |o: Outcome| {
+        let _ = saves.send((o.path.clone(), o.to.clone()));
         let mut run = state.lock();
         run.results.push(o);
         run.done += 1;

@@ -267,6 +267,7 @@ async fn live_stream_cost() {
             Default::default(),
         )),
         slot: Default::default(),
+        queueing: Default::default(),
         art: Default::default(),
         browsed: Default::default(),
         profiles: Default::default(),

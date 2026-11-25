@@ -1027,19 +1027,32 @@ pub async fn queue_library_action(
     .await
 }
 
-/// The albums a queued action is to work on, after one before it moved some.
-pub async fn requeue_library_action(
-    db: &Db,
-    ticket: u64,
-    paths: &[String],
-    attached: &HashMap<String, String>,
-) -> Result<()> {
-    let (paths, attached) = (paths.to_vec(), attached.clone());
+/// A queued action's albums, after one before it moved some.
+pub type Requeued = (u64, Vec<String>, HashMap<String, String>);
+
+/// An action ended, finished or not, so it is not taken up again; the
+/// actions behind it are pointed at where it moved their albums. One
+/// transaction, so where the albums went is never lost between the two.
+pub async fn finish_library_action(db: &Db, ticket: u64, requeued: Vec<Requeued>) -> Result<()> {
     db.run(move |c| {
-        c.execute(
-            "UPDATE library_queue SET paths = ?2, attached = ?3 WHERE ticket = ?1",
-            params![ticket as i64, Json(paths), Json(attached)],
+        let tx = c.transaction()?;
+        for (t, paths, attached) in requeued {
+            tx.execute(
+                "UPDATE library_queue SET paths = ?2, attached = ?3 WHERE ticket = ?1",
+                params![t as i64, Json(paths), Json(attached)],
+            )?;
+        }
+        // The action first: an album recorded after it is refused, and one
+        // recorded before it goes with the rest.
+        tx.execute(
+            "DELETE FROM library_queue WHERE ticket = ?1",
+            params![ticket as i64],
         )?;
+        tx.execute(
+            "DELETE FROM library_queue_done WHERE ticket = ?1",
+            params![ticket as i64],
+        )?;
+        tx.commit()?;
         Ok(())
     })
     .await
@@ -1054,24 +1067,6 @@ pub async fn library_action_did(db: &Db, ticket: u64, path: &str, to: Option<&st
             "INSERT OR REPLACE INTO library_queue_done (ticket, path, moved_to) \
              SELECT ?1, ?2, ?3 WHERE EXISTS (SELECT 1 FROM library_queue WHERE ticket = ?1)",
             params![ticket as i64, path, to],
-        )?;
-        Ok(())
-    })
-    .await
-}
-
-/// A library action ended, finished or not: it is not taken up again.
-pub async fn end_library_action(db: &Db, ticket: u64) -> Result<()> {
-    db.run(move |c| {
-        // The action first: an album recorded after it is refused, and one
-        // recorded before it goes with the rest.
-        c.execute(
-            "DELETE FROM library_queue WHERE ticket = ?1",
-            params![ticket as i64],
-        )?;
-        c.execute(
-            "DELETE FROM library_queue_done WHERE ticket = ?1",
-            params![ticket as i64],
         )?;
         Ok(())
     })
@@ -1757,10 +1752,9 @@ mod tests {
             ("edit", &attached, "x")
         );
 
-        requeue_library_action(&db, second, &paths(&["/B"]), &HashMap::new())
+        finish_library_action(&db, first, vec![(second, paths(&["/B"]), HashMap::new())])
             .await
             .unwrap();
-        end_library_action(&db, first).await.unwrap();
         library_action_did(&db, first, "/c", None).await.unwrap();
         let queued = library_queue(&db).await.unwrap();
         assert_eq!(queued.len(), 1, "an ended action is not taken up again");
