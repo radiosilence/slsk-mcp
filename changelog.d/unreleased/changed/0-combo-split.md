@@ -1,0 +1,1 @@
+- **The artist-split box is joined to Credit artists.** The separator comes first and the action follows it as one control, so it reads as the value that action uses rather than a stray field between buttons.
