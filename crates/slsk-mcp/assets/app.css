@@ -780,6 +780,24 @@
     color: var(--warn);
   }
 
+  .combo {
+    align-items: stretch;
+    display: inline-flex;
+  }
+
+  .combo > * + * {
+    margin-left: -1px;
+  }
+
+  .combo > :is(input, select) {
+    flex: 1;
+  }
+
+  .combo > :focus-visible {
+    z-index: 10;
+    position: relative;
+  }
+
   .toggle {
     cursor: pointer;
     justify-content: space-between;
