@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.25.0
+
+### Changed
+
+- **The release type is chosen from MusicBrainz's types.** The album and batch edit forms offer the primary type as a select and the secondary types as toggles instead of a text field, since a misspelt type is written to the files and then ignored by every player. A type MusicBrainz lacks that the files already hold is offered as a toggle so it can be removed, and in the batch form secondary types chosen with the primary type left as is keep each album's own primary type.
+- **The artist-split box is joined to Credit artists.** The separator comes first and the action follows it as one control, so it reads as the value that action uses rather than a stray field between buttons.
+
 ## 0.24.0
 
 ### Changed
