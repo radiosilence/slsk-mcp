@@ -2449,11 +2449,21 @@ pub(super) fn run_events(s: &UiState, sent: &mut RunSent) -> Vec<axum::response:
     // again in one request, with what the page shows.
     let now = seen_of(&run);
     if now != sent.finished {
+        // The rows those runs touched, so the page names only those of them
+        // it has drawn.
+        let touched: Vec<String> = run
+            .finished
+            .iter()
+            .filter(|f| f.id > sent.finished)
+            .filter_map(|f| f.rows.as_ref())
+            .flat_map(|(paths, _)| paths.iter().map(|p| format!("'{}'", slot_of(p))))
+            .collect();
         events.push(super::append(
             "#lib-run",
             &format!(
-                r#"<div hidden data-init="$libseen = {now}; @get('/library/redraw?after={}&open=' + [...document.querySelectorAll('#library li > div[id]:not(:empty)')].map(d => d.id).join(',') + '&' + location.search.slice(1)); el.remove()"></div>"#,
-                sent.finished
+                r#"<div hidden data-init="$libseen = {now}; @get('/library/redraw?after={}&shown=' + [{}].filter(id => document.getElementById('row-' + id)).join(',') + '&open=' + [...document.querySelectorAll('#library li > div[id]:not(:empty)')].map(d => d.id).join(',') + '&' + location.search.slice(1))"></div>"#,
+                sent.finished,
+                touched.join(",")
             ),
         ));
         sent.finished = now;
@@ -2676,7 +2686,9 @@ pub(super) async fn resume(s: UiState, queueing: tokio::sync::OwnedMutexGuard<()
                 .collect(),
             with: q.attached,
             split: q.split,
-            all: false,
+            // Whether it was asked for every album the filter admits is
+            // not kept, so pages read the whole list after it.
+            all: true,
             ended: None,
         };
         next.follow(&moved);
@@ -2723,7 +2735,11 @@ pub(super) fn seen(s: &UiState) -> u64 {
 
 /// The last run that ended: the one before the run going, if one is.
 fn seen_of(run: &LibraryRun) -> u64 {
-    if run.running { run.id - 1 } else { run.id }
+    if run.running {
+        run.id.saturating_sub(1)
+    } else {
+        run.id
+    }
 }
 
 /// The rows of `paths` drawn again after an action: under the path each
@@ -2778,6 +2794,9 @@ async fn changed_rows(
 #[derive(serde::Deserialize, Default)]
 struct RedrawQuery {
     after: u64,
+    /// The slots of the rows the page has drawn, and of the albums open.
+    #[serde(default)]
+    shown: String,
     #[serde(default)]
     open: String,
 }
@@ -2788,12 +2807,14 @@ struct RedrawQuery {
 /// many albums, or runs no longer held (as after a restart).
 async fn redraw(State(s): State<UiState>, uri: http::Uri) -> Response {
     let filter: Filter = super::query(&uri);
-    let RedrawQuery { after, open } = super::query(&uri);
-    let open: Vec<String> = open
-        .split(',')
-        .filter(|o| !o.is_empty())
-        .map(str::to_string)
-        .collect();
+    let RedrawQuery { after, shown, open } = super::query(&uri);
+    let slots = |v: &str| -> HashSet<String> {
+        v.split(',')
+            .filter(|o| !o.is_empty())
+            .map(str::to_string)
+            .collect()
+    };
+    let (shown, open) = (slots(&shown), slots(&open).into_iter().collect::<Vec<_>>());
     let finished = {
         let run = s.run.read();
         let ended: Vec<&Finished> = run.finished.iter().filter(|f| f.id > after).collect();
@@ -2830,6 +2851,9 @@ async fn redraw(State(s): State<UiState>, uri: http::Uri) -> Response {
     askama_datastar::stream(async_stream::stream! {
         match finished {
             Some((paths, moved)) => {
+                // Only the rows the page has: another page or filter drew others.
+                let paths: Vec<String> =
+                    paths.into_iter().filter(|p| shown.contains(&slot_of(p))).collect();
                 for e in changed_rows(&s, &filter, &paths, &moved, &open).await {
                     yield e;
                 }
