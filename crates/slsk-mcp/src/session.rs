@@ -39,10 +39,10 @@ impl Session {
         })
     }
 
-    /// Push the account's bans as the database holds them into the engine.
-    pub async fn apply_bans(&self, engine: &Engine) -> Result<()> {
+    /// Push `account`'s bans as the database holds them into the engine.
+    pub async fn apply_bans(&self, engine: &Engine, account: &str) -> Result<()> {
         let _held = self.bans.lock().await;
-        engine.set_banned(db::bans(&self.db, &engine.username()).await?);
+        engine.set_banned(db::bans(&self.db, account).await?);
         Ok(())
     }
 
@@ -116,7 +116,7 @@ async fn apply_account_on_login(session: Arc<Session>, engine: Engine) {
         let logged_in = matches!(*status.borrow_and_update(), Status::LoggedIn { .. });
         if logged_in {
             let account = engine.username();
-            if let Err(e) = session.apply_bans(&engine).await {
+            if let Err(e) = session.apply_bans(&engine, &account).await {
                 tracing::warn!(error = %e, "could not load bans");
             }
             match db::profile(&session.db, &account).await {
