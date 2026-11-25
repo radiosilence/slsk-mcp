@@ -548,7 +548,13 @@ mod library {
             set("ep; live"),
             "secondary types chosen alone go beside the album's own primary type"
         );
-        assert!(batch(&[("type-primary", "album"), ("clear-albumtypes", "1")]).is_err());
+        assert_eq!(
+            batch(&[("type-primary", "album"), ("clear-albumtypes", "1")])
+                .unwrap()
+                .album,
+            [("albumtypes".to_string(), None)],
+            "Clear wins over a type chosen"
+        );
     }
 
     #[test]
