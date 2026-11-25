@@ -1,6 +1,6 @@
 <div id="lib-preview" class="panel">
   <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5"><strong class="min-w-0 flex-auto wrap-anywhere">Edit tags: {{ rows.len() }} album{% if rows.len() != 1 %}s{% endif %}</strong></div>
-  <form id="lib-batch" data-on:submit__prevent="@post('/library/preview/edit', {contentType: 'form', selector: '#lib-batch'})">
+  <form id="lib-batch" data-indicator="_pv_edit" data-on:submit="@post('/library/preview/edit', {contentType: 'form'})">
     <input type="hidden" name="batch" value="1">
     {% for r in rows %}<input type="hidden" name="path" value="{{ r.album.path }}">{% endfor %}
     {% include "library_filter.html" %}
@@ -14,7 +14,7 @@
     {% endfor %}
     </div>
     <div class="mt-2.5 flex flex-wrap items-center gap-2">
-      <button type="button" class="primary" data-indicator="_pv_edit" data-attr:disabled="$_pv_edit" data-class:busy="$_pv_edit" data-on:click="@post('/library/preview/edit', {contentType: 'form', selector: '#lib-batch'})">Preview edit</button>
+      <button class="primary" data-attr:disabled="$_pv_edit" data-class:busy="$_pv_edit">Preview edit</button>
       <button type="button" class="quiet" data-on:click="document.getElementById('lib-preview').replaceChildren()">Cancel</button>
     </div>
   </form>

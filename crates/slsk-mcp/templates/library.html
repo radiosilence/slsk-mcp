@@ -1,7 +1,9 @@
 <div id="library">
 {% if let Some(e) = error %}<p class="text-meta text-bad wrap-anywhere">{{ e }}</p>{% else %}
 {% if total == 0 %}<p class="text-meta text-muted">No albums match.</p>{% else %}
-<form id="lib-sel" data-signals="{_sel: 0, _spares: 0}"
+{#- Every button in the form submits it to its own `formaction`; `data-scroll` brings the preview it draws into view. -#}
+<form id="lib-sel" data-signals="{_sel: 0, _spares: 0, _lib_via: ''}" data-indicator="_lib_busy"
+  data-on:submit="$_lib_via = evt.submitter?.getAttribute('formaction') ?? ''; @post($_lib_via, {contentType: 'form'}); evt.submitter?.hasAttribute('data-scroll') && document.getElementById('lib-preview').scrollIntoView({block: 'start'})"
   data-on:change="evt.target.name == 'all' ? el.querySelectorAll('input[name=path]').forEach(c => c.checked = evt.target.checked) : (evt.target.checked || (el.querySelector('input[name=all]').checked = false)); $_sel = el.querySelector('input[name=all]').checked ? {{ total }} : el.querySelectorAll('input[name=path]:checked').length; $_spares = el.querySelector('input[name=all]').checked ? {{ spares }} : el.querySelectorAll('input[name=path][data-spare]:checked').length">
   {% include "library_filter.html" %}
   <div class="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-rule pt-1 pb-2">
@@ -15,13 +17,13 @@
   {{ more|safe }}
   <div class="sticky bottom-0 z-1 mt-2 flex flex-wrap items-center gap-2 border border-rule bg-bg px-3 py-2.5 pb-[max(10px,env(safe-area-inset-bottom))]" hidden data-attr:hidden="!($_sel > 0)">
     <span class="mr-auto text-ink" data-text="$_sel + ' selected'"></span>
-    <button type="button" data-indicator="_pv_refile" data-attr:disabled="$_pv_refile" data-class:busy="$_pv_refile" data-on:click="@post('/library/preview/refile', {contentType: 'form', selector: '#lib-sel'}); document.getElementById('lib-preview').scrollIntoView({block: 'start'})">Re-file</button>
-    <span class="flex items-center gap-1"><button type="button" data-indicator="_pv_credit" data-attr:disabled="$_pv_credit" data-class:busy="$_pv_credit" data-on:click="@post('/library/preview/credit', {contentType: 'form', selector: '#lib-sel'}); document.getElementById('lib-preview').scrollIntoView({block: 'start'})">Credit artists</button><input class="w-24 px-2 py-1 text-meta" form="lib-sel" name="split" placeholder="split on" aria-label="Separator to split artist credits on" title="Split each credit on this, as typed, for artists the library holds nothing else by" autocomplete="off"></span>
-    <button type="button" data-indicator="_pv_enrich" data-attr:disabled="$_pv_enrich" data-class:busy="$_pv_enrich" data-on:click="@post('/library/preview/enrich', {contentType: 'form', selector: '#lib-sel'}); document.getElementById('lib-preview').scrollIntoView({block: 'start'})">Enrich</button>
-    <button type="button" data-indicator="_pv_reimport" data-attr:disabled="$_pv_reimport" data-class:busy="$_pv_reimport" data-on:click="@post('/library/preview/reimport', {contentType: 'form', selector: '#lib-sel'}); document.getElementById('lib-preview').scrollIntoView({block: 'start'})">Re-tag</button>
-    <button type="button" data-indicator="_pv_batch" data-attr:disabled="$_pv_batch" data-class:busy="$_pv_batch" data-on:click="@post('/library/edit', {contentType: 'form', selector: '#lib-sel'}); document.getElementById('lib-preview').scrollIntoView({block: 'start'})">Edit tags</button>
-    <button type="button" data-indicator="_pv_unart" data-attr:disabled="$_pv_unart" data-class:busy="$_pv_unart" data-on:click="@post('/library/preview/remove-art', {contentType: 'form', selector: '#lib-sel'}); document.getElementById('lib-preview').scrollIntoView({block: 'start'})">Remove art</button>
-    <button type="button" hidden data-attr:hidden="!($_spares > 0)" data-indicator="_pv_bin" data-attr:disabled="$_pv_bin" data-class:busy="$_pv_bin" data-on:click="@post('/library/preview/bin', {contentType: 'form', selector: '#lib-sel'}); document.getElementById('lib-preview').scrollIntoView({block: 'start'})">Bin spares</button>
+    <button formaction="/library/preview/refile" data-scroll data-attr:disabled="$_lib_busy" data-class:busy="$_lib_busy && $_lib_via == '/library/preview/refile'">Re-file</button>
+    <span class="flex items-center gap-1"><button formaction="/library/preview/credit" data-scroll data-attr:disabled="$_lib_busy" data-class:busy="$_lib_busy && $_lib_via == '/library/preview/credit'">Credit artists</button><input class="w-24 px-2 py-1 text-meta" form="lib-sel" name="split" data-on:keydown="evt.key == 'Enter' && (evt.preventDefault(), el.previousElementSibling.click())" placeholder="split on" aria-label="Separator to split artist credits on" title="Split each credit on this, as typed, for artists the library holds nothing else by" autocomplete="off"></span>
+    <button formaction="/library/preview/enrich" data-scroll data-attr:disabled="$_lib_busy" data-class:busy="$_lib_busy && $_lib_via == '/library/preview/enrich'">Enrich</button>
+    <button formaction="/library/preview/reimport" data-scroll data-attr:disabled="$_lib_busy" data-class:busy="$_lib_busy && $_lib_via == '/library/preview/reimport'">Re-tag</button>
+    <button formaction="/library/edit" data-scroll data-attr:disabled="$_lib_busy" data-class:busy="$_lib_busy && $_lib_via == '/library/edit'">Edit tags</button>
+    <button formaction="/library/preview/remove-art" data-scroll data-attr:disabled="$_lib_busy" data-class:busy="$_lib_busy && $_lib_via == '/library/preview/remove-art'">Remove art</button>
+    <button formaction="/library/preview/bin" data-scroll hidden data-attr:hidden="!($_spares > 0)" data-attr:disabled="$_lib_busy" data-class:busy="$_lib_busy && $_lib_via == '/library/preview/bin'">Bin spares</button>
   </div>
 </form>
 {% endif %}

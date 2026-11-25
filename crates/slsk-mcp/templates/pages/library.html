@@ -1,15 +1,15 @@
 <div class="grid min-w-0 gap-3 *:min-w-0">
-  <form id="lib-find" class="flex flex-wrap items-center gap-2" data-indicator="_finding" data-on:submit__prevent="@post('/library/find', {contentType: 'form', selector: '#lib-find'})">
+  <form id="lib-find" class="flex flex-wrap items-center gap-2" data-indicator="_finding" data-on:submit="@post('/library/find', {contentType: 'form'})">
     <input class="basis-full" name="q" value="{{ q }}" data-bind:_libq placeholder="burial, artist:burial, year:1990..1999" aria-label="Find albums" autocomplete="off">
-    <select class="flex-auto" name="since" aria-label="Imported when" data-bind:_libsince data-on:change="$_libsince != 'date' && @post('/library/find', {contentType: 'form', selector: '#lib-find'})">
+    <select class="flex-auto" name="since" aria-label="Imported when" data-bind:_libsince data-on:change="$_libsince != 'date' && el.form.requestSubmit()">
       <option value="">imported any time</option>
       <option value="today">imported today</option>
       <option value="week">imported this week</option>
       <option value="month">imported this month</option>
       <option value="date">imported since…</option>
     </select>
-    <input class="flex-auto" type="date" name="from" aria-label="Imported since" data-bind:_libfrom{% if !dated %} hidden{% endif %} data-attr:hidden="$_libsince != 'date'" data-on:change="@post('/library/find', {contentType: 'form', selector: '#lib-find'})">
-    <select class="flex-auto" name="show" aria-label="Which albums" data-bind:_libshow data-on:change="@post('/library/find', {contentType: 'form', selector: '#lib-find'})">
+    <input class="flex-auto" type="date" name="from" aria-label="Imported since" data-bind:_libfrom{% if !dated %} hidden{% endif %} data-attr:hidden="$_libsince != 'date'" data-on:change="el.form.requestSubmit()">
+    <select class="flex-auto" name="show" aria-label="Which albums" data-bind:_libshow data-on:change="el.form.requestSubmit()">
       <option value="">every album</option>
       <option value="dups">held more than once</option>
       <option value="formats">in more than one format</option>

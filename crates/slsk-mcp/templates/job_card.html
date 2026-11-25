@@ -78,12 +78,12 @@
     </li>
     {% endfor %}
   </ul>
-  <form id="release-{{ j.id.as_str() }}" class="my-1.5 flex flex-wrap items-center gap-2" data-on:submit__prevent="@post('/jobs/{{ j.id.as_str() }}/release', {contentType: 'form', selector: '#release-{{ j.id.as_str() }}'})">
+  <form id="release-{{ j.id.as_str() }}" class="my-1.5 flex flex-wrap items-center gap-2" data-indicator="{{ self.sig(j) }}" data-on:submit="@post('/jobs/{{ j.id.as_str() }}/release', {contentType: 'form'})">
     <input type="hidden" name="jobs" value="{{ crate::ui::PAGE }}" data-attr:value="$jobs">
     <input type="hidden" name="job" data-attr:value="$job">
     <input type="hidden" name="files" data-attr:value="$files">
     <input class="flex-[1_1_12em]" name="release" aria-label="Release id or link" placeholder="{% if discogs %}MusicBrainz or Discogs release id or link{% else %}MusicBrainz release id or link{% endif %}" autocomplete="off" required>
-    <button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}">Use release</button>
+    <button data-attr:disabled="${{ self.sig(j) }}">Use release</button>
   </form>
   {% endif %}
   {% match self.advice(j) %}{% when Some with (a) %}<p class="notice mt-2.5 mb-0"><span><strong>suggested:</strong> {{ a.why }}</span></p>{% when None %}{% endmatch %}

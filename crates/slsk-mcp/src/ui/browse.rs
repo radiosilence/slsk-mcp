@@ -320,13 +320,6 @@ struct Nodes {
 }
 
 impl Nodes {
-    /// A Download button's own busy signal, from the key it sends.
-    fn sig(&self, key: &str) -> String {
-        use std::hash::{Hash, Hasher};
-        let mut h = std::hash::DefaultHasher::new();
-        key.hash(&mut h);
-        format!("_dl_{:x}", h.finish())
-    }
     fn size(&self, b: &u64) -> String {
         human(*b)
     }

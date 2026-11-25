@@ -1,5 +1,5 @@
 <div class="grid min-w-0 gap-3 *:min-w-0">
-  <form id="wish-form" class="flex flex-wrap items-center gap-2" data-indicator="_wishing" data-on:submit__prevent="@post('/wishlist/add', {contentType: 'form', selector: '#wish-form'})">
+  <form id="wish-form" class="flex flex-wrap items-center gap-2" data-indicator="_wishing" data-on:submit="@post('/wishlist/add', {contentType: 'form'})">
     <input class="basis-full" name="q" data-bind:_wishq placeholder="Artist album nobody shares yet" aria-label="Artist and album to wish for" autocomplete="off" required>
     <label class="flex items-center gap-1.5 text-muted"><input type="checkbox" name="lossless" value="true" checked> lossless</label>
     <label class="flex items-center gap-1.5 text-muted"><input type="checkbox" name="grab" value="true" checked> grab when found</label>
