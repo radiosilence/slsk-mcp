@@ -531,7 +531,10 @@ mod library {
                 release_types: vec!["ep".into()],
                 ..track("/m/a/1.flac", "One", "Monstre", None)
             },
-            track("/m/a/2.flac", "Two", "Monstre", None),
+            sift::meta::Track {
+                release_types: vec!["ep".into(), "remix".into()],
+                ..track("/m/a/2.flac", "Two", "Monstre", None)
+            },
         ];
         let batch = |pairs: &[(&str, &str)]| batch_edits_from(&tracks, &form(pairs));
         assert!(
