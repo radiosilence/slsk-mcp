@@ -544,7 +544,7 @@ To run the service locally: a `SEAL_KEY`, and
 `UI_INSECURE_NO_AUTH=1 UI_ADDR=127.0.0.1:8080`.
 
 The web UI is drawn with the kōan web kit from
-[@radiosilence/theme](https://github.com/radiosilence/theme), shared with koan
+[@radiosilence/koan-kit-web](https://github.com/radiosilence/koan/tree/main/koan-kit-web), shared with koan
 and the other web UIs so they look and read alike: its element defaults, button
 weights, panels, statuses, meter and toast, on square corners with no shadows. The palette is dark unless the device asks for light. Layout is
 Tailwind v4 utilities in the templates and in the HTML the Rust code writes.

@@ -28,14 +28,14 @@ css-fresh: theme kit-check
     trap 'rm -f "$css"' EXIT
     tailwindcss --optimize --input crates/slsk-mcp/styles/app.css --output "$css"
     cmp -s "$css" crates/slsk-mcp/assets/app.css || { echo 'assets/app.css is stale: run `just css`'; exit 1; }
-    cmp -s node_modules/@radiosilence/theme/geist-mono.woff2 crates/slsk-mcp/assets/geist-mono.woff2 || { echo 'assets/geist-mono.woff2 is stale: run `just css`'; exit 1; }
+    cmp -s node_modules/@radiosilence/koan-kit-web/geist-mono.woff2 crates/slsk-mcp/assets/geist-mono.woff2 || { echo 'assets/geist-mono.woff2 is stale: run `just css`'; exit 1; }
 
 # Fail on markup outside the kōan web kit: rounded corners, shadows, Tailwind's palette and type sizes, inline styles.
 # Most compile to nothing, so a leftover silently loses its look. A deliberate exception carries `kit: raw` and why.
 kit-check: theme
-    node node_modules/@radiosilence/theme/kit-check.mjs crates/slsk-mcp/templates crates/slsk-mcp/src
+    node node_modules/@radiosilence/koan-kit-web/kit-check.mjs crates/slsk-mcp/templates crates/slsk-mcp/src
 
-# Install the shared theme (@radiosilence/theme) the stylesheet imports, writing the registry token first if missing.
+# Install the shared theme (@radiosilence/koan-kit-web) the stylesheet imports, writing the registry token first if missing.
 theme:
     @test -s .npmrc.auth || just auth
     aube install --frozen-lockfile
@@ -66,7 +66,7 @@ versions:
 # either is stale.
 css: theme kit-check
     tailwindcss --optimize --input crates/slsk-mcp/styles/app.css --output crates/slsk-mcp/assets/app.css
-    cp node_modules/@radiosilence/theme/geist-mono.woff2 crates/slsk-mcp/assets/geist-mono.woff2
+    cp node_modules/@radiosilence/koan-kit-web/geist-mono.woff2 crates/slsk-mcp/assets/geist-mono.woff2
 
 # Format
 fmt:
