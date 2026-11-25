@@ -1,0 +1,1 @@
+- **Transfer progress redraws four times a second.** Bars, byte counts and time left moved every display frame, which cost a busy page its smoothness; they now step at 4 Hz between the server's once-a-second measurements.
