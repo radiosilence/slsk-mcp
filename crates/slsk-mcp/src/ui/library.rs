@@ -2367,7 +2367,7 @@ async fn apply(State(s): State<UiState>, Path(action): Path<String>, body: Bytes
     .await
     {
         Ok(t) => t,
-        Err(e) => return failed(&e),
+        Err(e) => return failed(&e.into()),
     };
     let (tx, rx) = tokio::sync::oneshot::channel();
     {

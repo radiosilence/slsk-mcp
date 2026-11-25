@@ -1769,7 +1769,7 @@ mod tests {
             (paths(&["/B"]), 0)
         );
         let left: i64 = db
-            .run(|c| Ok(c.query_row("SELECT count(*) FROM library_queue_done", [], |r| r.get(0))?))
+            .run(|c| c.query_row("SELECT count(*) FROM library_queue_done", [], |r| r.get(0)))
             .await
             .unwrap();
         assert_eq!(
