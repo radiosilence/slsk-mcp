@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.26.0
+
+### Changed
+
+- **Transfer progress redraws four times a second.** Bars, byte counts and time left moved every display frame, which cost a busy page its smoothness; they now step at 4 Hz between the server's once-a-second measurements.
+
+### Removed
+
+- **Grab best is gone from the finder.** It took the top search result without a look, which was too often the wrong release. The finder is a single search field whose Search button is the default, so Enter opens the results to choose from; `grab` over GraphQL and MCP is unchanged.
+
+### Internal
+
+- **The web kit is `@radiosilence/koan-kit-web`.** The same kit as `@radiosilence/theme` 0.2.9, renamed and now published from the koan repository.
+
 ## 0.25.0
 
 ### Changed
