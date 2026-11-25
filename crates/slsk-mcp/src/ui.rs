@@ -55,6 +55,8 @@ pub struct UiState {
     run: Arc<crate::live::Watched<library::LibraryRun>>,
     /// Held by the library action running; the ones waiting take it in turn.
     slot: Arc<tokio::sync::Mutex<()>>,
+    /// Held while a library action takes its ticket and joins the queue.
+    queueing: Arc<tokio::sync::Mutex<()>>,
     /// Album art previewed and not yet applied.
     art: library::ArtStash,
     browsed: browse::Cache,
@@ -75,10 +77,17 @@ pub fn router(app: Arc<App>) -> Router {
             Default::default(),
         )),
         slot: Default::default(),
+        queueing: Default::default(),
         art: Default::default(),
         browsed: Default::default(),
         profiles: Default::default(),
     };
+    let queueing = state
+        .queueing
+        .clone()
+        .try_lock_owned()
+        .expect("nothing else holds a new lock");
+    tokio::spawn(library::resume(state.clone(), queueing));
     let protected = Router::new()
         // Drawn whole by `pages`; nothing fetches a fragment of them.
         .route("/", get(StatusCode::NOT_FOUND))

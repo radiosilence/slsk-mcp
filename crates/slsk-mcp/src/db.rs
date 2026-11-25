@@ -18,6 +18,7 @@
 //! stored values, so timestamps are bound with [`ts`] and read with
 //! [`ts_from`].
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -123,6 +124,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0009_retry_at.sql"),
     include_str!("../migrations/0010_share_activity.sql"),
     include_str!("../migrations/0011_activity_rollups.sql"),
+    include_str!("../migrations/0012_library_queue.sql"),
 ];
 
 /// How many idle connections to keep. More than the concurrency the service
@@ -989,6 +991,125 @@ pub async fn find_search_tab(db: &Db, query: &str, lossless: bool) -> Result<Opt
     .await
 }
 
+/// A library action from the web UI, waiting or part way through.
+#[derive(Debug, PartialEq)]
+pub struct LibraryQueued {
+    pub ticket: u64,
+    pub action: String,
+    pub paths: Vec<String>,
+    pub attached: HashMap<String, String>,
+    pub split: String,
+    /// The albums already finished, each with where it moved.
+    pub done: HashMap<String, Option<String>>,
+}
+
+/// Queue a library action; its ticket orders it after those before it.
+pub async fn queue_library_action(
+    db: &Db,
+    action: &str,
+    paths: &[String],
+    attached: &HashMap<String, String>,
+    split: &str,
+) -> Result<u64> {
+    let (action, paths, attached, split) = (
+        action.to_string(),
+        paths.to_vec(),
+        attached.clone(),
+        split.to_string(),
+    );
+    db.run(move |c| {
+        c.execute(
+            "INSERT INTO library_queue (action, paths, attached, split) VALUES (?1, ?2, ?3, ?4)",
+            params![action, Json(paths), Json(attached), split],
+        )?;
+        Ok(c.last_insert_rowid() as u64)
+    })
+    .await
+}
+
+/// A queued action's albums, after one before it moved some.
+pub type Requeued = (u64, Vec<String>, HashMap<String, String>);
+
+/// An action ended, finished or not, so it is not taken up again; the
+/// actions behind it are pointed at where it moved their albums. One
+/// transaction, so where the albums went is never lost between the two.
+pub async fn finish_library_action(db: &Db, ticket: u64, requeued: Vec<Requeued>) -> Result<()> {
+    db.run(move |c| {
+        let tx = c.transaction()?;
+        for (t, paths, attached) in requeued {
+            tx.execute(
+                "UPDATE library_queue SET paths = ?2, attached = ?3 WHERE ticket = ?1",
+                params![t as i64, Json(paths), Json(attached)],
+            )?;
+        }
+        // The action first: an album recorded after it is refused, and one
+        // recorded before it goes with the rest.
+        tx.execute(
+            "DELETE FROM library_queue WHERE ticket = ?1",
+            params![ticket as i64],
+        )?;
+        tx.execute(
+            "DELETE FROM library_queue_done WHERE ticket = ?1",
+            params![ticket as i64],
+        )?;
+        tx.commit()?;
+        Ok(())
+    })
+    .await
+}
+
+/// One album of a running action finished, and where it moved. Nothing is
+/// kept once the action has ended.
+pub async fn library_action_did(db: &Db, ticket: u64, path: &str, to: Option<&str>) -> Result<()> {
+    let (path, to) = (path.to_string(), to.map(str::to_string));
+    db.run(move |c| {
+        c.execute(
+            "INSERT OR REPLACE INTO library_queue_done (ticket, path, moved_to) \
+             SELECT ?1, ?2, ?3 WHERE EXISTS (SELECT 1 FROM library_queue WHERE ticket = ?1)",
+            params![ticket as i64, path, to],
+        )?;
+        Ok(())
+    })
+    .await
+}
+
+/// The library actions not yet ended, in the order they run.
+pub async fn library_queue(db: &Db) -> Result<Vec<LibraryQueued>> {
+    db.run(|c| {
+        let mut queued: Vec<LibraryQueued> = c
+            .prepare(
+                "SELECT ticket, action, paths, attached, split FROM library_queue ORDER BY ticket",
+            )?
+            .query_map([], |r| {
+                Ok(LibraryQueued {
+                    ticket: r.get::<_, i64>(0)? as u64,
+                    action: r.get(1)?,
+                    paths: r.get::<_, Json<Vec<String>>>(2)?.0,
+                    attached: r.get::<_, Json<HashMap<String, String>>>(3)?.0,
+                    split: r.get(4)?,
+                    done: HashMap::new(),
+                })
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        let mut done = c.prepare("SELECT ticket, path, moved_to FROM library_queue_done")?;
+        let rows = done.query_map([], |r| {
+            Ok((
+                r.get::<_, i64>(0)? as u64,
+                r.get::<_, String>(1)?,
+                r.get::<_, Option<String>>(2)?,
+            ))
+        })?;
+        for row in rows {
+            let (ticket, path, to) = row?;
+            if let Some(q) = queued.iter_mut().find(|q| q.ticket == ticket) {
+                q.done.insert(path, to);
+            }
+        }
+        Ok(queued)
+    })
+    .await
+}
+
 /// A new tab, running; the oldest unpinned tabs past the limit are closed.
 pub async fn open_search_tab(db: &Db, query: &str, lossless: bool) -> Result<Uuid> {
     let query = query.to_string();
@@ -1594,6 +1715,61 @@ mod tests {
                 .collect();
             assert!(scans.is_empty(), "{sql}\n{plan:#?}");
         }
+    }
+
+    #[tokio::test]
+    async fn the_library_queue_outlives_a_restart() {
+        let db = Db::memory().await;
+        let paths = |p: &[&str]| p.iter().map(|p| p.to_string()).collect::<Vec<_>>();
+        let attached = HashMap::from([("k".to_string(), "v".to_string())]);
+        let first = queue_library_action(&db, "refile", &paths(&["/a", "/b"]), &HashMap::new(), "")
+            .await
+            .unwrap();
+        let second = queue_library_action(&db, "edit", &paths(&["/b"]), &attached, "x")
+            .await
+            .unwrap();
+        assert!(second > first);
+        library_action_did(&db, first, "/a", Some("/A"))
+            .await
+            .unwrap();
+        library_action_did(&db, first, "/b", None).await.unwrap();
+
+        let queued = library_queue(&db).await.unwrap();
+        assert_eq!(queued.len(), 2);
+        assert_eq!(
+            queued[0].done,
+            HashMap::from([
+                ("/a".to_string(), Some("/A".to_string())),
+                ("/b".to_string(), None)
+            ])
+        );
+        assert_eq!(
+            (
+                queued[1].action.as_str(),
+                &queued[1].attached,
+                queued[1].split.as_str()
+            ),
+            ("edit", &attached, "x")
+        );
+
+        finish_library_action(&db, first, vec![(second, paths(&["/B"]), HashMap::new())])
+            .await
+            .unwrap();
+        library_action_did(&db, first, "/c", None).await.unwrap();
+        let queued = library_queue(&db).await.unwrap();
+        assert_eq!(queued.len(), 1, "an ended action is not taken up again");
+        assert_eq!(
+            (queued[0].paths.clone(), queued[0].done.len()),
+            (paths(&["/B"]), 0)
+        );
+        let left: i64 = db
+            .run(|c| c.query_row("SELECT count(*) FROM library_queue_done", [], |r| r.get(0)))
+            .await
+            .unwrap();
+        assert_eq!(
+            left, 0,
+            "an album recorded after its action ended is not kept"
+        );
     }
 
     #[tokio::test]
