@@ -549,6 +549,61 @@ mod library {
     }
 
     #[test]
+    fn a_release_type_is_not_lost_to_the_form() {
+        let typed = |types: &[&str]| sift::meta::Track {
+            release_types: types.iter().map(|t| t.to_string()).collect(),
+            ..track("/m/a/1.flac", "One", "Monstre", None)
+        };
+        // The form as drawn for "album; ep": the second primary type is a
+        // toggle, on.
+        assert!(
+            edits_from(
+                &[typed(&["album", "ep"])],
+                &form(&[("type-primary", "album"), ("type-secondary", "ep")])
+            )
+            .unwrap()
+            .is_empty(),
+            "a second primary type is offered, so saving the form keeps it"
+        );
+        let differ = [
+            typed(&[]),
+            sift::meta::Track {
+                path: "/m/a/2.flac".into(),
+                ..typed(&["ep"])
+            },
+        ];
+        let keep_live = form(&[("type-primary", "keep"), ("type-secondary", "live")]);
+        assert!(
+            edits_from(&differ, &keep_live).is_err(),
+            "one file's primary type is not given to the rest"
+        );
+        assert!(batch_edits_from(&differ, &keep_live).is_err());
+        assert!(
+            edits_from(&differ, &form(&[("type-primary", "keep")]))
+                .unwrap()
+                .is_empty(),
+            "kept, the type is left alone"
+        );
+        let reordered = [
+            typed(&["album", "live"]),
+            sift::meta::Track {
+                path: "/m/a/2.flac".into(),
+                ..typed(&["Live", "Album"])
+            },
+        ];
+        assert!(
+            edits_from(
+                &reordered,
+                &form(&[("type-primary", "album"), ("type-secondary", "live")])
+            )
+            .unwrap()
+            .album
+            .is_empty(),
+            "the same types in another order and case are one type"
+        );
+    }
+
+    #[test]
     fn a_release_is_its_id_or_a_link_to_it() {
         let id = "4c3e0b3c-2f8a-4a4b-9d6e-2a1f3b5c7d9e";
         assert_eq!(release_id(id).as_deref(), Some(id));
