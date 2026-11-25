@@ -7,7 +7,7 @@
     <p class="my-0.5 text-meta text-muted">What is typed is set on every file of every album; a field left blank is left as each album has it, and one ticked Clear is removed. Secondary release types chosen with the primary type left as is replace each album's own, beside the primary type it has. The preview lists each file's changes first. Changing the album artist clears each file's list of album artists and their MusicBrainz ids; Credit artists splits it again.</p>
     <div class="my-2 grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2">
     {% for (field, label) in self.fields() %}
-      {% if *field == "albumtypes" %}
+      {% if field == "albumtypes" %}
       <div class="field col-span-full">
         <label for="be-{{ field }}">{{ label }}</label>
         <div class="flex flex-wrap items-center gap-2">
