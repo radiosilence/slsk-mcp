@@ -74,7 +74,7 @@ pub fn router(app: Arc<App>) -> Router {
         http: reqwest::Client::new(),
         run: Arc::new(crate::live::Watched::new(
             crate::live::Topic::Library,
-            Default::default(),
+            library::LibraryRun::starting(),
         )),
         slot: Default::default(),
         queueing: Default::default(),
@@ -612,6 +612,9 @@ async fn render_page(
         "_libsince": filter.since,
         "_libfrom": filter.from,
         "_libshow": filter.show,
+        // The last library run whose changes the page has; the stream
+        // draws those after it.
+        "libseen": library::seen(s),
     })
     .to_string();
     let (mut status, mut heading) = (StatusCode::OK, search_tab.as_ref().map(|t| t.query.clone()));
