@@ -19,6 +19,9 @@ use crate::db;
 pub struct Session {
     engine: OnceCell<Engine>,
     start: Mutex<()>,
+    /// Held while bans are read from the database and pushed into the
+    /// engine, so an older read never lands after a newer one.
+    bans: Mutex<()>,
     cfg: Arc<Config>,
     db: crate::db::Db,
     sealer: Sealer,
@@ -30,9 +33,17 @@ impl Session {
             sealer: Sealer::new(&cfg.seal_key),
             engine: OnceCell::new(),
             start: Mutex::new(()),
+            bans: Mutex::new(()),
             cfg,
             db,
         })
+    }
+
+    /// Push `account`'s bans as the database holds them into the engine.
+    pub async fn apply_bans(&self, engine: &Engine, account: &str) -> Result<()> {
+        let _held = self.bans.lock().await;
+        engine.set_banned(db::bans(&self.db, account).await?);
+        Ok(())
     }
 
     pub fn engine(&self) -> Option<&Engine> {
@@ -105,9 +116,8 @@ async fn apply_account_on_login(session: Arc<Session>, engine: Engine) {
         let logged_in = matches!(*status.borrow_and_update(), Status::LoggedIn { .. });
         if logged_in {
             let account = engine.username();
-            match db::bans(&session.db, &account).await {
-                Ok(bans) => engine.set_banned(bans),
-                Err(e) => tracing::warn!(error = %e, "could not load bans"),
+            if let Err(e) = session.apply_bans(&engine, &account).await {
+                tracing::warn!(error = %e, "could not load bans");
             }
             match db::profile(&session.db, &account).await {
                 Ok(saved) => engine.set_profile(match saved {
