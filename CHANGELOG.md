@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.27.0
+
+### Fixed
+
+- **Library actions survive a restart.** Actions applied from the web UI, and those queued behind them, are kept in the database and resume after a restart from the first album not finished, instead of being lost on a deploy. An album interrupted part way is run again from the start; setting art does not resume, since the chosen image is held in memory only, and the run panel says so. Applying a preview also closes the album's edit, re-tag and art forms.
+- **A ban made during a login holds.** A login pushes the saved bans into the engine; a ban made while that ran could be overwritten by its older list, serving the peer until the next login. Bans are now read and applied one at a time, so the latest list always wins.
+- **The release type editor keeps what the files hold.** Saving an album's edit form no longer drops a second primary type (`album; ep`), which is now offered as a toggle; secondary types chosen with the primary type kept are refused for an album whose files have different primary types, rather than giving every file the first one's; files holding the same types in another order or case no longer read as differing; and ticking Clear on the batch form's release type disables its other controls.
+
 ## 0.26.0
 
 ### Changed
