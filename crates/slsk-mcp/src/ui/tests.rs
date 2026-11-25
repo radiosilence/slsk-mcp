@@ -517,7 +517,7 @@ mod library {
             "the same types in another order are no change"
         );
         assert_eq!(
-            typed(Some("ep; remix"), &[("type-primary", "")]),
+            typed(Some("ep; remix"), &[("type-primary", "none")]),
             [("albumtypes".to_string(), None)],
             "none chosen clears the type"
         );

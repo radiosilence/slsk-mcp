@@ -1939,6 +1939,7 @@ fn typed_release_type(form: &[(String, String)], kept: Option<String>) -> Option
     let primary = match primary {
         "keep" if !form.iter().any(|(k, _)| k == "type-secondary") => return None,
         "keep" => kept.unwrap_or_default(),
+        "none" => String::new(),
         p => p.to_string(),
     };
     let typed = std::iter::once(primary.as_str())
