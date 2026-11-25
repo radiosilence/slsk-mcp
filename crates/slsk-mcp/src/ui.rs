@@ -29,7 +29,7 @@ use uuid::Uuid;
 use crate::App;
 use crate::auth::session::Sessions;
 use crate::config::Config;
-use crate::folders::{Filter, Folder};
+use crate::folders::Folder;
 use crate::graphql::{self, Job, Transfer};
 
 mod activity;
