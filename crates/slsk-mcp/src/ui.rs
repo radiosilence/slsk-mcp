@@ -79,6 +79,7 @@ pub fn router(app: Arc<App>) -> Router {
         browsed: Default::default(),
         profiles: Default::default(),
     };
+    tokio::spawn(library::resume(state.clone()));
     let protected = Router::new()
         // Drawn whole by `pages`; nothing fetches a fragment of them.
         .route("/", get(StatusCode::NOT_FOUND))

@@ -1,0 +1,1 @@
+- **Library actions survive a restart.** Actions applied from the web UI, and those queued behind them, are kept in the database and resume from the first unfinished album when the service starts again, instead of being lost on a deploy. Applying a preview also closes the album's edit and re-tag forms.

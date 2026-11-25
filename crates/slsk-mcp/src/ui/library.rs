@@ -2184,7 +2184,15 @@ struct Queued {
     action: Action,
     paths: Vec<String>,
     with: HashMap<String, String>,
+    split: String,
+    /// The page that asked for it, waiting to hear how it ended; none for
+    /// one taken up again after a restart.
+    ended: Option<tokio::sync::oneshot::Sender<Ended>>,
 }
+
+/// How a run ended: where its albums moved, how many it did and how many
+/// of those failed.
+type Ended = (HashMap<String, String>, usize, usize);
 
 impl Queued {
     /// Points the run at where the run before it moved its albums.
@@ -2348,71 +2356,46 @@ async fn apply(State(s): State<UiState>, Path(action): Path<String>, body: Bytes
         .iter()
         .filter_map(|(k, v)| Some((k.strip_prefix("with-")?.to_string(), v.clone())))
         .collect();
-    let ticket = {
-        let mut run = s.run.lock();
-        run.tickets += 1;
-        let ticket = run.tickets;
-        run.waiting.push(Queued {
-            ticket,
-            action,
-            paths,
-            with,
-        });
-        ticket
+    let split = super::field(&form, "split").unwrap_or_default().to_string();
+    let ticket = match crate::db::queue_library_action(
+        &s.app.db,
+        action.slug(),
+        &paths,
+        &with,
+        &split,
+    )
+    .await
+    {
+        Ok(t) => t,
+        Err(e) => return failed(&e),
     };
     let (tx, rx) = tokio::sync::oneshot::channel();
-    let (app, state, art, slot) = (s.app.clone(), s.run.clone(), s.art.clone(), s.slot.clone());
-    let split = super::field(&form, "split").unwrap_or_default().to_string();
-    tokio::spawn(async move {
-        use futures_util::FutureExt;
-        let _slot = slot.lock().await;
-        let Some(Queued { paths, with, .. }) = ({
-            let mut run = state.lock();
-            let mine = run.waiting.iter().position(|q| q.ticket == ticket);
-            mine.map(|i| {
-                let q = run.waiting.remove(i);
-                *run = LibraryRun {
-                    id: run.id + 1,
-                    action: Some(action),
-                    total: q.paths.len(),
-                    running: true,
-                    waiting: std::mem::take(&mut run.waiting),
-                    tickets: run.tickets,
-                    ..Default::default()
-                };
-                q
-            })
-        }) else {
-            return;
-        };
-        // A panic in the run still frees the slot.
-        match std::panic::AssertUnwindSafe(run(&app, &state, &art, action, &paths, &with, &split))
-            .catch_unwind()
-            .await
-        {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => state.lock().error = Some(format!("{e:#}")),
-            Err(_) => state.lock().error = Some("stopped by an internal error".into()),
-        }
-        let ended = {
-            let mut run = state.lock();
-            run.current = None;
-            run.running = false;
-            let moved: HashMap<String, String> = run
-                .results
-                .iter()
-                .filter_map(|r| Some((r.path.clone(), r.to.clone()?)))
-                .collect();
-            for q in &mut run.waiting {
-                q.follow(&moved);
-            }
-            (moved, run.done, run.failed())
-        };
-        let _ = tx.send(ended);
-    });
+    {
+        let mut run = s.run.lock();
+        run.tickets = run.tickets.max(ticket);
+        let at = run.waiting.partition_point(|q| q.ticket < ticket);
+        run.waiting.insert(
+            at,
+            Queued {
+                ticket,
+                action,
+                paths,
+                with,
+                split,
+                ended: Some(tx),
+            },
+        );
+    }
+    run_next(&s);
     askama_datastar::stream(async_stream::stream! {
         yield patch(&run_html(&s));
+        // The album goes back to how it reads, every form on it closed.
         yield patch(&format!(r#"<div id="{from}-preview"></div>"#));
+        if from != "lib" {
+            yield patch(&format!(r#"<div id="{from}-edit"></div>"#));
+            yield patch(&format!(r#"<div id="{from}-retag"></div>"#));
+            yield super::signals(&format!(r#"{{"_{from}_artform": false}}"#));
+        }
         let Ok((moved, done, failed)) = rx.await else {
             return;
         };
@@ -2437,6 +2420,136 @@ async fn apply(State(s): State<UiState>, Path(action): Path<String>, body: Bytes
         yield patch(&flash_ok(&msg));
     })
     .into_response()
+}
+
+/// Take the next queued action once the one before it has finished. Each
+/// action queued spawns one of these, so each is run once.
+fn run_next(s: &UiState) {
+    let (app, state, art, slot) = (s.app.clone(), s.run.clone(), s.art.clone(), s.slot.clone());
+    tokio::spawn(async move {
+        use futures_util::FutureExt;
+        let _slot = slot.lock().await;
+        let Some(q) = ({
+            let mut run = state.lock();
+            (!run.waiting.is_empty()).then(|| {
+                let q = run.waiting.remove(0);
+                *run = LibraryRun {
+                    id: run.id + 1,
+                    action: Some(q.action),
+                    total: q.paths.len(),
+                    running: true,
+                    waiting: std::mem::take(&mut run.waiting),
+                    tickets: run.tickets,
+                    ..Default::default()
+                };
+                q
+            })
+        }) else {
+            return;
+        };
+        let Queued {
+            ticket,
+            action,
+            paths,
+            with,
+            split,
+            ended,
+        } = q;
+        // A panic in the run still frees the slot.
+        match std::panic::AssertUnwindSafe(run(
+            &app, &state, &art, ticket, action, &paths, &with, &split,
+        ))
+        .catch_unwind()
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => state.lock().error = Some(format!("{e:#}")),
+            Err(_) => state.lock().error = Some("stopped by an internal error".into()),
+        }
+        let (result, waiting) = {
+            let mut run = state.lock();
+            run.current = None;
+            run.running = false;
+            let moved: HashMap<String, String> = run
+                .results
+                .iter()
+                .filter_map(|r| Some((r.path.clone(), r.to.clone()?)))
+                .collect();
+            for q in &mut run.waiting {
+                q.follow(&moved);
+            }
+            let waiting: Vec<_> = run
+                .waiting
+                .iter()
+                .map(|q| (q.ticket, q.paths.clone(), q.with.clone()))
+                .collect();
+            ((moved, run.done, run.failed()), waiting)
+        };
+        let db = &app.db;
+        for (t, paths, with) in waiting {
+            if let Err(e) = crate::db::requeue_library_action(db, t, &paths, &with).await {
+                tracing::warn!(error = %e, "could not save the library queue");
+            }
+        }
+        if let Err(e) = crate::db::end_library_action(db, ticket).await {
+            tracing::warn!(error = %e, "could not save the library queue");
+        }
+        if let Some(tx) = ended {
+            let _ = tx.send(result);
+        }
+    });
+}
+
+/// Take up the library actions a restart interrupted, each from the first
+/// album it had not finished, and those queued behind them.
+pub(super) async fn resume(s: UiState) {
+    let queued = match crate::db::library_queue(&s.app.db).await {
+        Ok(q) => q,
+        Err(e) => {
+            tracing::warn!(error = %e, "could not read the library queue");
+            return;
+        }
+    };
+    let mut moved: HashMap<String, String> = HashMap::new();
+    for q in queued {
+        let Some(action) = Action::parse(&q.action) else {
+            let _ = crate::db::end_library_action(&s.app.db, q.ticket).await;
+            continue;
+        };
+        let mut next = Queued {
+            ticket: q.ticket,
+            action,
+            paths: q
+                .paths
+                .into_iter()
+                .filter(|p| !q.done.contains_key(p))
+                .collect(),
+            with: q.attached,
+            split: q.split,
+            ended: None,
+        };
+        next.follow(&moved);
+        moved.extend(
+            q.done
+                .into_iter()
+                .filter_map(|(from, to)| Some((from, to?))),
+        );
+        if next.paths.is_empty() {
+            let _ = crate::db::end_library_action(&s.app.db, q.ticket).await;
+            continue;
+        }
+        tracing::info!(
+            action = action.slug(),
+            albums = next.paths.len(),
+            "resuming a library action"
+        );
+        {
+            let mut run = s.run.lock();
+            run.tickets = run.tickets.max(next.ticket);
+            run.waiting.push(next);
+        }
+        run_next(&s);
+    }
 }
 
 /// The rows of `paths` drawn again after an action: under the path each
@@ -2506,10 +2619,12 @@ fn edited(path: String) -> Outcome {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run(
     app: &crate::App,
     state: &crate::live::Watched<LibraryRun>,
     art: &ArtStash,
+    ticket: u64,
     action: Action,
     paths: &[String],
     with: &HashMap<String, String>,
@@ -2518,6 +2633,13 @@ async fn run(
     let library = &app.library;
     let root = library.root().to_string_lossy().into_owned();
     let record = |o: Outcome| {
+        let db = app.db.clone();
+        let (path, to) = (o.path.clone(), o.to.clone());
+        tokio::spawn(async move {
+            if let Err(e) = crate::db::library_action_did(&db, ticket, &path, to.as_deref()).await {
+                tracing::warn!(error = %e, "could not save the library queue");
+            }
+        });
         let mut run = state.lock();
         run.results.push(o);
         run.done += 1;
