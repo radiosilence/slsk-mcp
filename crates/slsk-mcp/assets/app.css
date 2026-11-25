@@ -1149,6 +1149,18 @@
 }
 
 @layer utilities {
+  .sr-only {
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border-width: 0;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    position: absolute;
+    overflow: hidden;
+  }
+
   .fixed {
     position: fixed;
   }
@@ -1183,6 +1195,10 @@
 
   .order-last {
     order: 9999;
+  }
+
+  .col-span-full {
+    grid-column: 1 / -1;
   }
 
   .m-0 {
@@ -1293,6 +1309,10 @@
     display: none;
   }
 
+  .inline-flex {
+    display: inline-flex;
+  }
+
   .table {
     display: table;
   }
@@ -1376,6 +1396,10 @@
 
   .basis-full {
     flex-basis: 100%;
+  }
+
+  .cursor-pointer {
+    cursor: pointer;
   }
 
   .resize-y {
@@ -1807,6 +1831,10 @@
   }
 
   @media (hover: hover) {
+    .hover\:bg-hover:hover {
+      background-color: var(--hover);
+    }
+
     .hover\:text-ink:hover {
       color: var(--ink);
     }
@@ -1818,6 +1846,27 @@
     .hover\:opacity-100:hover {
       opacity: 1;
     }
+  }
+
+  .has-checked\:border-brand:has(:checked) {
+    border-color: var(--brand);
+  }
+
+  .has-checked\:text-strong:has(:checked) {
+    color: var(--strong);
+  }
+
+  .has-focus-visible\:outline-2:has(:focus-visible) {
+    outline-style: var(--tw-outline-style);
+    outline-width: 2px;
+  }
+
+  .has-focus-visible\:outline-offset-2:has(:focus-visible) {
+    outline-offset: 2px;
+  }
+
+  .has-focus-visible\:outline-brand:has(:focus-visible) {
+    outline-color: var(--brand);
   }
 
   .data-attr\:hidden[data-attr] {

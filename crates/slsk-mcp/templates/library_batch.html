@@ -4,13 +4,29 @@
     <input type="hidden" name="batch" value="1">
     {% for r in rows %}<input type="hidden" name="path" value="{{ r.album.path }}">{% endfor %}
     {% include "library_filter.html" %}
-    <p class="my-0.5 text-meta text-muted">What is typed is set on every file of every album; a field left blank is left as each album has it, and one ticked Clear is removed. The preview lists each file's changes first. Changing the album artist clears each file's list of album artists and their MusicBrainz ids; Credit artists splits it again.</p>
+    <p class="my-0.5 text-meta text-muted">What is typed is set on every file of every album; a field left blank is left as each album has it, and one ticked Clear is removed. Secondary release types chosen with the primary type left as is replace each album's own, beside the primary type it has. The preview lists each file's changes first. Changing the album artist clears each file's list of album artists and their MusicBrainz ids; Credit artists splits it again.</p>
     <div class="my-2 grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2">
     {% for (field, label) in self.fields() %}
+      {% if field == "albumtypes" %}
+      <div class="field col-span-full">
+        <label for="be-{{ field }}">{{ label }}</label>
+        <div class="flex flex-wrap items-center gap-2">
+          <select id="be-{{ field }}" name="type-primary">
+            <option value="keep" selected>leave as is</option>
+          {% for p in self.primaries() %}
+            <option value="{{ p }}">{{ p }}</option>
+          {% endfor %}
+          </select>
+          {% include "library_types.html" %}
+          <label class="flex items-center gap-1.5 text-meta text-muted"><input type="checkbox" name="clear-{{ field }}" value="1"> clear</label>
+        </div>
+      </div>
+      {% else %}
       <div class="field">
         <label for="be-{{ field }}">{{ label }}</label>
         <div class="flex items-center gap-2"><input id="be-{{ field }}" class="min-w-0 flex-1" name="a-{{ field }}" placeholder="leave as is" autocomplete="off"><label class="flex items-center gap-1.5 text-meta text-muted"><input type="checkbox" name="clear-{{ field }}" value="1" data-on:change="document.getElementById('be-{{ field }}').disabled = el.checked"> clear</label></div>
       </div>
+      {% endif %}
     {% endfor %}
     </div>
     <div class="mt-2.5 flex flex-wrap items-center gap-2">

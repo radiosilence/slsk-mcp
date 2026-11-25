@@ -485,6 +485,70 @@ mod library {
     }
 
     #[test]
+    fn a_release_type_is_a_primary_type_and_its_secondary_types() {
+        let typed = |types: Option<&str>, pairs: &[(&str, &str)]| {
+            let t = sift::meta::Track {
+                release_types: types
+                    .map(|t| t.split("; ").map(Into::into).collect())
+                    .unwrap_or_default(),
+                ..track("/m/a/1.flac", "One", "Monstre", None)
+            };
+            edits_from(&[t], &form(pairs)).unwrap().album
+        };
+        let set = |v: &str| vec![("albumtypes".to_string(), Some(v.to_string()))];
+        assert_eq!(
+            typed(
+                None,
+                &[
+                    ("type-primary", "album"),
+                    ("type-secondary", "dj-mix"),
+                    ("type-secondary", "compilation"),
+                ]
+            ),
+            set("album; compilation; dj-mix"),
+            "secondary types follow the primary in MusicBrainz's order"
+        );
+        assert!(
+            typed(
+                Some("compilation; album"),
+                &[("type-primary", "album"), ("type-secondary", "compilation")]
+            )
+            .is_empty(),
+            "the same types in another order are no change"
+        );
+        assert_eq!(
+            typed(Some("ep; remix"), &[("type-primary", "none")]),
+            [("albumtypes".to_string(), None)],
+            "none chosen clears the type"
+        );
+        assert!(
+            typed(Some("ep"), &[]).is_empty(),
+            "a form without the type controls leaves it alone"
+        );
+
+        let tracks = [
+            sift::meta::Track {
+                release_types: vec!["ep".into()],
+                ..track("/m/a/1.flac", "One", "Monstre", None)
+            },
+            track("/m/a/2.flac", "Two", "Monstre", None),
+        ];
+        let batch = |pairs: &[(&str, &str)]| batch_edits_from(&tracks, &form(pairs));
+        assert!(
+            batch(&[("type-primary", "keep")]).is_err(),
+            "the type left as is asks nothing"
+        );
+        assert_eq!(
+            batch(&[("type-primary", "keep"), ("type-secondary", "live")])
+                .unwrap()
+                .album,
+            set("ep; live"),
+            "secondary types chosen alone go beside the album's own primary type"
+        );
+        assert!(batch(&[("type-primary", "album"), ("clear-albumtypes", "1")]).is_err());
+    }
+
+    #[test]
     fn a_release_is_its_id_or_a_link_to_it() {
         let id = "4c3e0b3c-2f8a-4a4b-9d6e-2a1f3b5c7d9e";
         assert_eq!(release_id(id).as_deref(), Some(id));

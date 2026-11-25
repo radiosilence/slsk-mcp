@@ -2,10 +2,26 @@
   <input type="hidden" name="path" value="{{ path }}">
   <input type="hidden" name="slot" value="{{ slot }}">
   {% include "library_filter.html" %}
-  <p class="text-meta text-muted">Change what needs changing; the preview lists each field as it is and as it would be. A field the files disagree on is left alone unless typed. Changing an artist clears that file's list of artists and their MusicBrainz ids; Credit artists splits it again.</p>
+  <p class="text-meta text-muted">Change what needs changing; the preview lists each field as it is and as it would be. A field the files disagree on is left alone unless typed. The release type is MusicBrainz's: one primary type, and any of the secondary types beside it. Changing an artist clears that file's list of artists and their MusicBrainz ids; Credit artists splits it again.</p>
   <div class="my-2 grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2">
   {% for (field, label) in self.fields() %}
+    {% if *field == "albumtypes" %}
+    <div class="field col-span-full">
+      <label for="{{ slot }}-type"><span>{{ label }}</span></label>
+      <div class="flex flex-wrap items-center gap-2">
+        <select id="{{ slot }}-type" name="type-primary">
+        {% if self.varies(field) %}<option value="keep" selected>(differs between files)</option>{% endif %}
+          <option value="none"{% if !self.varies(field) && self.primary().is_none() %} selected{% endif %}>none</option>
+        {% for p in self.primaries() %}
+          <option value="{{ p }}"{% if !self.varies(field) && self.primary().as_deref() == Some(**p) %} selected{% endif %}>{{ p }}</option>
+        {% endfor %}
+        </select>
+        {% include "library_types.html" %}
+      </div>
+    </div>
+    {% else %}
     <label class="field"><span>{{ label }}</span><input name="a-{{ field }}" value="{{ self.now(field) }}"{% if self.varies(field) %} placeholder="(differs between files)"{% endif %} autocomplete="off"></label>
+    {% endif %}
   {% endfor %}
   </div>
   <table class="dense my-2">
