@@ -206,7 +206,12 @@ async fn a_banned_peer_is_never_a_source() {
     let engine = jobs.session.engine().unwrap().clone();
 
     let job = jobs.from_folder(&album(0), None, Vec::new()).await.unwrap();
-    engine.set_banned(["Sharer".to_string()]);
+    // As `ban` does: through the database, which a login's own push of the
+    // bans reads too, so one landing after this keeps the ban.
+    crate::db::set_ban(&jobs.db, &engine.username(), "Sharer", true)
+        .await
+        .unwrap();
+    jobs.session.apply_bans(&engine).await.unwrap();
 
     let refused = jobs.from_folder(&album(1), None, Vec::new()).await;
     assert!(
@@ -218,7 +223,14 @@ async fn a_banned_peer_is_never_a_source() {
     let heard = crate::graphql::responses(&engine, "sharer album", 3)
         .await
         .unwrap();
-    assert!(heard.is_empty(), "a banned peer answered a search");
+    assert!(
+        heard.is_empty(),
+        "a search was answered after the ban: {:?}",
+        heard
+            .iter()
+            .map(|r| (&r.username, r.files.len()))
+            .collect::<Vec<_>>()
+    );
 
     // Nobody else has the album, so the job is left failed, with the reason.
     let moved = jobs.leave_peer("sharer", job.id).await.unwrap();

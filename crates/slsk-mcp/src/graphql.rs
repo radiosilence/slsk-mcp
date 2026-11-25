@@ -2423,7 +2423,7 @@ pub(crate) async fn set_ban(app: &App, username: &str, banned: bool) -> Result<b
     let engine = app.session.require()?;
     let account = engine.username();
     db::set_ban(&app.db, &account, username, banned).await?;
-    engine.set_banned(db::bans(&app.db, &account).await?);
+    app.session.apply_bans(engine).await?;
     Ok(true)
 }
 
