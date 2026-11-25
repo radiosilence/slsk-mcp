@@ -521,6 +521,8 @@ struct Page {
     /// The date field is in use, so it starts shown.
     dated: bool,
     run: String,
+    /// The last run that ended, whose changes the list drawn has.
+    seen: u64,
 }
 
 /// The page around the list, which it fetches once drawn.
@@ -529,6 +531,7 @@ pub(super) fn page(s: &UiState, filter: &Filter) -> String {
         q: filter.q.clone(),
         dated: filter.since == "date",
         run: run_html(s),
+        seen: s.run.read().finished.last().map_or(0, |f| f.id),
     }
     .render()
     .unwrap_or_default()
@@ -2118,8 +2121,10 @@ pub(super) fn batch_edits_from(
         }
         edits.album.push((field.to_string(), value));
     }
-    // An artist renamed wherever a file credits it by exactly that name, as
-    // artist or album artist, so a guest on another album is left alone.
+    // An artist renamed wherever a file's whole artist or album artist is
+    // that name, in any case; a collaboration naming it is left alone. The
+    // name is replaced in the file's list of credits too, so its MusicBrainz
+    // ids stay with it.
     let from = super::field(form, "rename-from").map_or("", str::trim);
     let to = super::field(form, "rename-to").map_or("", str::trim);
     if from.is_empty() != to.is_empty() {
@@ -2133,19 +2138,26 @@ pub(super) fn batch_edits_from(
             anyhow::bail!("Set the album artist or rename an artist, not both.");
         }
         asked = true;
+        let named = |v: &str| v.trim().to_lowercase() == from.to_lowercase();
         for t in tracks {
-            let changes: Vec<_> = ["artist", "albumartist"]
-                .into_iter()
-                // Any case, so a name typed differently is found and a
-                // change of case alone is a rename; a file already as asked
-                // is left alone.
-                .filter(|f| {
-                    t.field(f).is_some_and(|v| {
-                        v.trim().to_lowercase() == from.to_lowercase() && v.trim() != to
-                    })
-                })
-                .map(|f| (f.to_string(), Some(to.to_string())))
-                .collect();
+            let mut changes = Vec::new();
+            for (field, list, credits) in [
+                ("artist", "artists", &t.artists),
+                ("albumartist", "albumartists", &t.album_artists),
+            ] {
+                // A file already as asked is left alone.
+                if !t.field(field).is_some_and(|v| named(&v) && v.trim() != to) {
+                    continue;
+                }
+                changes.push((field.to_string(), Some(to.to_string())));
+                if credits.iter().any(|c| named(c)) {
+                    let renamed: Vec<&str> = credits
+                        .iter()
+                        .map(|c| if named(c) { to } else { c.as_str() })
+                        .collect();
+                    changes.push((list.to_string(), Some(renamed.join("; "))));
+                }
+            }
             if !changes.is_empty() {
                 edits.tracks.push((t.path.clone(), changes));
             }
@@ -2248,16 +2260,17 @@ pub(super) struct LibraryRun {
     finished: Vec<Finished>,
 }
 
-/// A run that ended: the albums it was asked to work on, and where those
-/// that moved went.
+/// A run that ended: the albums it was asked to work on and where those
+/// that moved went, or none when there were too many to redraw one by one.
 struct Finished {
     id: u64,
-    paths: Vec<String>,
-    moved: HashMap<String, String>,
+    rows: Option<(Vec<String>, HashMap<String, String>)>,
 }
 
 /// How many ended runs a page can catch up on.
 const FINISHED_KEPT: usize = 8;
+/// The most albums a run redraws row by row; past it, the list is read again.
+const REDRAWN_ROWS: usize = 100;
 
 struct Queued {
     ticket: u64,
@@ -2359,8 +2372,18 @@ type Stamp = (u64, bool, usize, usize, Option<String>, bool, u64);
 pub(super) struct RunSent {
     stamp: Option<Stamp>,
     rows: usize,
-    /// The last ended run this page has redrawn its rows for.
-    finished: Option<u64>,
+    /// The last ended run whose changes the page has.
+    finished: u64,
+}
+
+impl RunSent {
+    /// For a page that has the changes of runs up to `finished`.
+    pub(super) fn seen(finished: u64) -> Self {
+        Self {
+            finished,
+            ..Default::default()
+        }
+    }
 }
 
 /// The run panel's changes since `sent`: the whole panel when a run
@@ -2414,18 +2437,37 @@ pub(super) fn run_events(s: &UiState, sent: &mut RunSent) -> Vec<axum::response:
     let mut events = events;
     // Each run ended since the page last looked has its rows drawn again,
     // with what the page shows; a page opened since has them already.
-    let newest = run.finished.last().map(|f| f.id);
-    let seen = *sent.finished.get_or_insert(newest.unwrap_or(0));
-    for f in run.finished.iter().filter(|f| f.id > seen) {
-        events.push(super::append(
+    // Each run ended since the page last caught up has its rows drawn
+    // again with what the page shows. A page further behind than the runs
+    // held, or from before a restart, which counts runs from nought again,
+    // reads the whole list.
+    let seen = sent.finished;
+    let newest = run.finished.last().map_or(0, |f| f.id);
+    let behind = seen > run.id || run.finished.first().is_some_and(|f| f.id > seen + 1);
+    let get = |id: u64, url: &str| {
+        super::append(
             "#lib-run",
-            &format!(
-                r#"<div hidden data-init="@get('/library/redraw?run={}&open=' + [...document.querySelectorAll('#library li > div[id]:not(:empty)')].map(d => d.id).join(',') + '&' + location.search.slice(1)); el.remove()"></div>"#,
-                f.id
-            ),
-        ));
+            &format!(r#"<div hidden data-init="$libseen = {id}; @get({url}); el.remove()"></div>"#),
+        )
+    };
+    let whole = "location.pathname + location.search";
+    if behind {
+        events.push(get(newest, whole));
+    } else {
+        for f in run.finished.iter().filter(|f| f.id > seen) {
+            events.push(match f.rows {
+                Some(_) => get(
+                    f.id,
+                    &format!(
+                        "'/library/redraw?run={}&open=' + [...document.querySelectorAll('#library li > div[id]:not(:empty)')].map(d => d.id).join(',') + '&' + location.search.slice(1)",
+                        f.id
+                    ),
+                ),
+                None => get(f.id, whole),
+            });
+        }
     }
-    sent.finished = Some(newest.unwrap_or(seen));
+    sent.finished = newest.max(if behind { 0 } else { seen });
     sent.stamp = Some(stamp);
     sent.rows = run.results.len();
     events
@@ -2448,7 +2490,6 @@ async fn apply(State(s): State<UiState>, Path(action): Path<String>, body: Bytes
         return failed(&anyhow::anyhow!("no such action"));
     };
     let form = fields(&body);
-    let filter = Filter::from_fields(&form);
     let paths: Vec<String> = form
         .iter()
         .filter(|(k, v)| k == "path" && !v.is_empty())
@@ -2511,11 +2552,9 @@ async fn apply(State(s): State<UiState>, Path(action): Path<String>, body: Bytes
             return;
         };
         yield patch(&run_html(&s));
-        // Every album the filter admits may have changed, and most are not
-        // drawn: the list is drawn again. Otherwise every page showing the
-        // library redraws the rows the run changed (`run_events`).
+        // Every page showing the library redraws what the run changed
+        // (`run_events`); this one also lets go of what it had selected.
         if all {
-            yield patch(&list_html(&s, &filter).await);
             yield unselected();
         } else if from == "lib" {
             yield super::append(
@@ -2600,8 +2639,7 @@ fn run_next(s: &UiState) {
             let id = run.id;
             run.finished.push(Finished {
                 id,
-                paths: paths.clone(),
-                moved: moved.clone(),
+                rows: (paths.len() <= REDRAWN_ROWS).then(|| (paths.clone(), moved.clone())),
             });
             let over = run.finished.len().saturating_sub(FINISHED_KEPT);
             run.finished.drain(..over);
@@ -2756,7 +2794,7 @@ async fn redraw(State(s): State<UiState>, uri: http::Uri) -> Response {
         .finished
         .iter()
         .find(|f| f.id == run)
-        .map(|f| (f.paths.clone(), f.moved.clone()));
+        .and_then(|f| f.rows.clone());
     askama_datastar::stream(async_stream::stream! {
         match finished {
             Some((paths, moved)) => {

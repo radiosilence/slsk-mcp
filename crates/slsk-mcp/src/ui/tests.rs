@@ -688,6 +688,21 @@ mod library {
             .is_empty(),
             "renamed to itself, nothing changes"
         );
+        let credited = sift::meta::Track {
+            artists: vec!["Jay Z".into()],
+            ..t("/m/a/1.flac", "Jay Z", "Someone")
+        };
+        assert_eq!(
+            batch_edits_from(
+                &[credited],
+                &form(&[("rename-from", "Jay Z"), ("rename-to", "JAY-Z")])
+            )
+            .unwrap()
+            .tracks[0]
+                .1,
+            [set("artist"), set("artists")],
+            "the credit is renamed rather than cleared, so its MusicBrainz id stays"
+        );
         assert!(batch_edits_from(&tracks, &form(&[("rename-from", "Jay Z")])).is_err());
         assert!(batch_edits_from(&tracks, &form(&[("rename-to", "JAY-Z")])).is_err());
         assert!(

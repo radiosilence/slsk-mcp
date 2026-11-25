@@ -1641,6 +1641,8 @@ struct Shown {
     tab: String,
     /// The jobs whose files are open, each followed by a comma.
     files: String,
+    /// The last library run whose changes the Library page has drawn.
+    libseen: u64,
 }
 
 impl Default for Shown {
@@ -1651,6 +1653,7 @@ impl Default for Shown {
             job: String::new(),
             tab: String::new(),
             files: String::new(),
+            libseen: 0,
         }
     }
 }
@@ -1694,7 +1697,7 @@ async fn stream(
         let mut transfers = slsk_engine::changes();
         let mut status = app.session.engine().map(|e| e.status());
         let ends = tokio::time::Instant::now() + LIFETIME;
-        let mut run_sent = library::RunSent::default();
+        let mut run_sent = library::RunSent::seen(shown.libseen);
         let mut sent: [String; 5] = Default::default();
         let mut settled_sent: Option<SettledJobs> = None;
         let mut history_sent: Option<Option<String>> = None;
