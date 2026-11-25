@@ -87,7 +87,6 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/jobs/{id}", get(StatusCode::NOT_FOUND))
         .route("/stream", get(stream))
         .route("/search", get(search::results))
-        .route("/grab", post(grab))
         .route("/import-url", post(import_url))
         .route("/download", post(download))
         .route("/jobs/{id}/{action}", post(job_action))
@@ -1848,48 +1847,6 @@ async fn stream(
         }
     };
     askama_datastar::stream(events)
-}
-
-#[derive(serde::Deserialize)]
-struct SearchForm {
-    q: String,
-    #[serde(default)]
-    lossless: bool,
-}
-
-/// How many jobs the page shows, and whose files are open, sent only by
-/// the page that lists them.
-#[derive(serde::Deserialize)]
-struct GrabQuery {
-    jobs: Option<i64>,
-    #[serde(default)]
-    files: String,
-}
-
-async fn grab(
-    State(s): State<UiState>,
-    Query(shown): Query<GrabQuery>,
-    axum::Form(form): axum::Form<SearchForm>,
-) -> Response {
-    let filter = form.lossless.then(|| Filter {
-        lossless: true,
-        ..Default::default()
-    });
-    match graphql::grab(&s.app, form.q.trim(), search::LISTEN, filter, false).await {
-        // Albums shows the new card; Search has no job list, so it says so.
-        Ok(_) => match shown.jobs {
-            Some(jobs) => {
-                let shown = Shown {
-                    jobs,
-                    files: shown.files,
-                    ..Shown::default()
-                };
-                done(&s.app, &shown, false).await
-            }
-            None => one(flash_ok(&format!("Grabbing {}", form.q.trim()))),
-        },
-        Err(e) => one(flash_err(&e.message)),
-    }
 }
 
 #[derive(serde::Deserialize)]

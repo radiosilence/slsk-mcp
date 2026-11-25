@@ -1,5 +1,5 @@
 <section class="min-w-0">
-  {% let q = "" %}{% let lossless = true %}{% let grab = "'/grab?jobs=' + $jobs + '&files=' + $files" %}
+  {% let q = "" %}{% let lossless = true %}
   {% include "finder.html" %}
   <form id="import-url" class="mt-2 flex flex-wrap gap-2" data-indicator="_importing" data-on:submit="@post('/import-url', {contentType: 'form'})">
     <input type="hidden" name="jobs" value="{{ crate::ui::PAGE }}" data-attr:value="$jobs">

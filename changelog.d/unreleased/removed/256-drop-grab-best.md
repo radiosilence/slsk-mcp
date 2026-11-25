@@ -1,0 +1,1 @@
+- **Grab best is gone from the finder.** It took the top search result without a look, which was too often the wrong release. The finder is a single search field whose Search button is the default, so Enter opens the results to choose from; `grab` over GraphQL and MCP is unchanged.
