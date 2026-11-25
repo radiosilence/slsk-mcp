@@ -1821,7 +1821,7 @@ async fn previewed(s: UiState, action: Action, form: Vec<(String, String)>) -> R
             String::new()
         } else {
             format!(
-                r#"<button type="button" class="primary" data-indicator="_applying_{slot}" data-attr:disabled="$_apply_{slot} == 0 || $_applying_{slot}" data-class:busy="$_applying_{slot}" data-text="'{verb} ' + $_apply_{slot} + ($_apply_{slot} == 1 ? ' album' : ' albums')" data-on:click="@post('/library/apply/{slug}', {{contentType: 'form', selector: '#{slot}-apply'}})">{name}</button>"#,
+                r#"<button class="primary" form="{slot}-apply" formaction="/library/apply/{slug}" data-attr:disabled="$_apply_{slot} == 0 || $_applying_{slot}" data-class:busy="$_applying_{slot}" data-text="'{verb} ' + $_apply_{slot} + ($_apply_{slot} == 1 ? ' album' : ' albums')">{name}</button>"#,
                 name = action.name(),
                 verb = action.verb(),
                 slug = action.slug(),

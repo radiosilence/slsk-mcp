@@ -32,7 +32,7 @@
         <span class="flex-1 max-sm:hidden"></span>
         <a class="button quiet" href="{{ crate::ui::profile_href(b.username) }}">Profile</a>
         <a class="button quiet" href="{{ crate::ui::browse_href(b.username, "") }}">Browse</a>
-        <button type="button" class="quiet" name="username" value="{{ b.username }}" data-indicator="_bud_{{ loop.index }}" data-attr:disabled="$_bud_{{ loop.index }}" data-class:busy="$_bud_{{ loop.index }}" data-on:click="@post('/chat/buddy/remove', {contentType: 'form', selector: '#act'})">Remove</button>
+        <form class="contents" data-indicator="_bud_{{ loop.index }}" data-on:submit="@post('/chat/buddy/remove', {contentType: 'form'})"><button class="quiet" name="username" value="{{ b.username }}" data-attr:disabled="$_bud_{{ loop.index }}" data-class:busy="$_bud_{{ loop.index }}">Remove</button></form>
       </div>
       {% if !b.note.is_empty() %}<div class="basis-full text-meta text-muted wrap-anywhere">{{ b.note }}</div>{% endif %}
     </li>

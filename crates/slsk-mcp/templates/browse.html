@@ -1,5 +1,6 @@
 <div id="browse">
-  <form id="browse-user"><input type="hidden" name="username" value="{{ username }}"></form>
+  {#- The tree's Download buttons submit this form: each names its route in `formaction`, asks first when it has `data-confirm`, and stays disabled once sent. -#}
+  <form id="browse-user" data-on:submit="(!evt.submitter.dataset.confirm || confirm(evt.submitter.dataset.confirm)) && (evt.submitter.disabled = true, @post(evt.submitter.getAttribute('formaction'), {contentType: 'form'}))"><input type="hidden" name="username" value="{{ username }}"></form>
 {% match error %}{% when Some with (e) %}<p class="text-meta text-muted">{{ e }}</p>{% when None %}
   <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
     <strong class="min-w-0 flex-auto wrap-anywhere">{% if mine %}Your shares{% else %}<a href="{{ crate::ui::profile_href(username) }}">{{ username }}</a>{% endif %}</strong>
@@ -16,11 +17,11 @@
   </nav>
   {% if !mine && tree_files > 0 %}
   <div class="mt-2.5 flex flex-wrap items-center gap-2">
-    {% if tree_files > 0 %}<button type="button" class="primary" name="key" value="{{ here_key }}" data-indicator="_dl_here" data-attr:disabled="$_dl_here" data-class:busy="$_dl_here" data-on:click="{% if tree_files > 100 %}confirm('Download everything under this folder? It is more than 100 files, one job per album.') && {% endif %}@post('/browse/tree', {contentType: 'form', selector: '#browse-user'})">Download folder · {{ tree_files }} files</button>{% endif %}
-    {% if has_files %}<form id="browse-files">
+    <form class="contents" data-indicator="_dl_here" data-on:submit="{% if tree_files > 100 %}confirm('Download everything under this folder? It is more than 100 files, one job per album.') && {% endif %}@post('/browse/tree', {contentType: 'form'})"><input type="hidden" name="username" value="{{ username }}"><button class="primary" name="key" value="{{ here_key }}" data-attr:disabled="$_dl_here" data-class:busy="$_dl_here">Download folder · {{ tree_files }} files</button></form>
+    {% if has_files %}<form id="browse-files" data-indicator="_dl_some" data-on:submit="@post('/browse/files', {contentType: 'form'})">
       <input type="hidden" name="username" value="{{ username }}">
       <input type="hidden" name="key" value="{{ here_key }}">
-      <button type="button" class="primary" data-indicator="_dl_some" data-attr:disabled="$_dl_some" data-class:busy="$_dl_some" data-on:click="@post('/browse/files', {contentType: 'form', selector: '#browse-files'})">Download ticked</button>
+      <button class="primary" data-attr:disabled="$_dl_some" data-class:busy="$_dl_some">Download ticked</button>
     </form>{% endif %}
   </div>
   {% endif %}

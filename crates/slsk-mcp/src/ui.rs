@@ -2394,7 +2394,7 @@ fn ban_button(username: &str, banned: bool) -> String {
         )
     };
     format!(
-        r#"<span data-peer-ban="{key}"><form id="pb-{key}" hidden><input type="hidden" name="username" value="{user}"></form><button type="button" class="{tone}" data-indicator="_pb_{key}" data-attr:disabled="$_pb_{key}" data-class:busy="$_pb_{key}" data-on:click="{ask}@post('{action}', {{contentType: 'form', selector: '#pb-{key}'}})">{label}</button></span>"#,
+        r#"<form class="contents" data-peer-ban="{key}" data-indicator="_pb_{key}" data-on:submit="{ask}@post('{action}', {{contentType: 'form'}})"><input type="hidden" name="username" value="{user}"><button class="{tone}" data-attr:disabled="$_pb_{key}" data-class:busy="$_pb_{key}">{label}</button></form>"#,
         user = escape(username),
     )
 }

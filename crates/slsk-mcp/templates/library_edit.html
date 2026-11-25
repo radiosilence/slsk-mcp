@@ -1,4 +1,4 @@
-<form id="{{ slot }}-edit" data-on:submit__prevent="@post('/library/preview/edit', {contentType: 'form', selector: '#{{ slot }}-edit'})" class="my-2 border-l-2 border-rule px-3 py-2.5">
+<form id="{{ slot }}-edit" data-indicator="_{{ slot }}_pv_edit" data-on:submit="@post('/library/preview/edit', {contentType: 'form'})" class="my-2 border-l-2 border-rule px-3 py-2.5">
   <input type="hidden" name="path" value="{{ path }}">
   <input type="hidden" name="slot" value="{{ slot }}">
   {% include "library_filter.html" %}
@@ -20,7 +20,7 @@
   {% endfor %}
   </table>
   <div class="mt-2.5 flex flex-wrap items-center gap-2">
-    <button type="button" class="primary" data-indicator="_{{ slot }}_pv_edit" data-attr:disabled="$_{{ slot }}_pv_edit" data-class:busy="$_{{ slot }}_pv_edit" data-on:click="@post('/library/preview/edit', {contentType: 'form', selector: '#{{ slot }}-edit'})">Preview edit</button>
+    <button class="primary" data-attr:disabled="$_{{ slot }}_pv_edit" data-class:busy="$_{{ slot }}_pv_edit">Preview edit</button>
     <button type="button" class="quiet" data-on:click="document.getElementById('{{ slot }}-edit').replaceChildren()">Cancel</button>
   </div>
 </form>

@@ -21,5 +21,5 @@
 <!-- more -->
 <div id="lib-more">{% if let Some((offset, left)) = next %}
   <input type="hidden" name="offset" value="{{ offset }}">
-  <button type="button" class="quiet mt-2" data-indicator="_more" data-attr:disabled="$_more" data-class:busy="$_more" data-on:click="@post('/library/more', {contentType: 'form', selector: '#lib-sel'})">Show more ({{ left }} more)</button>
+  <button class="quiet mt-2" formaction="/library/more" data-attr:disabled="$_lib_busy" data-class:busy="$_lib_busy && $_lib_via == '/library/more'">Show more ({{ left }} more)</button>
 {% endif %}</div>

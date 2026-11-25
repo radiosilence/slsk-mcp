@@ -15,8 +15,7 @@
       <a class="button quiet" href="{{ crate::ui::browse_href(username, "") }}">{% if mine %}Browse your shares{% else %}Browse shares{% endif %}</a>
       {% if !mine %}
       <a class="button quiet" href="{{ crate::ui::chat_href("pm", username) }}">Message</a>
-      <form id="profile-peer" hidden><input type="hidden" name="username" value="{{ username }}"></form>
-      <button type="button" class="quiet" data-indicator="_prof_bud" data-attr:disabled="$_prof_bud" data-class:busy="$_prof_bud" data-on:click="@post('/chat/buddy/add', {contentType: 'form', selector: '#profile-peer'})">Add buddy</button>
+      <form class="contents" data-indicator="_prof_bud" data-on:submit="@post('/chat/buddy/add', {contentType: 'form'})"><input type="hidden" name="username" value="{{ username }}"><button class="quiet" data-attr:disabled="$_prof_bud" data-class:busy="$_prof_bud">Add buddy</button></form>
       {{ crate::ui::ban_button(username, *banned)|safe }}
       <button type="button" class="quiet" data-indicator="_prof_refresh" data-attr:disabled="$_prof_refresh" data-class:busy="$_prof_refresh" data-on:click="@get('{{ self.refresh() }}')">Refresh</button>
       {% endif %}
@@ -32,11 +31,11 @@
   {% if mine %}
   <h3>Edit</h3>
   <p class="text-meta text-muted">Peers see this when they look you up.</p>
-  <form id="profile-edit" class="my-2.5 flex flex-col gap-2" enctype="multipart/form-data">
+  <form class="my-2.5 flex flex-col gap-2" enctype="multipart/form-data" data-indicator="_prof_save" data-on:submit="@post('/profile', {contentType: 'form'})">
     <label class="field"><span>about you</span><textarea class="resize-y" name="description" rows="6" placeholder="About you and what you share">{{ description }}</textarea></label>
     <label class="field"><span>picture</span><input type="file" name="picture" accept="image/jpeg,image/png"><small>A JPEG or PNG.</small></label>
     {% if picture.is_some() %}<label class="flex items-center gap-2"><input type="checkbox" name="clear" value="1"> remove the picture</label>{% endif %}
-    <div><button type="button" class="primary" data-indicator="_prof_save" data-attr:disabled="$_prof_save" data-class:busy="$_prof_save" data-on:click="@post('/profile', {contentType: 'form', selector: '#profile-edit'})">Save</button></div>
+    <div><button class="primary" data-attr:disabled="$_prof_save" data-class:busy="$_prof_save">Save</button></div>
   </form>
   {% endif %}
 </div>

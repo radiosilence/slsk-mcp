@@ -1,7 +1,7 @@
-<form id="finder" class="flex flex-wrap gap-2" action="/search">
+{#- Enter grabs the best folder, as the first button; Search submits the form to /search as a page. -#}
+<form id="finder" class="flex flex-wrap gap-2" action="/search" data-indicator:busy data-on:submit="evt.submitter?.hasAttribute('data-search') ? el.submit() : @post({{ grab }}, {contentType: 'form'})">
   <input class="basis-full" name="q" value="{{ q }}" data-bind:q placeholder="Artist album" aria-label="Artist and album" autocomplete="off" autofocus>
   <label class="flex items-center gap-1.5 text-muted"><input type="checkbox" name="lossless" value="true"{% if lossless %} checked{% endif %} data-bind:lossless> lossless</label>
-  <button class="flex-auto" type="submit" data-attr:disabled="$busy">Search</button>
-  <button type="button" class="primary flex-auto" data-indicator:busy data-attr:disabled="$busy || !$q" data-class:busy="$busy"
-    data-on:click="@post({{ grab }}, {contentType: 'form', selector: '#finder'})">Grab best</button>
+  <button class="primary flex-auto" data-attr:disabled="$busy || !$q" data-class:busy="$busy">Grab best</button>
+  <button class="order-first flex-auto" data-search data-attr:disabled="$busy">Search</button>
 </form>

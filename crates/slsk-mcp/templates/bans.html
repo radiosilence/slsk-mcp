@@ -4,7 +4,7 @@
   {% if bans.is_empty() %}<p class="text-meta text-muted">Nobody is banned.</p>{% endif %}
   <ul class="rows">
   {% for b in bans %}
-    <li class="[&.busy]:opacity-70" data-class:busy="$_unban_{{ loop.index }}"><a class="min-w-0 flex-[1_1_60%] truncate" href="{{ crate::ui::profile_href(b) }}">{{ b }}</a><button type="button" name="username" value="{{ b }}" data-indicator="_unban_{{ loop.index }}" data-attr:disabled="$_unban_{{ loop.index }}" data-class:busy="$_unban_{{ loop.index }}" data-on:click="@post('/bans/remove', {contentType: 'form', selector: '#act'})">Unban</button></li>
+    <li class="[&.busy]:opacity-70" data-class:busy="$_unban_{{ loop.index }}"><a class="min-w-0 flex-[1_1_60%] truncate" href="{{ crate::ui::profile_href(b) }}">{{ b }}</a><form class="contents" data-indicator="_unban_{{ loop.index }}" data-on:submit="@post('/bans/remove', {contentType: 'form'})"><button name="username" value="{{ b }}" data-attr:disabled="$_unban_{{ loop.index }}" data-class:busy="$_unban_{{ loop.index }}">Unban</button></form></li>
   {% endfor %}
   </ul>
 {% endmatch %}

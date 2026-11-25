@@ -1,5 +1,5 @@
 <div class="grid min-w-0 gap-3 *:min-w-0">
-  <form id="browse-find" class="flex flex-wrap items-center gap-2" data-indicator="_browsing" data-on:submit__prevent="@post('/browse', {contentType: 'form', selector: '#browse-find'})">
+  <form id="browse-find" class="flex flex-wrap items-center gap-2" data-indicator="_browsing" data-on:submit="@post('/browse', {contentType: 'form'})">
     <input class="basis-full" name="username" value="{{ username }}" placeholder="Username" aria-label="Username to browse" autocomplete="off" autocapitalize="off" required>
     <button class="primary flex-auto" type="submit" data-attr:disabled="$_browsing" data-class:busy="$_browsing">Browse</button>
   </form>

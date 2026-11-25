@@ -1,15 +1,15 @@
 <div class="grid min-w-0 gap-3 *:min-w-0" data-on-interval__duration.4s="@get('/chat?poll=true', {contentType: 'form', selector: '#thread-form'})">
   {{ thread|safe }}
   {{ side|safe }}
-  <form id="chat-who" class="flex flex-wrap items-center gap-2" data-on:submit__prevent="@post('/chat/open', {contentType: 'form', selector: '#chat-who'})">
+  <form id="chat-who" class="flex flex-wrap items-center gap-2" data-signals="{_who_via: ''}" data-indicator="_who_busy" data-on:submit="$_who_via = evt.submitter?.getAttribute('formaction') ?? '/chat/open'; @post($_who_via, {contentType: 'form'})">
     <input class="basis-full" name="username" data-bind:_buddy placeholder="Username" aria-label="Username" autocomplete="off" autocapitalize="off" required>
     <input class="basis-full" name="note" data-bind:_buddynote placeholder="Note (for buddies)" aria-label="Note for buddies" autocomplete="off">
-    <button class="primary flex-auto" type="submit" data-indicator="_msgto" data-attr:disabled="$_msgto" data-class:busy="$_msgto">Message</button>
-    <button class="flex-auto" type="button" data-indicator="_budadd" data-attr:disabled="$_budadd" data-class:busy="$_budadd" data-on:click="@post('/chat/buddy/add', {contentType: 'form', selector: '#chat-who'})">Add buddy</button>
+    <button class="primary flex-auto" formaction="/chat/open" data-attr:disabled="$_who_busy" data-class:busy="$_who_busy && $_who_via == '/chat/open'">Message</button>
+    <button class="flex-auto" formaction="/chat/buddy/add" data-attr:disabled="$_who_busy" data-class:busy="$_who_busy && $_who_via == '/chat/buddy/add'">Add buddy</button>
   </form>
   <details class="disclosure">
     <summary class="text-muted">public rooms</summary>
-    <form id="room-join" class="flex flex-wrap items-center gap-2" data-indicator="_joining" data-on:submit__prevent="@post('/chat/join', {contentType: 'form', selector: '#room-join'})">
+    <form id="room-join" class="flex flex-wrap items-center gap-2" data-indicator="_joining" data-on:submit="@post('/chat/join', {contentType: 'form'})">
       <input class="basis-full" name="room" placeholder="Room name" aria-label="Room name" autocomplete="off" autocapitalize="off" required data-on:input__debounce.250ms="@get('/chat/rooms?q=' + encodeURIComponent(el.value))">
       <button class="primary flex-auto" type="submit" data-attr:disabled="$_joining" data-class:busy="$_joining">Join</button>
     </form>

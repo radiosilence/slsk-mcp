@@ -7,11 +7,11 @@
     <button data-indicator="_reconnecting" data-attr:disabled="$_reconnecting" data-class:busy="$_reconnecting" data-on:click="@post('/reconnect')">Reconnect</button>
   </div>
   <h3>Uploads</h3>
-  <form id="set-slots" class="my-1.5 flex flex-wrap items-end gap-2" data-indicator="_slots" data-on:submit__prevent="@post('/settings/slots', {contentType: 'form', selector: '#set-slots'})">
+  <form id="set-slots" class="my-1.5 flex flex-wrap items-end gap-2" data-indicator="_slots" data-on:submit="@post('/settings/slots', {contentType: 'form'})">
     <label class="field"><span>upload slots</span><input class="w-[7em]" name="slots" type="number" inputmode="numeric" min="1" value="{{ slots }}" required></label>
     <button type="submit" class="primary" data-attr:disabled="$_slots" data-class:busy="$_slots">Save</button>
   </form>
-  <form id="set-limits" class="my-1.5 flex flex-wrap items-end gap-2" data-indicator="_limits" data-on:submit__prevent="@post('/settings/limits', {contentType: 'form', selector: '#set-limits'})">
+  <form id="set-limits" class="my-1.5 flex flex-wrap items-end gap-2" data-indicator="_limits" data-on:submit="@post('/settings/limits', {contentType: 'form'})">
     <label class="field"><span>upload KB/s</span><input class="w-[7em]" name="up" type="number" inputmode="numeric" min="0" value="{{ up_kb }}" required></label>
     <label class="field"><span>download KB/s</span><input class="w-[7em]" name="down" type="number" inputmode="numeric" min="0" value="{{ down_kb }}" required></label>
     <button type="submit" class="primary" data-attr:disabled="$_limits" data-class:busy="$_limits">Save</button>
@@ -19,14 +19,14 @@
   <p class="text-meta text-muted">Now: {{ slots }} slots, up {{ self.rate(up_kb) }}, down {{ self.rate(down_kb) }}. 0 is unlimited. These hold until the service restarts, which returns to the deployment's settings.</p>
   <h3>Interests</h3>
   <p class="text-meta text-muted">What you like and dislike drives the server's recommendations and similar users.</p>
-  <form id="interest" class="my-1.5 flex flex-wrap items-center gap-2" data-indicator="_int" data-on:submit__prevent="@post('/settings/interest', {contentType: 'form', selector: '#interest'})">
+  <form id="interest" class="my-1.5 flex flex-wrap items-center gap-2" data-indicator="_int" data-on:submit="@post('/settings/interest', {contentType: 'form'})">
     <input class="flex-[1_1_12em]" name="item" data-bind:_interest placeholder="dub techno" aria-label="Interest" autocomplete="off" required>
     <button type="submit" name="liked" value="true" data-attr:disabled="$_int">Like</button>
     <button type="submit" name="liked" value="false" class="quiet" data-attr:disabled="$_int">Dislike</button>
   </form>
   <ul class="rows">
   {% for i in interests %}
-    <li class="[&.busy]:opacity-70" data-class:busy="$_intf_{{ loop.index }}"><span class="min-w-0 flex-[1_1_60%] truncate">{{ i.0 }}</span><span class="status {% if i.1 %}ok{% else %}bad{% endif %}">{% if i.1 %}like{% else %}dislike{% endif %}</span><span class="flex-1 max-sm:hidden"></span><button type="button" class="quiet" name="item" value="{{ i.0 }}" data-indicator="_intf_{{ loop.index }}" data-attr:disabled="$_intf_{{ loop.index }}" data-class:busy="$_intf_{{ loop.index }}" data-on:click="@post('/settings/interest', {contentType: 'form', selector: '#act'})">Forget</button></li>
+    <li class="[&.busy]:opacity-70" data-class:busy="$_intf_{{ loop.index }}"><span class="min-w-0 flex-[1_1_60%] truncate">{{ i.0 }}</span><span class="status {% if i.1 %}ok{% else %}bad{% endif %}">{% if i.1 %}like{% else %}dislike{% endif %}</span><span class="flex-1 max-sm:hidden"></span><form class="contents" data-indicator="_intf_{{ loop.index }}" data-on:submit="@post('/settings/interest', {contentType: 'form'})"><button class="quiet" name="item" value="{{ i.0 }}" data-attr:disabled="$_intf_{{ loop.index }}" data-class:busy="$_intf_{{ loop.index }}">Forget</button></form></li>
   {% endfor %}
   </ul>
 {% endif %}
