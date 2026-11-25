@@ -2117,6 +2117,31 @@ pub(super) fn batch_edits_from(
         }
         edits.album.push((field.to_string(), value));
     }
+    // An artist renamed wherever a file credits it by exactly that name, as
+    // artist or album artist, so a guest on another album is left alone.
+    if let Some(from) = super::field(form, "rename-from").map(str::trim) {
+        let to = super::field(form, "rename-to").map_or("", str::trim);
+        if to.is_empty() {
+            anyhow::bail!("Rename an artist: type the new name as well as the old one.");
+        }
+        if ["a-albumartist", "clear-albumartist"]
+            .iter()
+            .any(|k| super::field(form, k).is_some())
+        {
+            anyhow::bail!("Set the album artist or rename an artist, not both.");
+        }
+        asked = true;
+        for t in tracks {
+            let changes: Vec<_> = ["artist", "albumartist"]
+                .into_iter()
+                .filter(|f| t.field(f).is_some_and(|v| v.trim() == from))
+                .map(|f| (f.to_string(), Some(to.to_string())))
+                .collect();
+            if !changes.is_empty() {
+                edits.tracks.push((t.path.clone(), changes));
+            }
+        }
+    }
     if !asked {
         anyhow::bail!("Type a value or tick Clear for at least one field.");
     }
@@ -2200,6 +2225,8 @@ async fn ask(
 pub(super) struct LibraryRun {
     /// Counts runs, so a page following one knows when another starts.
     id: u64,
+    /// The queued action this run is, so the page that asked for it knows it.
+    ticket: u64,
     action: Option<Action>,
     total: usize,
     done: usize,
@@ -2341,14 +2368,31 @@ pub(super) fn run_events(s: &UiState, sent: &mut RunSent) -> Vec<axum::response:
         }
         events
     } else {
-        vec![patch(
+        let mut events = vec![patch(
             &RunView {
                 run: &run,
                 root: &root,
             }
             .render()
             .unwrap_or_default(),
-        )]
+        )];
+        let ended = !run.running
+            && sent
+                .stamp
+                .as_ref()
+                .is_some_and(|(id, running, ..)| *id == run.id && *running);
+        // A page that did not ask for the run (another tab, or one reloaded
+        // while it ran) has the rows from before it: the list is read again.
+        if ended {
+            events.push(super::append(
+                "#lib-run",
+                &format!(
+                    r#"<div hidden data-init="!$_applying.split(',').includes('{}') && @get(location.pathname + location.search); el.remove()"></div>"#,
+                    run.ticket
+                ),
+            ));
+        }
+        events
     };
     sent.stamp = Some(stamp);
     sent.rows = run.results.len();
@@ -2424,6 +2468,11 @@ async fn apply(State(s): State<UiState>, Path(action): Path<String>, body: Bytes
     drop(queueing);
     run_next(&s);
     askama_datastar::stream(async_stream::stream! {
+        // This page draws the rows the run changes itself; see `run_events`.
+        yield super::append(
+            "body",
+            &format!(r#"<div hidden data-init="$_applying += '{ticket},'; el.remove()"></div>"#),
+        );
         yield patch(&run_html(&s));
         // The album goes back to how it reads, every form on it closed.
         yield patch(&format!(r#"<div id="{from}-preview"></div>"#));
@@ -2471,6 +2520,7 @@ fn run_next(s: &UiState) {
                 let q = run.waiting.remove(0);
                 *run = LibraryRun {
                     id: run.id + 1,
+                    ticket: q.ticket,
                     action: Some(q.action),
                     total: q.paths.len(),
                     running: true,

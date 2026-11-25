@@ -1,4 +1,5 @@
-<div class="grid min-w-0 gap-3 *:min-w-0">
+{# `_applying`: the tickets of the library actions this page asked for, each followed by a comma. #}
+<div class="grid min-w-0 gap-3 *:min-w-0" data-signals="{_applying: ''}">
   <form id="lib-find" class="flex flex-wrap items-center gap-2" data-indicator="_finding" data-on:submit="@post('/library/find', {contentType: 'form'})">
     <input class="basis-full" name="q" value="{{ q }}" data-bind:_libq placeholder="burial, artist:burial, year:1990..1999" aria-label="Find albums" autocomplete="off">
     <select class="flex-auto" name="since" aria-label="Imported when" data-bind:_libsince data-on:change="$_libsince != 'date' && el.form.requestSubmit()">

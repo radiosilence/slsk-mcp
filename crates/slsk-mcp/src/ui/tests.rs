@@ -639,6 +639,50 @@ mod library {
     }
 
     #[test]
+    fn an_artist_is_renamed_only_where_named_exactly() {
+        let t = |path: &str, artist: &str, album_artist: &str| sift::meta::Track {
+            artist: Some(artist.into()),
+            album_artist: Some(album_artist.into()),
+            ..track(path, "One", "Monstre", None)
+        };
+        let tracks = [
+            t("/m/a/1.flac", "Jay Z", "Jay Z"),
+            t("/m/a/2.flac", "Jay Z & Kanye West", "Jay Z"),
+            t("/m/a/3.flac", "Kanye West", "Jay Z"),
+        ];
+        let edits = batch_edits_from(
+            &tracks,
+            &form(&[("rename-from", " Jay Z "), ("rename-to", "JAY-Z")]),
+        )
+        .unwrap();
+        let set = |f: &str| (f.to_string(), Some("JAY-Z".to_string()));
+        assert_eq!(
+            edits.tracks,
+            [
+                (
+                    "/m/a/1.flac".into(),
+                    vec![set("artist"), set("albumartist")]
+                ),
+                ("/m/a/2.flac".into(), vec![set("albumartist")]),
+                ("/m/a/3.flac".into(), vec![set("albumartist")]),
+            ],
+            "a collaboration naming the artist is left alone"
+        );
+        assert!(batch_edits_from(&tracks, &form(&[("rename-from", "Jay Z")])).is_err());
+        assert!(
+            batch_edits_from(
+                &tracks,
+                &form(&[
+                    ("rename-from", "Jay Z"),
+                    ("rename-to", "JAY-Z"),
+                    ("a-albumartist", "Someone")
+                ])
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn a_release_is_its_id_or_a_link_to_it() {
         let id = "4c3e0b3c-2f8a-4a4b-9d6e-2a1f3b5c7d9e";
         assert_eq!(release_id(id).as_deref(), Some(id));
