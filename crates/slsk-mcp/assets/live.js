@@ -1,6 +1,6 @@
 // Moves measured progress between the server's patches. Each patch carries
-// a measurement and when it was taken; this draws from it at the display's
-// rate, and the next patch re-anchors it. Nothing here is invented: a bar
+// a measurement and when it was taken; this draws from it four times a
+// second, and the next patch re-anchors it. Nothing here is invented: a bar
 // stops at its total, at a rate of 0, and two report intervals past its
 // last measurement, and a count only ever shows a measured or deadline time.
 //
@@ -19,6 +19,9 @@
 // The engine measures a transfer's rate once a second.
 const REPORT = 1000;
 const HOLD = 2 * REPORT;
+// How often a moving transfer is redrawn: often enough to read as moving,
+// rarely enough that a busy page is not redrawn every frame.
+const DRAW = 250;
 
 const human = (b) => {
   const units = ["B", "KB", "MB", "GB", "TB"];
@@ -83,7 +86,7 @@ function frame() {
     }
   }
   if (moving) {
-    requestAnimationFrame(frame);
+    setTimeout(frame, DRAW);
   } else {
     drawing = false;
   }
@@ -112,7 +115,7 @@ function start() {
   if (document.hidden) return;
   if (!drawing && document.querySelector("[data-rate]")) {
     drawing = true;
-    requestAnimationFrame(frame);
+    frame();
   }
   if (ticking === null) tick();
 }
