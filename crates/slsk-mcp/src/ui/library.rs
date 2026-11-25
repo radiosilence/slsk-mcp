@@ -1000,6 +1000,9 @@ impl EditView<'_> {
     fn primaries(&self) -> &'static [&'static str] {
         PRIMARY_TYPES
     }
+    fn is_primary(&self, t: &str) -> bool {
+        PRIMARY_TYPES.contains(&t)
+    }
     fn type_choices(&self) -> Vec<(String, bool)> {
         type_choices(consensus(&self.tracks, "albumtypes").0)
     }
@@ -1044,6 +1047,9 @@ impl BatchView<'_> {
     }
     fn primaries(&self) -> &'static [&'static str] {
         PRIMARY_TYPES
+    }
+    fn is_primary(&self, t: &str) -> bool {
+        PRIMARY_TYPES.contains(&t)
     }
     fn type_choices(&self) -> Vec<(String, bool)> {
         type_choices(None)
@@ -1927,18 +1933,44 @@ fn primary_type(types: Option<String>) -> Option<String> {
     PRIMARY_TYPES.contains(&first).then(|| first.to_string())
 }
 
+/// The primary type an album's files have, for secondary types chosen with
+/// the primary type kept; a file with none takes the others'. Refused when
+/// two files have different ones, since one value is written to them all.
+fn kept_primary(tracks: &[sift::meta::Track]) -> anyhow::Result<Option<String>> {
+    let mut primaries = tracks
+        .iter()
+        .filter_map(|t| primary_type(t.field("albumtypes")));
+    let first = primaries.next();
+    if primaries.any(|p| Some(&p) != first.as_ref()) {
+        let album = tracks
+            .iter()
+            .find_map(|t| t.album.clone())
+            .unwrap_or_default();
+        anyhow::bail!(
+            "{album}: its files have different primary release types, so choose one to go with the secondary types"
+        );
+    }
+    Ok(first)
+}
+
 /// The release type the form's type controls ask for, as sift writes it, or
 /// `None` for no change: a form without them, or one keeping the type as it
-/// is. Secondary types chosen with the primary type kept go with `kept`.
-fn typed_release_type(form: &[(String, String)], kept: Option<String>) -> Option<String> {
-    let primary = super::field(form, "type-primary")?;
+/// is. Secondary types chosen with the primary type kept go with the one
+/// `tracks` share.
+fn typed_release_type(
+    form: &[(String, String)],
+    tracks: &[sift::meta::Track],
+) -> anyhow::Result<Option<String>> {
+    let Some(primary) = super::field(form, "type-primary") else {
+        return Ok(None);
+    };
     let secondary = form
         .iter()
         .filter(|(k, _)| k == "type-secondary")
         .map(|(_, v)| v.as_str());
     let primary = match primary {
-        "keep" if !form.iter().any(|(k, _)| k == "type-secondary") => return None,
-        "keep" => kept.unwrap_or_default(),
+        "keep" if !form.iter().any(|(k, _)| k == "type-secondary") => return Ok(None),
+        "keep" => kept_primary(tracks)?.unwrap_or_default(),
         "none" => String::new(),
         p => p.to_string(),
     };
@@ -1946,12 +1978,13 @@ fn typed_release_type(form: &[(String, String)], kept: Option<String>) -> Option
         .chain(secondary)
         .collect::<Vec<_>>()
         .join(";");
-    Some(typed_as_written("albumtypes", typed))
+    Ok(Some(typed_as_written("albumtypes", typed)))
 }
 
 /// The secondary types to offer as toggles, each with whether `current`
-/// has it: MusicBrainz's, then any other type the files hold, so it can be
-/// taken off.
+/// has it: MusicBrainz's, then any other type the files hold beside the
+/// primary type (a second primary type, or one MusicBrainz lacks), so it is
+/// kept unless taken off.
 fn type_choices(current: Option<String>) -> Vec<(String, bool)> {
     let current: Vec<String> = typed_as_written("albumtypes", current.unwrap_or_default())
         .split("; ")
@@ -1959,23 +1992,27 @@ fn type_choices(current: Option<String>) -> Vec<(String, bool)> {
         .map(str::to_string)
         .collect();
     let has = |t: &str| current.iter().any(|c| c == t);
+    let primary = current
+        .first()
+        .filter(|c| PRIMARY_TYPES.contains(&c.as_str()));
     SECONDARY_TYPES
         .iter()
         .map(|t| (t.to_string(), has(t)))
         .chain(
             current
                 .iter()
-                .filter(|c| {
-                    !PRIMARY_TYPES.contains(&c.as_str()) && !SECONDARY_TYPES.contains(&c.as_str())
-                })
+                .filter(|c| Some(*c) != primary && !SECONDARY_TYPES.contains(&c.as_str()))
                 .map(|c| (c.clone(), true)),
         )
         .collect()
 }
 
-/// What every file has for `field`, and whether they disagree.
+/// What every file has for `field`, as it would be written, and whether
+/// they disagree.
 fn consensus(tracks: &[sift::meta::Track], field: &str) -> (Option<String>, bool) {
-    let mut values = tracks.iter().map(|t| t.field(field));
+    let mut values = tracks
+        .iter()
+        .map(|t| t.field(field).map(|v| typed_as_written(field, v)));
     let first = values.next().flatten();
     let varies = values.any(|v| v != first);
     (if varies { None } else { first }, varies)
@@ -1998,10 +2035,7 @@ pub(super) fn edits_from(
     let mut edits = TagEdits::default();
     for (field, _) in ALBUM_FIELDS {
         let typed = match *field {
-            "albumtypes" => typed_release_type(
-                form,
-                primary_type(tracks.first().and_then(|t| t.field(field))),
-            ),
+            "albumtypes" => typed_release_type(form, tracks)?,
             _ => raw(&format!("a-{field}")),
         };
         let Some(typed) = typed else {
@@ -2058,16 +2092,15 @@ pub(super) fn batch_edits_from(
     let mut edits = TagEdits::default();
     let mut asked = false;
     for (field, label) in batch_fields() {
+        let clear = super::field(form, &format!("clear-{field}")).is_some();
         let typed = match field {
-            "albumtypes" => typed_release_type(
-                form,
-                primary_type(tracks.first().and_then(|t| t.field(field))),
-            ),
+            // Cleared, the type's other controls are not read.
+            "albumtypes" if clear => None,
+            "albumtypes" => typed_release_type(form, tracks)?,
             _ => super::field(form, &format!("a-{field}")).map(|v| v.trim().to_string()),
         }
         .unwrap_or_default();
         let typed = typed.as_str();
-        let clear = super::field(form, &format!("clear-{field}")).is_some();
         let value = match (typed.is_empty(), clear) {
             (true, false) => continue,
             (false, true) => anyhow::bail!("{label}: type a value or tick Clear, not both"),
