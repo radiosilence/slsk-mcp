@@ -1,0 +1,1 @@
+- **A ban made during a login holds.** A login pushes the saved bans into the engine; a ban made while that ran could be overwritten by its older list, serving the peer until the next login. Bans are now read and applied one at a time, so the latest list always wins.
