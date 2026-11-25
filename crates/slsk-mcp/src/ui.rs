@@ -74,7 +74,7 @@ pub fn router(app: Arc<App>) -> Router {
         http: reqwest::Client::new(),
         run: Arc::new(crate::live::Watched::new(
             crate::live::Topic::Library,
-            Default::default(),
+            library::LibraryRun::starting(),
         )),
         slot: Default::default(),
         queueing: Default::default(),
@@ -612,6 +612,9 @@ async fn render_page(
         "_libsince": filter.since,
         "_libfrom": filter.from,
         "_libshow": filter.show,
+        // The last library run whose changes the page has; the stream
+        // draws those after it.
+        "libseen": library::seen(s),
     })
     .to_string();
     let (mut status, mut heading) = (StatusCode::OK, search_tab.as_ref().map(|t| t.query.clone()));
@@ -1641,6 +1644,8 @@ struct Shown {
     tab: String,
     /// The jobs whose files are open, each followed by a comma.
     files: String,
+    /// The last library run whose changes the Library page has drawn.
+    libseen: u64,
 }
 
 impl Default for Shown {
@@ -1651,6 +1656,7 @@ impl Default for Shown {
             job: String::new(),
             tab: String::new(),
             files: String::new(),
+            libseen: 0,
         }
     }
 }
@@ -1694,7 +1700,7 @@ async fn stream(
         let mut transfers = slsk_engine::changes();
         let mut status = app.session.engine().map(|e| e.status());
         let ends = tokio::time::Instant::now() + LIFETIME;
-        let mut run_sent = library::RunSent::default();
+        let mut run_sent = library::RunSent::seen(shown.libseen);
         let mut sent: [String; 5] = Default::default();
         let mut settled_sent: Option<SettledJobs> = None;
         let mut history_sent: Option<Option<String>> = None;

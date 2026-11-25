@@ -1,0 +1,1 @@
+- **Rename an artist across albums.** The batch edit form renames an artist wherever a selected file's artist or album artist is that name, in any case, leaving collaborations that include it alone and keeping its MusicBrainz credits.
