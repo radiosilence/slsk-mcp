@@ -2285,6 +2285,9 @@ struct Queued {
     paths: Vec<String>,
     with: HashMap<String, String>,
     split: String,
+    /// Asked for every album the filter admits, most of them not drawn, so
+    /// pages read the list again rather than redraw rows.
+    all: bool,
     /// The page that asked for it, waiting to hear how it ended; none for
     /// one taken up again after a restart.
     ended: Option<tokio::sync::oneshot::Sender<Ended>>,
@@ -2444,16 +2447,16 @@ pub(super) fn run_events(s: &UiState, sent: &mut RunSent) -> Vec<axum::response:
     let mut events = events;
     // The runs ended since the page last caught up have their rows drawn
     // again in one request, with what the page shows.
-    let newest = run.finished.last().map_or(0, |f| f.id);
-    if newest > sent.finished {
+    let now = seen_of(&run);
+    if now != sent.finished {
         events.push(super::append(
             "#lib-run",
             &format!(
-                r#"<div hidden data-init="$libseen = {newest}; @get('/library/redraw?since={}&open=' + [...document.querySelectorAll('#library li > div[id]:not(:empty)')].map(d => d.id).join(',') + '&' + location.search.slice(1)); el.remove()"></div>"#,
+                r#"<div hidden data-init="$libseen = {now}; @get('/library/redraw?after={}&open=' + [...document.querySelectorAll('#library li > div[id]:not(:empty)')].map(d => d.id).join(',') + '&' + location.search.slice(1)); el.remove()"></div>"#,
                 sent.finished
             ),
         ));
-        sent.finished = newest;
+        sent.finished = now;
     }
     sent.stamp = Some(stamp);
     sent.rows = run.results.len();
@@ -2521,6 +2524,7 @@ async fn apply(State(s): State<UiState>, Path(action): Path<String>, body: Bytes
                 paths,
                 with,
                 split,
+                all,
                 ended: Some(tx),
             },
         );
@@ -2594,6 +2598,7 @@ fn run_next(s: &UiState) {
             paths,
             with,
             split,
+            all,
             ended,
         } = q;
         // A panic in the run still frees the slot.
@@ -2627,7 +2632,7 @@ fn run_next(s: &UiState) {
             let id = run.id;
             run.finished.push(Finished {
                 id,
-                rows: (paths.len() <= REDRAWN_ROWS).then(|| (paths.clone(), moved.clone())),
+                rows: (!all && paths.len() <= REDRAWN_ROWS).then(|| (paths.clone(), moved.clone())),
             });
             let over = run.finished.len().saturating_sub(FINISHED_KEPT);
             run.finished.drain(..over);
@@ -2671,6 +2676,7 @@ pub(super) async fn resume(s: UiState, queueing: tokio::sync::OwnedMutexGuard<()
                 .collect(),
             with: q.attached,
             split: q.split,
+            all: false,
             ended: None,
         };
         next.follow(&moved);
@@ -2712,8 +2718,12 @@ pub(super) async fn resume(s: UiState, queueing: tokio::sync::OwnedMutexGuard<()
 
 /// The last run that ended, whose changes a page drawn now has.
 pub(super) fn seen(s: &UiState) -> u64 {
-    let run = s.run.read();
-    run.finished.last().map_or(run.id, |f| f.id)
+    seen_of(&s.run.read())
+}
+
+/// The last run that ended: the one before the run going, if one is.
+fn seen_of(run: &LibraryRun) -> u64 {
+    if run.running { run.id - 1 } else { run.id }
 }
 
 /// The rows of `paths` drawn again after an action: under the path each
@@ -2767,18 +2777,18 @@ async fn changed_rows(
 
 #[derive(serde::Deserialize, Default)]
 struct RedrawQuery {
-    since: u64,
+    after: u64,
     #[serde(default)]
     open: String,
 }
 
-/// The rows the runs ended after `since` changed, drawn again for a page
+/// The rows the runs ended after `after` changed, drawn again for a page
 /// with the filter in the query, each under where it is now however many of
 /// those runs moved it. The whole list when they cannot be: a run over too
 /// many albums, or runs no longer held (as after a restart).
 async fn redraw(State(s): State<UiState>, uri: http::Uri) -> Response {
     let filter: Filter = super::query(&uri);
-    let RedrawQuery { since, open } = super::query(&uri);
+    let RedrawQuery { after, open } = super::query(&uri);
     let open: Vec<String> = open
         .split(',')
         .filter(|o| !o.is_empty())
@@ -2786,8 +2796,8 @@ async fn redraw(State(s): State<UiState>, uri: http::Uri) -> Response {
         .collect();
     let finished = {
         let run = s.run.read();
-        let ended: Vec<&Finished> = run.finished.iter().filter(|f| f.id > since).collect();
-        let held = ended.first().is_some_and(|f| f.id == since + 1);
+        let ended: Vec<&Finished> = run.finished.iter().filter(|f| f.id > after).collect();
+        let held = ended.first().is_some_and(|f| f.id == after + 1);
         let mut paths: Vec<String> = Vec::new();
         let mut moved: HashMap<String, String> = HashMap::new();
         let mut whole = !held;
@@ -2800,7 +2810,7 @@ async fn redraw(State(s): State<UiState>, uri: http::Uri) -> Response {
             let earlier: HashSet<&String> = moved.values().collect();
             let fresh: Vec<String> = asked
                 .iter()
-                .filter(|p| !earlier.contains(p))
+                .filter(|p| !earlier.contains(p) && !paths.contains(p))
                 .cloned()
                 .collect();
             for to in moved.values_mut() {
