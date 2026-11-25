@@ -1,0 +1,1 @@
+- **The web kit is `@radiosilence/koan-kit-web`.** The same kit as `@radiosilence/theme` 0.2.9, renamed and now published from the koan repository.

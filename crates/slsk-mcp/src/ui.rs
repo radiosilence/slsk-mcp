@@ -209,7 +209,7 @@ async fn compress_events(request: Request, next: Next) -> Response {
 
 const APP_CSS: &str = include_str!("../assets/app.css");
 const LIVE_JS: &str = include_str!("../assets/live.js");
-/// The typeface @radiosilence/theme sets; app.css names it by a URL relative to itself.
+/// The typeface @radiosilence/koan-kit-web sets; app.css names it by a URL relative to itself.
 const GEIST_MONO: &[u8] = include_bytes!("../assets/geist-mono.woff2");
 
 /// `path` with a hash of `body`, the asset served there, so a page from a
