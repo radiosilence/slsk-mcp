@@ -18,7 +18,7 @@ pub enum Topic {
     Jobs = 0,
     /// Uploads recorded as sent.
     Uploads = 1,
-    /// Messages, buddies, rooms and the wishlist.
+    /// Messages, buddies and their statuses, rooms and the wishlist.
     Social = 2,
     /// Search tabs.
     Search = 3,
@@ -106,7 +106,7 @@ pub fn of_table(table: &str) -> Option<Topic> {
     Some(match table {
         "jobs" | "job_events" => Topic::Jobs,
         "uploads" => Topic::Uploads,
-        "messages" | "wishes" => Topic::Social,
+        "messages" | "wishes" | "buddies" => Topic::Social,
         "search_tabs" => Topic::Search,
         _ => return None,
     })

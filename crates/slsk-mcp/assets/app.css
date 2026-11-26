@@ -2035,24 +2035,10 @@
     text-decoration-line: none;
   }
 
-  .underline {
-    text-decoration-line: underline;
-  }
-
-  .decoration-brand {
-    -webkit-text-decoration-color: var(--brand);
-    -webkit-text-decoration-color: var(--brand);
-    text-decoration-color: var(--brand);
-  }
-
   .decoration-rule {
     -webkit-text-decoration-color: var(--rule);
     -webkit-text-decoration-color: var(--rule);
     text-decoration-color: var(--rule);
-  }
-
-  .underline-offset-\[5px\] {
-    text-underline-offset: 5px;
   }
 
   .filter {
@@ -2095,6 +2081,28 @@
     .hover\:no-underline:hover {
       text-decoration-line: none;
     }
+  }
+
+  .aria-\[current\=page\]\:border-brand[aria-current="page"] {
+    border-color: var(--brand);
+  }
+
+  .aria-\[current\=page\]\:text-ink[aria-current="page"] {
+    color: var(--ink);
+  }
+
+  .aria-\[current\=page\]\:underline[aria-current="page"] {
+    text-decoration-line: underline;
+  }
+
+  .aria-\[current\=page\]\:decoration-brand[aria-current="page"] {
+    -webkit-text-decoration-color: var(--brand);
+    -webkit-text-decoration-color: var(--brand);
+    text-decoration-color: var(--brand);
+  }
+
+  .aria-\[current\=page\]\:underline-offset-\[5px\][aria-current="page"] {
+    text-underline-offset: 5px;
   }
 
   .data-attr\:hidden[data-attr] {

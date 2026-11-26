@@ -36,9 +36,6 @@ pub(crate) const UPLOAD_TOTALS: &str = "SELECT COUNT(*), COALESCE(SUM(bytes), 0)
          COALESCE(SUM(finished_at >= ?2), 0), COALESCE(SUM(CASE WHEN finished_at >= ?2 THEN bytes END), 0) \
          FROM uploads WHERE state = 'completed' AND finished_at >= ?1";
 
-/// When the latest upload finished: the history changes only when it does.
-pub(crate) const NEWEST_UPLOAD: &str = "SELECT MAX(finished_at) FROM uploads";
-
 /// The latest finished uploads.
 pub(crate) const RECENT_UPLOADS: &str = "SELECT username, filename, size, bytes, state, seconds, finished_at FROM uploads \
          ORDER BY finished_at DESC LIMIT ?1";
@@ -1611,12 +1608,6 @@ pub async fn upload_totals(
     .await
 }
 
-/// When the latest upload finished, as stored.
-pub async fn newest_upload(db: &Db) -> Result<Option<String>> {
-    db.run(|c| c.prepare_cached(NEWEST_UPLOAD)?.query_row([], |r| r.get(0)))
-        .await
-}
-
 /// History older than `days` goes; it is for looking back weeks, not years.
 pub async fn prune_uploads(db: &Db, days: i32) -> Result<u64> {
     let before = ts(&(chrono::Utc::now() - chrono::Duration::days(i64::from(days))));
@@ -1687,7 +1678,6 @@ mod tests {
             STALLED_PEERS,
             RECENT_UPLOADS,
             UPLOAD_TOTALS,
-            NEWEST_UPLOAD,
             crate::social::CONVERSATIONS,
             crate::social::THREAD,
             crate::social::UNREAD,

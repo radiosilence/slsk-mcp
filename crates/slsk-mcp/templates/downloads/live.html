@@ -1,0 +1,13 @@
+{% macro section(heading, tone, cards) %}
+{% if !cards.is_empty() %}
+<section class="mt-5 min-w-0">
+  <h2 class="{{ tone }}">{{ heading }} <span class="text-ink">{{ cards.len() }}</span></h2>
+  <div class="grid gap-3">{% for c in cards %}{{ c.draw() }}{% endfor %}</div>
+</section>
+{% endif %}
+{% endmacro -%}
+<div id="jobs-live">
+{% if empty %}{{ kit::Empty::new("Nothing yet.").detail("Search for something, or ask your assistant to grab it.").icon(kit::icon::DOWNLOAD) }}{% endif %}
+{% call section("Needs you", "text-warn", attention) %}{% endcall %}
+{% call section("On the way", "", underway) %}{% endcall %}
+</div>

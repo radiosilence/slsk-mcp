@@ -1,0 +1,8 @@
+<div class="grid min-w-0 gap-3 *:min-w-0">
+  {% let lookup = kit::Form::get("/profile") %}
+  <form {{ lookup.attrs() }} class="flex flex-wrap items-center gap-2">
+    {{ kit::Input::text("username").value(username).label("Username").placeholder("Username, or empty for your own").autocomplete("off").attr("autocapitalize", "off").class("basis-full") }}
+    {{ lookup.submit(kit::Button::primary("View profile").class("flex-auto")) }}
+  </form>
+  {% if let Some(html) = card %}{{ html }}{% else %}{{ kit::Empty::new("Sign in to Soulseek first.") }}{% endif %}
+</div>

@@ -58,4 +58,5 @@ libc = "0.2"
 
 [dev-dependencies]
 slsk-testserver = { path = "../slsk-testserver" }
+tower = { version = "0.5", features = ["util"] }
 tokio = { version = "1.54.1", features = ["full", "test-util"] }

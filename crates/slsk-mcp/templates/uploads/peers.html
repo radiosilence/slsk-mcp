@@ -1,0 +1,29 @@
+<div id="uploads-peers">
+  <p class="text-meta text-muted">{{ sending }} sending · {{ queued }} queued · {{ sent }} sent recently · sharing {{ shared }} files</p>
+  {% if peers.is_empty() %}{{ kit::Empty::new("Nobody is taking anything from you right now.") }}{% endif %}
+  <div class="grid gap-3">
+  {% for p in peers %}
+  <article class="panel">
+    <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
+      <strong class="min-w-0 flex-auto wrap-anywhere"><a class="wrap-anywhere" href="{{ crate::web::profile_href(p.username) }}">{{ p.username }}</a></strong>
+      {% if p.speed > 0 %}<span class="text-meta text-muted wrap-anywhere">{{ self.size(p.speed) }}/s</span>{% endif %}
+    </div>
+    <div class="text-meta text-muted wrap-anywhere">{{ p.files.len() }} in progress or queued{% if p.done > 0 %} · {{ p.done }} sent{% endif %}</div>
+    <ul class="mt-2">
+    {% for t in p.files %}
+      <li class="flex min-w-0 items-center gap-2 py-1">
+        <span class="min-w-0 flex-auto truncate" title="{{ t.filename }}">{{ self.leaf(t.filename) }}</span>
+        <span class="flex-none text-meta text-muted">{{ self.label(t) }}{% if t.state == "transferring" %} · {{ self.size(t.speed) }}/s · <span data-bytes="{{ t.bytes }}" data-total="{{ t.size }}" data-rate="{{ t.speed }}" data-at="{{ at }}" data-draw="eta"></span>{% endif %}</span>
+        {{ kit::Button::quiet("Cancel").class("flex-none").post(self.cancel(t)) }}
+      </li>
+      {% if t.state == "transferring" %}<li class="pb-1">{{ self.meter(t) }}</li>{% endif %}
+    {% endfor %}
+    </ul>
+    <div class="mt-2.5 flex flex-wrap items-center gap-2">
+      <span class="flex-1 max-sm:hidden"></span>
+      {{ crate::web::peer::ban_button(p.username, false) }}
+    </div>
+  </article>
+  {% endfor %}
+  </div>
+</div>

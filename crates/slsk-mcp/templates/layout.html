@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+{{ kit::Head::new(self.css()).datastar("/assets/datastar.js") }}
+{{ title }}
+{% let icons = self.icons() %}
+<link rel="icon" href="{{ icons[0] }}" sizes="32x32">
+<link rel="icon" href="{{ icons[1] }}" sizes="192x192">
+<link rel="apple-touch-icon" href="{{ icons[2] }}">
+<script type="module" src="{{ self.live() }}"></script>
+</head>
+<body data-now="{{ now }}" data-signals="{{ signals }}"
+  data-effect="$_url && $_url != location.pathname + location.search && history.pushState(null, '', $_url)"
+  data-on:popstate__window="location.pathname + location.search != $_url && location.reload()">
+{{ kit::SkipLink::new("Skip to content", "main") }}
+<div hidden{{ self.stream() }}></div>
+<header class="sticky top-0 z-2 border-b border-rule bg-surface px-4 py-2.5 pt-[max(10px,env(safe-area-inset-top))] max-sm:px-3 max-sm:py-2">
+  {{ status }}
+</header>
+{{ nav }}
+{{ main }}
+<footer class="px-4 py-6 text-center text-fine">{{ kit::Release::new("slsk-mcp", self.version(), "https://github.com/radiosilence/slsk-mcp") }}</footer>
+{{ kit::Confirm::new("Cancel") }}
+{{ kit::Flash::region() }}
+</body>
+</html>

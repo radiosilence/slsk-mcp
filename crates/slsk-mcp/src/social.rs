@@ -389,23 +389,29 @@ impl Social {
                     username: username.clone(),
                     message: message.clone(),
                 });
+                drop(rooms);
+                crate::live::changed(crate::live::Topic::Social);
             }
             FromServer::JoinRoom { room, users, .. } => {
                 self.rooms.write().entry(room.clone()).or_default().members =
                     users.iter().map(|u| u.username.clone()).collect();
+                crate::live::changed(crate::live::Topic::Social);
             }
             FromServer::LeaveRoom { room } => {
                 self.rooms.write().remove(room);
+                crate::live::changed(crate::live::Topic::Social);
             }
             FromServer::UserJoinedRoom { room, user } => {
                 if let Some(r) = self.rooms.write().get_mut(room) {
                     r.members.insert(user.username.clone());
                 }
+                crate::live::changed(crate::live::Topic::Social);
             }
             FromServer::UserLeftRoom { room, username } => {
                 if let Some(r) = self.rooms.write().get_mut(room) {
                     r.members.remove(username);
                 }
+                crate::live::changed(crate::live::Topic::Social);
             }
             FromServer::RoomList(list) => *self.room_list.write() = list.public.clone(),
             // Kept only for users watched, which a WatchUser reply adds:
@@ -419,6 +425,8 @@ impl Social {
                 // (a profile being viewed) answers here too.
                 if let Some(mut s) = self.statuses.get_mut(username) {
                     *s = (*status, *privileged);
+                    drop(s);
+                    crate::live::changed(crate::live::Topic::Social);
                 }
             }
             FromServer::WatchUser {
@@ -428,6 +436,7 @@ impl Social {
                     .entry(username.clone())
                     .or_insert((*status, false))
                     .0 = *status;
+                crate::live::changed(crate::live::Topic::Social);
             }
             FromServer::WishlistInterval { seconds } => self
                 .wishlist_interval

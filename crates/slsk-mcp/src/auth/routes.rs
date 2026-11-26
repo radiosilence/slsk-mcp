@@ -10,7 +10,7 @@ use crate::auth::cookie::{FLOW_COOKIE, SESSION_COOKIE, clear_cookie, read_cookie
 use crate::auth::oidc::{authorize_url, exchange_code, pkce};
 use crate::auth::session::Sessions;
 use crate::error::{AppError, AppResult};
-use crate::ui::UiState as AppState;
+use crate::web::UiState as AppState;
 
 /// How long a signed-in session lasts. A week, because the alternative is
 /// logging in from a sofa.

@@ -19,8 +19,8 @@ mod live;
 mod mcp;
 mod session;
 mod social;
-mod ui;
 mod uploads_log;
+mod web;
 
 use std::sync::Arc;
 
@@ -179,7 +179,7 @@ async fn main() -> anyhow::Result<()> {
     let metrics = metrics_router(app.clone());
     let ui_listener = tokio::net::TcpListener::bind(&cfg.ui_addr).await?;
     tracing::info!(addr = %cfg.ui_addr, "web UI");
-    let ui = ui::router(app.clone());
+    let ui = web::router(app.clone());
     // On a stop signal no new import starts, but the listeners keep serving
     // until the one in progress has finished: the UI and MCP stay up through
     // a drain that can take minutes, rather than going dark for it.

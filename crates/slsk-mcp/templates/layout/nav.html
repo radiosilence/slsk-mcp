@@ -1,0 +1,5 @@
+<nav id="nav" class="sticky top-0 z-1 flex gap-1 overflow-x-auto border-b border-rule bg-surface px-4 pt-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+{% for t in self.tabs() %}
+  <a href="{{ t.href() }}" class="flex-none border-b-2 border-transparent px-3 py-2 whitespace-nowrap text-muted hover:no-underline aria-[current=page]:border-brand aria-[current=page]:text-ink"{% if *t == tab %} aria-current="page"{% endif %}>{{ t.label() }}{% if let Some(n) = self.badge(t) %} <span class="text-ink">{{ n }}</span>{% endif %}</a>
+{% endfor %}
+</nav>

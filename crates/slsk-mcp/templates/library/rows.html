@@ -1,0 +1,21 @@
+{% for r in rows %}
+  <li class="flex-wrap items-start">
+    {% let select = kit::Check::new("path", "Select {}"|format(self.rel(r.album.path))).value(r.album.path).checked(all).bare().class("mx-0.5 mt-1 flex-none") %}
+    {% if r.spare().is_some() %}{{ select.data("spare", "1") }}{% else %}{{ select }}{% endif %}
+    <div class="min-w-0 flex-1">
+      <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
+        {#- A plain click opens or closes the album in its row; a modified one opens the page with it open. -#}
+        {{ kit::Link::new(self.title(r), self.href(r.album.path)).class("min-w-0 font-semibold wrap-anywhere").data("toggle", self.toggle(r.album.path)).datastar("on:click", "evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || evt.button || (evt.preventDefault(), @get(el.dataset.toggle))") }}
+        {% if r.spare().is_some() %}{{ crate::web::state("spare", "spare") }}{% endif %}
+        {% if r.kept() %}{{ crate::web::state("keep", "kept") }}{% endif %}
+        {% if let Some((_, to)) = r.refile() %}{% if to.is_some() %}{{ kit::Status::wait("would move") }}{% else %}{{ kit::Status::wait("can't file") }}{% endif %}{% endif %}
+      </div>
+      <div class="text-meta text-muted wrap-anywhere">{% if let Some(a) = r.album.album_artist %}{{ a }}{% endif %}{% if let Some(y) = r.album.year %} · {{ y }}{% endif %} · {% if r.album.format.is_empty() %}?{% else %}{{ r.album.format }}{% endif %} · {{ r.album.tracks }} track{% if r.album.tracks != 1 %}s{% endif %}</div>
+      <div class="text-fine text-muted wrap-anywhere">{{ self.rel(r.album.path) }}</div>
+      {% if let Some(why) = r.spare() %}<div class="text-meta text-muted wrap-anywhere">Spare: {{ why }}</div>{% endif %}
+      {% if let Some((change, to)) = r.refile() %}<div class="text-meta text-muted wrap-anywhere">{% if let Some(to) = to %}Rules file it at {{ self.rel(to) }} ({{ change.label() }}){% else %}The rules cannot file it here: {{ change.label() }}{% endif %}</div>{% endif %}
+    </div>
+    <span class="flex-none text-meta whitespace-nowrap text-muted">{{ self.imported(r.album) }}</span>
+    <div id="{{ self.slot(r.album.path) }}" class="basis-full empty:hidden"></div>
+  </li>
+{% endfor %}
