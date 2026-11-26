@@ -1,6 +1,6 @@
 <div id="activity-feed">
   <p class="text-meta text-muted">{{ hour.0 }} searches reached you this hour, {{ hour.2 }} of them through the distributed network; your shares answered {{ hour.1 }}.</p>
-  {% if events.is_empty() %}<p class="text-meta text-muted">Nobody has browsed, searched your shares or downloaded since the service started.</p>{% endif %}
+  {% if events.is_empty() %}{{ kit::Empty::new("Nobody has come by yet.").detail("Nobody has browsed, searched your shares or downloaded since the service started.") }}{% endif %}
   <ul class="rows">
   {% for e in events %}
     <li class="flex min-w-0 flex-wrap items-baseline gap-x-2">

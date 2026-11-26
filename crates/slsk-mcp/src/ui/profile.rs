@@ -8,6 +8,7 @@
 //! their pictures are served from. This account's own profile is kept in
 //! the database and set on the engine, which hands it to any peer asking.
 
+use koan_kit_web as kit;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -21,7 +22,7 @@ use slsk_engine::slsk_proto::peer::UserInfo;
 use slsk_engine::slsk_proto::server::{FromServer, ToServer, UserStats, UserStatus};
 use slsk_engine::{Engine, Event, Profile};
 
-use super::{UiState, failed, flash_ok, human, patch};
+use super::{UiState, failed, human, patch};
 
 pub(super) fn routes() -> Router<UiState> {
     Router::new()
@@ -109,6 +110,25 @@ struct View {
 }
 
 impl View {
+    fn pairs(&self) -> kit::Pairs<'_> {
+        self.stats
+            .iter()
+            .map(|(label, value)| (*label, value))
+            .collect()
+    }
+
+    fn picture_input(&self) -> kit::Input<'static> {
+        kit::Input::new(kit::InputKind::File, "picture").attr("accept", "image/jpeg,image/png")
+    }
+
+    fn browse_label(&self) -> &'static str {
+        if self.mine {
+            "Browse your shares"
+        } else {
+            "Browse shares"
+        }
+    }
+
     fn refresh(&self) -> String {
         super::place_url("/profile", &[("username", &self.username), ("fresh", "1")])
     }
@@ -396,7 +416,7 @@ async fn save(State(s): State<UiState>, mut multipart: Multipart) -> Response {
     engine.set_profile(profile);
     askama_datastar::events(vec![
         patch(&own(&s, &engine).await),
-        patch(&flash_ok("Profile saved.")),
+        kit::Flash::ok("Profile saved.").patch().into(),
     ])
 }
 

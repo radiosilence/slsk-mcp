@@ -1,31 +1,29 @@
 <div id="browse">
-  {#- The tree's Download buttons submit this form: each names its route in `formaction`, asks first when it has `data-confirm`, and stays disabled once sent. -#}
-  <form id="browse-user" data-on:submit="(!evt.submitter.dataset.confirm || confirm(evt.submitter.dataset.confirm)) && (evt.submitter.disabled = true, @post(evt.submitter.getAttribute('formaction'), {contentType: 'form'}))"><input type="hidden" name="username" value="{{ username }}"></form>
 {% match error %}{% when Some with (e) %}<p class="text-meta text-muted">{{ e }}</p>{% when None %}
   <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
     <strong class="min-w-0 flex-auto wrap-anywhere">{% if mine %}Your shares{% else %}<a href="{{ crate::ui::profile_href(username) }}">{{ username }}</a>{% endif %}</strong>
   </div>
   <div class="mt-2.5 flex flex-wrap items-center gap-2">
-    <button type="button" class="quiet" data-indicator="_browsing" data-attr:disabled="$_browsing" data-class:busy="$_browsing" data-on:click="@get('{{ refresh }}')">Refresh</button>
-    {% if !mine %}<a class="button quiet" href="{{ crate::ui::profile_href(username) }}">Profile</a><a class="button quiet" href="{{ crate::ui::chat_href("pm", username) }}">Message</a>{{ crate::ui::ban_button(username, *banned)|safe }}{% endif %}
+    {{ kit::Button::quiet("Refresh").get(refresh) }}
+    {% if !mine %}{{ kit::Button::quiet("Profile").href(crate::ui::profile_href(username)) }}{{ kit::Button::quiet("Message").href(crate::ui::chat_href("pm", username)) }}{{ crate::ui::ban_button(username, *banned) }}{% endif %}
   </div>
   <div class="text-meta text-muted wrap-anywhere">{{ folders }} folders{% match info %}{% when Some with (i) %} · {{ i.uploads }} uploads · queue {{ i.queue }} · {% if i.free %}<span class="text-brand">free slot</span>{% else %}no free slot{% endif %}{% when None %}{% endmatch %}</div>
-  {% match info %}{% when Some with (i) %}{% if !i.description.is_empty() %}<details class="disclosure"><summary class="text-muted">about</summary><p class="whitespace-pre-wrap text-muted wrap-anywhere">{{ i.description }}</p></details>{% endif %}{% when None %}{% endmatch %}
+  {% match info %}{% when Some with (i) %}{% if !i.description.is_empty() %}{% filter kit::wrap(kit::Disclosure::new("about")) %}<p class="whitespace-pre-wrap text-muted wrap-anywhere">{{ i.description }}</p>{% endfilter %}{% endif %}{% when None %}{% endmatch %}
   <nav class="my-2 flex flex-wrap items-baseline gap-x-1.5 gap-y-1">
     {% if let Some(up) = up %}<a class="wrap-anywhere" href="{{ up }}" title="Up to the folder above" data-indicator="_browsing" data-on:click="{{ crate::ui::follow("$_browsing", "@get(el.getAttribute('href'))") }}">↑ Up</a>{% endif %}
     {% for c in crumbs %}{% if !loop.first %}<span class="text-meta text-muted">/</span>{% endif %}<a class="wrap-anywhere" href="{{ c.href }}" data-indicator="_browsing" data-on:click="{{ crate::ui::follow("$_browsing", "@get(el.getAttribute('href'))") }}">{{ c.name }}</a>{% endfor %}
   </nav>
   {% if !mine && tree_files > 0 %}
   <div class="mt-2.5 flex flex-wrap items-center gap-2">
-    <form class="contents" data-indicator="_dl_here" data-on:submit="{% if tree_files > 100 %}confirm('Download everything under this folder? It is more than 100 files, one job per album.') && {% endif %}@post('/browse/tree', {contentType: 'form'})"><input type="hidden" name="username" value="{{ username }}"><button class="primary" name="key" value="{{ here_key }}" data-attr:disabled="$_dl_here" data-class:busy="$_dl_here">Download folder · {{ tree_files }} files</button></form>
-    {% if has_files %}<form id="browse-files" data-indicator="_dl_some" data-on:submit="@post('/browse/files', {contentType: 'form'})">
+    {{ crate::ui::browse::tree_download(kit::Button::primary("Download folder · {} files"|format(tree_files)), username, here_key, tree_files) }}
+    {% if has_files %}{% let ticked = kit::Form::post("/browse/files").id("browse-files") %}<form {{ ticked.attrs() }}>
       <input type="hidden" name="username" value="{{ username }}">
       <input type="hidden" name="key" value="{{ here_key }}">
-      <button class="primary" data-attr:disabled="$_dl_some" data-class:busy="$_dl_some">Download ticked</button>
+      {{ ticked.submit(kit::Button::primary("Download ticked")) }}
     </form>{% endif %}
   </div>
   {% endif %}
-  {% if rows.trim().is_empty() %}<p class="text-meta text-muted">This folder is empty.</p>{% else %}
+  {% if rows.trim().is_empty() %}{{ kit::Empty::new("This folder is empty.") }}{% else %}
   <ul>{{ rows|safe }}</ul>
   {% endif %}
 {% endmatch %}

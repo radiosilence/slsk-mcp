@@ -1,5 +1,5 @@
 <div id="activity-trends" class="grid min-w-0 gap-4 *:min-w-0">
-{% match error %}{% when Some with (e) %}<p class="text-meta text-bad">{{ e }}</p>{% when None %}{% endmatch %}
+{% match error %}{% when Some with (e) %}{{ kit::Notice::bad(e) }}{% when None %}{% endmatch %}
 {% match trends %}{% when Some with (t) %}
   <p class="text-meta text-muted">{{ t.searches }} searches reached you; your shares answered {{ t.matched }} ({{ self.share(t.matched, t.searches) }}%). {{ self.share(t.distributed, t.searches) }}% came through the distributed network.</p>
   <div>

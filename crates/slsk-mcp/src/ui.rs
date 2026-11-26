@@ -23,6 +23,7 @@ use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use koan_kit_web as kit;
 use slsk_engine::slsk_proto::RawStr;
 use uuid::Uuid;
 
@@ -140,10 +141,7 @@ pub fn router(app: Arc<App>) -> Router {
             "/assets/app.css",
             get(|q: RawQuery| async { asset(APP_CSS, "text/css; charset=utf-8", q) }),
         )
-        .route(
-            "/assets/geist-mono.woff2",
-            get(|| async { font(GEIST_MONO) }),
-        )
+        .route("/assets/geist-mono.woff2", get(kit::font::serve))
         .route(
             "/assets/icon-32.png",
             get(|| async { png(include_bytes!("../assets/icon-32.png")) }),
@@ -217,8 +215,6 @@ async fn compress_events(request: Request, next: Next) -> Response {
 
 const APP_CSS: &str = include_str!("../assets/app.css");
 const LIVE_JS: &str = include_str!("../assets/live.js");
-/// The typeface @radiosilence/koan-kit-web sets; app.css names it by a URL relative to itself.
-const GEIST_MONO: &[u8] = include_bytes!("../assets/geist-mono.woff2");
 
 /// `path` with a hash of `body`, the asset served there, so a page from a
 /// new build fetches its own stylesheet and script rather than a cached copy
@@ -236,8 +232,6 @@ fn fingerprint(bytes: &[u8]) -> String {
 }
 
 static CSS_URL: LazyLock<String> = LazyLock::new(|| versioned("/assets/app.css", APP_CSS));
-static DATASTAR_URL: LazyLock<String> =
-    LazyLock::new(|| askama_datastar::script::url("/assets/datastar.js"));
 static LIVE_URL: LazyLock<String> = LazyLock::new(|| versioned("/assets/live.js", LIVE_JS));
 
 /// A text asset. Requested by its hashed URL (`?v=`), it never changes, so it
@@ -253,17 +247,6 @@ fn asset(body: &'static str, kind: &'static str, query: RawQuery) -> Response {
         body,
     )
         .into_response()
-}
-
-/// Public like the stylesheet that names it, so the sign-in page has it too. Only a new build changes it.
-fn font(bytes: &'static [u8]) -> impl IntoResponse {
-    (
-        [
-            (header::CONTENT_TYPE, "font/woff2"),
-            (header::CACHE_CONTROL, "public, max-age=86400"),
-        ],
-        bytes,
-    )
 }
 
 /// Public like the other assets: a browser asks for the icon before anyone signs in.
@@ -325,25 +308,16 @@ fn signals(json: &str) -> Event {
     PatchSignals::new(json).into()
 }
 
-/// A confirmation that fades by itself; tapping it dismisses it sooner.
-fn flash_ok(msg: &str) -> String {
-    format!(
-        r#"<div id="flash" class="toast brief" role="status" data-on:click="el.className = ''">{}</div>"#,
-        escape(msg)
-    )
-}
-
-fn flash_err(msg: &str) -> String {
-    format!(
-        r#"<div id="flash" class="toast bad" role="alert" data-on:click="el.className = ''">{}</div>"#,
-        escape(msg)
-    )
-}
-
 /// A form body whose fields may repeat (checkboxes, several hidden paths),
 /// which `axum::Form` does not collect.
 fn fields(body: &[u8]) -> Vec<(String, String)> {
     url::form_urlencoded::parse(body).into_owned().collect()
+}
+
+/// What an action was sent: a button posts the page's signals, so it names
+/// its row in the address's query; a form posts its fields.
+fn sent(query: Option<&str>, body: &[u8]) -> Vec<(String, String)> {
+    fields(query.map_or(body, str::as_bytes))
 }
 
 fn field<'a>(fields: &'a [(String, String)], name: &str) -> Option<&'a str> {
@@ -377,6 +351,17 @@ fn status_label(status: &str) -> &'static str {
         "cancelled" => "cancelled",
         _ => "working",
     }
+}
+
+/// A state the server reports (a job's, a peer's, the session's) as a status in its tone.
+fn state<'a>(state: &str, word: impl Into<kit::Text<'a>>) -> kit::Status<'a> {
+    let tone = match state {
+        "connected" | "online" | "keep" | "imported" => kit::Tone::Ok,
+        "displaced" | "disconnected" | "rejected" | "failed" | "suspect" => kit::Tone::Bad,
+        "spare" | "away" | "review" | "downloading" | "importing" | "waiting" => kit::Tone::Warn,
+        _ => kit::Tone::Wait,
+    };
+    kit::Status::new(tone, word).busy(state == "connecting")
 }
 
 fn human(bytes: u64) -> String {
@@ -457,19 +442,17 @@ impl Page {
     fn css(&self) -> &str {
         &CSS_URL
     }
-    fn datastar(&self) -> &str {
-        &DATASTAR_URL
-    }
     fn live(&self) -> &str {
         &LIVE_URL
     }
-    fn title(&self) -> &str {
-        self.heading.as_deref().unwrap_or_else(|| {
+    fn title(&self) -> String {
+        let name = self.heading.as_deref().unwrap_or_else(|| {
             PAGES
                 .iter()
                 .find(|p| p.0 == self.tab)
                 .map_or("job", |p| p.2)
-        })
+        });
+        format!("{name} · slsk")
     }
 }
 
@@ -565,6 +548,12 @@ fn place_url(path: &str, params: &[(&str, &str)]) -> String {
     } else {
         format!("{path}?{query}")
     }
+}
+
+/// The address of an action on one row of a list. A button posts the page's
+/// signals, not a form, so the row it acts on travels in the query.
+fn row_url(path: &str, key: &str, value: &str) -> String {
+    place_url(path, &[(key, value)])
 }
 
 /// Where the page now is, for the address bar. Every action that moves
@@ -823,18 +812,6 @@ struct SettledJobs {
     more: bool,
 }
 
-impl SettledJobs {
-    fn sig_of(&self, id: &str) -> String {
-        busy_sig(id)
-    }
-}
-
-/// The signal that is true while a request from a job's card is in flight.
-/// Local (leading underscore), so it is never sent back.
-fn busy_sig(id: &str) -> String {
-    format!("_busy_{}", id.replace('-', ""))
-}
-
 /// One job's card, on the list or heading its own page.
 #[derive(Template)]
 #[template(path = "job_card.html")]
@@ -908,8 +885,60 @@ impl CardView {
             ),
         }
     }
-    fn sig(&self, j: &Job) -> String {
-        busy_sig(j.id.as_str())
+    /// The address of one of a job's actions.
+    fn url(&self, j: &Job, action: impl std::fmt::Display) -> String {
+        format!("/jobs/{}/{action}", j.id.as_str())
+    }
+
+    /// Progress toward `total` bytes, carrying the measurement `live.js`
+    /// moves it from until the next.
+    fn meter(
+        &self,
+        bytes: &u64,
+        total: &u64,
+        rate: &u64,
+        at: &chrono::DateTime<chrono::Utc>,
+    ) -> kit::Meter<'static> {
+        let at = if *rate > 0 { at.timestamp_millis() } else { 0 };
+        kit::Meter::new(bytes, (*total).max(1))
+            .label("download")
+            .data("bytes", bytes.to_string())
+            .data("total", total.to_string())
+            .data("rate", rate.to_string())
+            .data("at", at.to_string())
+    }
+
+    /// The files' toggle, as drawn before Datastar takes it over.
+    fn files_label(&self, j: &Job) -> String {
+        let arrow = if self.open { "▾" } else { "▸" };
+        format!("{arrow} {} files", j.files.len())
+    }
+
+    fn sources_label(&self, j: &Job) -> String {
+        match j.alternates {
+            0 => "sources and history".into(),
+            1 => "sources and history · 1 other copy".into(),
+            n => format!("sources and history · {n} other copies"),
+        }
+    }
+
+    fn release_hint(&self) -> &'static str {
+        if self.discogs {
+            "MusicBrainz or Discogs release id or link"
+        } else {
+            "MusicBrainz release id or link"
+        }
+    }
+
+    /// How much of an import's current stage is done, when it counts.
+    fn stage(&self, j: &Job) -> Option<kit::Meter<'static>> {
+        let total = j.stage_total?;
+        let done = j.stage_done.unwrap_or_default();
+        Some(
+            kit::Meter::new(done, total.max(1))
+                .label(format!("{} of {} checked", human(done), human(total)))
+                .class("mt-2"),
+        )
     }
     fn label(&self, status: &str) -> &'static str {
         status_label(status)
@@ -928,14 +957,6 @@ impl CardView {
     /// `files` signal lists the open ones, so the stream draws only those.
     fn is_open(&self, j: &Job) -> String {
         format!("$files.includes('{},')", j.id.as_str())
-    }
-
-    /// The expression that opens or closes a job's files.
-    fn toggle(&self, j: &Job) -> String {
-        let id = j.id.as_str();
-        format!(
-            "$files = $files.includes('{id},') ? $files.replace('{id},', '') : $files + '{id},'"
-        )
     }
 
     fn file_progress(&self, f: &graphql::JobFile) -> String {
@@ -1418,13 +1439,19 @@ async fn job_sources(State(s): State<UiState>, Path(id): Path<Uuid>) -> Response
     );
     let target = format!("sources-{id}");
     match (job, events) {
-        (Ok(job), Ok(events)) => one(SourcesView::new(target, job.as_ref(), events)
-            .render()
-            .unwrap_or_default()),
-        (Err(e), _) | (_, Err(e)) => one(format!(
-            r#"<div id="{target}" class="mt-1.5 text-meta text-bad">Couldn't read the history: {}</div>"#,
-            escape(&format!("{e:#}"))
-        )),
+        (Ok(job), Ok(events)) => in_disclosure(
+            &target,
+            &SourcesView::new(target.clone(), job.as_ref(), events)
+                .render()
+                .unwrap_or_default(),
+        ),
+        (Err(e), _) | (_, Err(e)) => in_disclosure(
+            &target,
+            &format!(
+                r#"<div id="{target}" class="mt-1.5">{}</div>"#,
+                kit::Notice::bad(&format!("Couldn't read the history: {e:#}"))
+            ),
+        ),
     }
 }
 
@@ -1512,8 +1539,20 @@ impl UploadPeers {
     fn leaf<'a>(&self, name: &'a str) -> &'a str {
         leaf(name)
     }
-    fn pct(&self, t: &Transfer) -> u64 {
-        percent(t.bytes, t.size)
+    fn cancel(&self, t: &Transfer) -> String {
+        place_url(
+            "/uploads/cancel",
+            &[("username", &t.username), ("filename", &t.filename)],
+        )
+    }
+    /// What has gone, carrying the measurement `live.js` moves it from.
+    fn meter(&self, t: &Transfer) -> kit::Meter<'static> {
+        kit::Meter::new(t.bytes, t.size.max(1))
+            .label("upload")
+            .data("bytes", t.bytes.to_string())
+            .data("total", t.size.to_string())
+            .data("rate", t.speed.to_string())
+            .data("at", self.at.to_string())
     }
     fn size(&self, b: &u64) -> String {
         human(*b)
@@ -1936,7 +1975,7 @@ async fn download(State(s): State<UiState>, body: Bytes) -> Response {
     match s.app.jobs.from_folder(&folder, title, Vec::new()).await {
         Ok(_) => {
             let name = folder_heading(&folder.path).unwrap_or(folder.path.clone());
-            one(flash_ok(&format!("Downloading {name} from {username}")))
+            one(kit::Flash::ok(&format!("Downloading {name} from {username}")).to_string())
         }
         Err(e) => failed(&e),
     }
@@ -1957,9 +1996,15 @@ async fn job_action(
                     scam.peer,
                     scam.jobs.len()
                 );
-                done_with(&s.app, &shown, true, flash_ok(&msg)).await
+                done_with(
+                    &s.app,
+                    &shown,
+                    true,
+                    Some(kit::Flash::ok(&msg).patch().into()),
+                )
+                .await
             }
-            Err(e) => one(flash_err(&e.message)),
+            Err(e) => one(kit::Flash::bad(&e.message).to_string()),
         };
     }
     let result = match action.as_str() {
@@ -1995,11 +2040,12 @@ async fn job_action(
 /// jobs in hand, and with `settled`, the jobs done with as well, since the
 /// change may have moved one into or out of them.
 async fn done(app: &App, shown: &Shown, settled: bool) -> Response {
-    done_with(app, shown, settled, String::new()).await
+    done_with(app, shown, settled, None).await
 }
 
-/// [`done`], with `extra` elements patched as well.
-async fn done_with(app: &App, shown: &Shown, settled: bool, extra: String) -> Response {
+/// [`done`], with an `extra` patch after it. Closes the page's question,
+/// for an action that asked first.
+async fn done_with(app: &App, shown: &Shown, settled: bool, extra: Option<Event>) -> Response {
     let html = match Uuid::parse_str(&shown.job) {
         Ok(id) => match job_page_html(app, id).await {
             Ok(html) => html,
@@ -2015,11 +2061,14 @@ async fn done_with(app: &App, shown: &Shown, settled: bool, extra: String) -> Re
             html
         }
     };
-    one(format!("{html}\n<div id=\"flash\"></div>\n{extra}"))
+    let mut events = vec![patch(&format!("{html}\n{}", kit::Flash::region()))];
+    events.extend(extra);
+    events.push(kit::Confirm::close().into());
+    askama_datastar::events(events)
 }
 
 fn failed(e: &anyhow::Error) -> Response {
-    one(flash_err(&format!("{e:#}")))
+    one(kit::Flash::bad(&format!("{e:#}")).to_string())
 }
 
 async fn resolve(
@@ -2056,9 +2105,9 @@ async fn resolve_pasted(
     axum::Form(form): axum::Form<ReleaseForm>,
 ) -> Response {
     let Some(release) = crate::library::release_id(&form.release) else {
-        return one(flash_err(
-            "That is not a MusicBrainz or Discogs release id or link.",
-        ));
+        return one(
+            kit::Flash::bad("That is not a MusicBrainz or Discogs release id or link.").to_string(),
+        );
     };
     match s.app.jobs.import_soon(id, false, Some(release)).await {
         Ok(()) => {
@@ -2172,11 +2221,7 @@ async fn job_files(State(s): State<UiState>, Path(id): Path<Uuid>) -> Response {
     }
     .render()
     .unwrap_or_default();
-    askama_datastar::events([insert(
-        &format!("#files-{id}"),
-        ElementPatchMode::Replace,
-        &html,
-    )])
+    in_disclosure(&format!("files-{id}"), &html)
 }
 
 /// The files of a downloading job, each ticked to fetch or not.
@@ -2206,7 +2251,18 @@ async fn job_pick_html(app: &App, id: Uuid, error: Option<String>) -> String {
 }
 
 async fn job_pick(State(s): State<UiState>, Path(id): Path<Uuid>) -> Response {
-    one(job_pick_html(&s.app, id, None).await)
+    in_disclosure(
+        &format!("pick-{id}"),
+        &job_pick_html(&s.app, id, None).await,
+    )
+}
+
+/// What a job card's disclosure loads, put in place whole. The disclosure
+/// keeps `data-ignore-morph`, so the stream's redraws of the card leave it
+/// open, and Datastar morphs nothing inside such an element; a replacement
+/// it does make.
+fn in_disclosure(id: &str, html: &str) -> Response {
+    askama_datastar::events([insert(&format!("#{id}"), ElementPatchMode::Replace, html)])
 }
 
 /// The ticked files are fetched and the rest skipped.
@@ -2233,11 +2289,16 @@ async fn pick_files(State(s): State<UiState>, Path(id): Path<Uuid>, body: Bytes)
         files: field(&fields, "files").unwrap_or_default().to_string(),
         ..Shown::default()
     };
+    let pick = job_pick_html(&s.app, id, error).await;
     done_with(
         &s.app,
         &shown,
         false,
-        job_pick_html(&s.app, id, error).await,
+        Some(insert(
+            &format!("#pick-{id}"),
+            ElementPatchMode::Replace,
+            &pick,
+        )),
     )
     .await
 }
@@ -2286,35 +2347,42 @@ async fn job_compare(
     }
     .render()
     .unwrap_or_default();
-    askama_datastar::events([insert(
-        &format!("#cmp-{id}"),
-        ElementPatchMode::Replace,
-        &html,
-    )])
+    in_disclosure(&format!("cmp-{id}"), &html)
 }
 
 #[derive(serde::Deserialize)]
-struct UserFileForm {
+struct UploadQuery {
     username: String,
-    filename: Option<String>,
-    #[serde(default = "page", deserialize_with = "shown_field")]
-    history: i64,
+    filename: String,
 }
 
 async fn cancel_upload(
     State(s): State<UiState>,
-    axum::Form(f): axum::Form<UserFileForm>,
+    Query(q): Query<UploadQuery>,
+    Signals(shown): Signals<Shown>,
 ) -> Response {
-    if let (Some(e), Some(name)) = (s.app.session.engine(), f.filename) {
-        e.cancel_upload(&f.username, &RawStr::from(name));
+    if let Some(e) = s.app.session.engine() {
+        e.cancel_upload(&q.username, &RawStr::from(q.filename));
     }
-    one(uploads_html(&s.app, f.history).await)
+    one(uploads_html(&s.app, shown.history).await)
 }
 
-async fn ban(State(s): State<UiState>, axum::Form(f): axum::Form<UserFileForm>) -> Response {
-    match graphql::set_ban(&s.app, &f.username, true).await {
-        Ok(_) => one(flash_ok(&format!("Banned {}", f.username))),
-        Err(e) => one(flash_err(&e.message)),
+/// A peer an action names in its address, since a button posts the page's
+/// signals rather than a form.
+#[derive(serde::Deserialize)]
+pub(super) struct PeerQuery {
+    pub(super) username: String,
+}
+
+async fn ban(State(s): State<UiState>, Query(p): Query<PeerQuery>) -> Response {
+    match graphql::set_ban(&s.app, &p.username, true).await {
+        Ok(_) => askama_datastar::events([
+            kit::Flash::ok(&format!("Banned {}", p.username))
+                .patch()
+                .into(),
+            kit::Confirm::close().into(),
+        ]),
+        Err(e) => one(kit::Flash::bad(&e.message).to_string()),
     }
 }
 
@@ -2353,35 +2421,34 @@ fn peer_key(username: &str) -> String {
 
 /// A Ban button for a peer, or Unban once banned. Banning asks first: it
 /// refuses the peer everything and stops them being downloaded from.
-fn ban_button(username: &str, banned: bool) -> String {
-    let key = peer_key(username);
-    let (label, action, ask, tone) = if banned {
-        ("Unban", "/peer/unban", "", "quiet")
+fn ban_button(username: &str, banned: bool) -> kit::Button<'static> {
+    let (button, action) = if banned {
+        (kit::Button::quiet("Unban"), "/peer/unban")
     } else {
         (
-            "Ban",
+            kit::Button::quiet("Ban").bad().confirm(
+                "Ban this user? They get nothing more from you, and nothing is downloaded from them.",
+                "Ban",
+            ),
             "/peer/ban",
-            "confirm('Ban this user? They get nothing more from you, and nothing is downloaded from them.') && ",
-            "quiet bad",
         )
     };
-    format!(
-        r#"<form class="contents" data-peer-ban="{key}" data-indicator="_pb_{key}" data-on:submit="{ask}@post('{action}', {{contentType: 'form'}})"><input type="hidden" name="username" value="{user}"><button class="{tone}" data-attr:disabled="$_pb_{key}" data-class:busy="$_pb_{key}">{label}</button></form>"#,
-        user = escape(username),
-    )
+    button
+        .post(place_url(action, &[("username", username)]))
+        .data("peer-ban", peer_key(username))
 }
 
-async fn peer_ban(State(s): State<UiState>, axum::Form(f): axum::Form<UserFileForm>) -> Response {
-    set_peer_ban(&s, &f.username, true).await
+async fn peer_ban(State(s): State<UiState>, Query(p): Query<PeerQuery>) -> Response {
+    set_peer_ban(&s, &p.username, true).await
 }
 
-async fn peer_unban(State(s): State<UiState>, axum::Form(f): axum::Form<UserFileForm>) -> Response {
-    set_peer_ban(&s, &f.username, false).await
+async fn peer_unban(State(s): State<UiState>, Query(p): Query<PeerQuery>) -> Response {
+    set_peer_ban(&s, &p.username, false).await
 }
 
 async fn set_peer_ban(s: &UiState, username: &str, banned: bool) -> Response {
     if let Err(e) = graphql::set_ban(&s.app, username, banned).await {
-        return one(flash_err(&e.message));
+        return one(kit::Flash::bad(&e.message).to_string());
     }
     let msg = if banned {
         format!("Banned {username}")
@@ -2392,9 +2459,10 @@ async fn set_peer_ban(s: &UiState, username: &str, banned: bool) -> Response {
         insert(
             &format!("[data-peer-ban=\"{}\"]", peer_key(username)),
             ElementPatchMode::Replace,
-            &ban_button(username, banned),
+            &ban_button(username, banned).to_string(),
         ),
-        patch(&flash_ok(&msg)),
+        kit::Flash::ok(&msg).patch().into(),
+        kit::Confirm::close().into(),
     ])
 }
 

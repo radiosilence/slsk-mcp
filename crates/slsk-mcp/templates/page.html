@@ -1,21 +1,16 @@
 <!doctype html>
-<html lang="en">
+<html lang="en-GB">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>{{ self.title() }} · slsk</title>
-<meta name="theme-color" content="#1e1e1e" media="(prefers-color-scheme: dark)">
-<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+{{ kit::Head::new(self.css()).title(self.title()).datastar("/assets/datastar.js") }}
 <link rel="icon" href="/assets/icon-32.png" sizes="32x32">
 <link rel="icon" href="/assets/icon-192.png" sizes="192x192">
 <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
-<link rel="stylesheet" href="{{ self.css() }}">
-<script type="module" src="{{ self.datastar() }}"></script>
 <script type="module" src="{{ self.live() }}"></script>
 </head>
 <body data-now="{{ now }}" data-signals="{{ signals }}"
   data-effect="$_url && $_url != location.pathname + location.search && history.pushState(null, '', $_url)"
   data-on:popstate__window="location.pathname + location.search != $_url && location.reload()">
+{{ kit::SkipLink::new("Skip to content", "main") }}
 <header class="sticky top-0 z-2 border-b border-rule bg-surface px-4 py-2.5 pt-[max(10px,env(safe-area-inset-top))] max-sm:px-3 max-sm:py-2" data-effect="$jobs; $history; $tab; $files; @get('/stream?page={{ tab }}')"
   data-on-interval__duration.60s="@get('/stream?page={{ tab }}')"
   data-on:visibilitychange__document="!document.hidden && @get('/stream?page={{ tab }}')">
@@ -26,10 +21,11 @@
   <a href="{{ p.href }}" class="flex-none border-b-2 px-3 py-2 whitespace-nowrap hover:no-underline {% if p.active %}border-brand text-ink{% else %}border-transparent text-muted{% endif %}"{% if p.active %} aria-current="page"{% endif %}>{{ p.label }}{% if p.name == "uploads" %} {{ up_count|safe }}{% endif %}{% if p.name == "chat" %} {{ chat_count|safe }}{% endif %}</a>
 {% endfor %}
 </nav>
-<main class="mx-auto grid max-w-[1100px] grid-cols-[minmax(0,1fr)] gap-6 p-4 max-sm:gap-4 max-sm:p-3">
-  <div id="flash"></div>
+<main id="main" class="mx-auto grid max-w-[1100px] grid-cols-[minmax(0,1fr)] gap-6 p-4 max-sm:gap-4 max-sm:p-3">
   {{ body|safe }}
 </main>
-<footer class="px-4 py-6 text-center text-fine"><a class="text-muted hover:text-ink hover:no-underline" href="https://github.com/radiosilence/slsk-mcp/releases/tag/v{{ version }}">slsk-mcp {{ version }}</a></footer>
+<footer class="px-4 py-6 text-center text-fine">{{ kit::Release::new("slsk-mcp", version, "https://github.com/radiosilence/slsk-mcp") }}</footer>
+{{ kit::Confirm::new("Cancel") }}
+{{ kit::Flash::region() }}
 </body>
 </html>

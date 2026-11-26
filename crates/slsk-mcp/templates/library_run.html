@@ -2,12 +2,11 @@
 {% if run.action.is_some() %}
 <div class="panel">
   {% include "library_run_head.html" %}
-  <details class="disclosure"{% if run.running %} open{% endif %}>
-    <summary class="mt-1 text-meta text-muted">each album</summary>
+  {% filter kit::wrap(kit::Disclosure::new("each album").open(run.running).class("mt-1")) %}
     <ul id="lib-run-rows" class="rows">
     {% for r in run.results.iter().rev() %}{% include "library_run_row.html" %}{% endfor %}
     </ul>
-  </details>
+  {% endfilter %}
 </div>
 {% endif %}
 </div>

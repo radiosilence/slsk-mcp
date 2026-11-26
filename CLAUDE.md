@@ -31,6 +31,6 @@ just check   # what CI checks bar the audit and release builds: Cargo.lock clean
              # the Pulumi package's typecheck, tests and build, a stale assets/app.css, changelog fragments, version agreement, actionlint
 just fast    # what the pre-push hook runs
 just fmt
-just css     # install @radiosilence/koan-kit-web, run kit-check, recompile assets/app.css and copy its font after changing classes in templates or src,
-             # styles/ or the theme version; CI fails if either is stale
+just css     # link koan-kit-web's source as styles/kit, run kit-check and recompile assets/app.css after changing classes in
+             # templates or src, styles/ or the kit's version in Cargo.lock; CI fails if it is stale
 ```

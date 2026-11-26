@@ -1,6 +1,6 @@
 <div id="uploads-peers">
   <p class="text-meta text-muted">{{ sending }} sending · {{ queued }} queued · {{ sent }} sent recently · sharing {{ shared }} files</p>
-  {% if peers.is_empty() %}<p class="text-meta text-muted">Nobody is taking anything from you right now.</p>{% endif %}
+  {% if peers.is_empty() %}{{ kit::Empty::new("Nobody is taking anything from you right now.") }}{% endif %}
   <div class="grid gap-3">
   {% for p in peers %}
   <article class="panel">
@@ -14,14 +14,14 @@
       <li class="flex min-w-0 items-center gap-2 py-1">
         <span class="min-w-0 flex-auto truncate" title="{{ t.filename }}">{{ self.leaf(t.filename) }}</span>
         <span class="flex-none text-meta text-muted">{{ self.label(t) }}{% if t.state == "transferring" %} · {{ self.size(t.speed) }}/s · <span data-bytes="{{ t.bytes }}" data-total="{{ t.size }}" data-rate="{{ t.speed }}" data-at="{{ at }}" data-draw="eta"></span>{% endif %}</span>
-        <form class="contents" data-indicator="_up_{{ t.id.as_str() }}" data-on:submit="@post('/uploads/cancel', {contentType: 'form'})"><input type="hidden" name="history" value="{{ crate::ui::PAGE }}" data-attr:value="$history"><input type="hidden" name="username" value="{{ t.username }}"><input type="hidden" name="filename" value="{{ t.filename }}"><button class="quiet flex-none" data-attr:disabled="$_up_{{ t.id.as_str() }}">Cancel</button></form>
+        {{ kit::Button::quiet("Cancel").class("flex-none").post(self.cancel(t)) }}
       </li>
-      {% if t.state == "transferring" %}<li class="pb-1"><progress class="meter" max="{{ t.size.max(1) }}" value="{{ t.bytes }}" data-bytes="{{ t.bytes }}" data-total="{{ t.size }}" data-rate="{{ t.speed }}" data-at="{{ at }}">{{ self.pct(t) }}%</progress></li>{% endif %}
+      {% if t.state == "transferring" %}<li class="pb-1">{{ self.meter(t) }}</li>{% endif %}
     {% endfor %}
     </ul>
     <div class="mt-2.5 flex flex-wrap items-center gap-2">
       <span class="flex-1 max-sm:hidden"></span>
-      <form class="contents" data-indicator="_ban_{{ loop.index }}" data-on:submit="confirm('Ban this user? They will get nothing more from you.') && @post('/ban', {contentType: 'form'})"><input type="hidden" name="username" value="{{ p.username }}"><button class="quiet bad" data-attr:disabled="$_ban_{{ loop.index }}">Ban</button></form>
+      {{ kit::Button::quiet("Ban").bad().post(crate::ui::row_url("/ban", "username", p.username)).confirm("Ban this user? They will get nothing more from you.", "Ban") }}
     </div>
   </article>
   {% endfor %}

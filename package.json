@@ -1,6 +1,0 @@
-{
-  "private": true,
-  "devDependencies": {
-    "@radiosilence/koan-kit-web": "0.3.0"
-  }
-}

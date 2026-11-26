@@ -9,11 +9,12 @@
 use askama::Template;
 use axum::Router;
 use axum::body::Bytes;
-use axum::extract::{Query, State};
+use axum::extract::{Query, RawQuery, State};
 use axum::response::Response;
 use axum::routing::{get, post};
+use koan_kit_web as kit;
 
-use super::{UiState, failed, fields, flash_ok, one, patch, signals};
+use super::{UiState, failed, fields, one, patch, sent, signals};
 use crate::App;
 use crate::social::RoomLine;
 
@@ -386,7 +387,7 @@ async fn view(State(s): State<UiState>, Query(q): Query<Poll>) -> Response {
     if !q.poll {
         html.push('\n');
         html.push_str(&room_list_html(&s.app, ""));
-        html.push_str("\n<div id=\"flash\"></div>");
+        html.push_str(&format!("\n{}", kit::Flash::region()));
     }
     html.push('\n');
     html.push_str(&count_html(&s.app).await);
@@ -424,7 +425,7 @@ async fn opened(app: &App, t: &Thread, flash: Option<String>) -> Response {
             thread_html(app, Some(t)).await,
             side_html(app).await,
             count_html(app).await,
-            flash.unwrap_or_else(|| "<div id=\"flash\"></div>".into())
+            flash.unwrap_or_else(|| kit::Flash::region().to_string())
         )),
         signals(r#"{"_msg":""}"#),
         super::place(&t.url()),
@@ -451,13 +452,13 @@ async fn send(State(s): State<UiState>, body: Bytes) -> Response {
         }
     };
     match result {
-        Ok(()) => opened(&s.app, &t, Some(flash_ok("Sent"))).await,
+        Ok(()) => opened(&s.app, &t, Some(kit::Flash::ok("Sent").to_string())).await,
         Err(e) => failed(&e),
     }
 }
 
-async fn join(State(s): State<UiState>, body: Bytes) -> Response {
-    let form = fields(&body);
+async fn join(State(s): State<UiState>, RawQuery(query): RawQuery, body: Bytes) -> Response {
+    let form = sent(query.as_deref(), &body);
     let Some(room) = super::field(&form, "room").map(str::trim) else {
         return failed(&anyhow::anyhow!("Say which room."));
     };
@@ -467,14 +468,19 @@ async fn join(State(s): State<UiState>, body: Bytes) -> Response {
                 kind: Kind::Room,
                 name: room.to_string(),
             };
-            opened(&s.app, &t, Some(flash_ok(&format!("Joining {room}")))).await
+            opened(
+                &s.app,
+                &t,
+                Some(kit::Flash::ok(&format!("Joining {room}")).to_string()),
+            )
+            .await
         }
         Err(e) => failed(&e),
     }
 }
 
-async fn leave(State(s): State<UiState>, body: Bytes) -> Response {
-    let form = fields(&body);
+async fn leave(State(s): State<UiState>, RawQuery(query): RawQuery, body: Bytes) -> Response {
+    let form = sent(query.as_deref(), &body);
     let Some(room) = super::field(&form, "room") else {
         return failed(&anyhow::anyhow!("Say which room."));
     };
@@ -484,7 +490,7 @@ async fn leave(State(s): State<UiState>, body: Bytes) -> Response {
                 "{}\n{}\n{}",
                 thread_html(&s.app, None).await,
                 side_html(&s.app).await,
-                flash_ok(&format!("Left {room}"))
+                kit::Flash::ok(&format!("Left {room}")).to_string()
             )),
             super::place("/chat"),
         ]),
@@ -492,8 +498,8 @@ async fn leave(State(s): State<UiState>, body: Bytes) -> Response {
     }
 }
 
-async fn add_buddy(State(s): State<UiState>, body: Bytes) -> Response {
-    let form = fields(&body);
+async fn add_buddy(State(s): State<UiState>, RawQuery(query): RawQuery, body: Bytes) -> Response {
+    let form = sent(query.as_deref(), &body);
     let Some(user) = super::field(&form, "username").map(str::trim) else {
         return failed(&anyhow::anyhow!("Say who to add."));
     };
@@ -503,7 +509,7 @@ async fn add_buddy(State(s): State<UiState>, body: Bytes) -> Response {
             patch(&format!(
                 "{}\n{}",
                 side_html(&s.app).await,
-                flash_ok(&format!("Added {user} as a buddy"))
+                kit::Flash::ok(&format!("Added {user} as a buddy")).to_string()
             )),
             signals(r#"{"_buddy":"","_buddynote":""}"#),
         ]),
@@ -511,15 +517,20 @@ async fn add_buddy(State(s): State<UiState>, body: Bytes) -> Response {
     }
 }
 
-async fn remove_buddy(State(s): State<UiState>, body: Bytes) -> Response {
-    let form = fields(&body);
+async fn remove_buddy(
+    State(s): State<UiState>,
+    RawQuery(query): RawQuery,
+    body: Bytes,
+) -> Response {
+    let form = sent(query.as_deref(), &body);
     let Some(user) = super::field(&form, "username") else {
         return failed(&anyhow::anyhow!("Say who to remove."));
     };
     match s.app.social.remove_buddy(user).await {
         Ok(()) => one(format!(
-            "{}\n<div id=\"flash\"></div>",
-            side_html(&s.app).await
+            "{}\n{}",
+            side_html(&s.app).await,
+            kit::Flash::region()
         )),
         Err(e) => failed(&e),
     }

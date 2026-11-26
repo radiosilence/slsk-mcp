@@ -1,7 +1,8 @@
 <div class="grid min-w-0 gap-3 *:min-w-0">
+  {#- A plain GET to the page's own address, which kit::Form (Datastar, or a plain POST) does not draw. -#}
   <form class="flex flex-wrap items-center gap-2" action="/profile" method="get">
-    <input class="basis-full" name="username" value="{{ username }}" placeholder="Username, or empty for your own" autocomplete="off" autocapitalize="off">
-    <button class="primary flex-auto" type="submit">View profile</button>
+    {{ kit::Input::text("username").value(username).label("Username").placeholder("Username, or empty for your own").autocomplete("off").attr("autocapitalize", "off").class("basis-full") }}
+    {{ kit::Button::primary("View profile").submit().class("flex-auto") }}
   </form>
   {% if !signed_in %}
   <div id="profile"><p class="text-meta text-muted">Sign in to Soulseek first.</p></div>

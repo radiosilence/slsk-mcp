@@ -1,7 +1,8 @@
 <div class="grid min-w-0 gap-3 *:min-w-0">
-  <form id="ban-form" class="flex flex-wrap items-center gap-2" data-indicator="_banning" data-on:submit="confirm('Ban this user? They will get nothing more from you.') && @post('/bans/add', {contentType: 'form', })">
-    <input class="basis-full" name="username" data-bind:_banuser placeholder="Username" aria-label="Username to ban" autocomplete="off" autocapitalize="off" required>
-    <button class="primary flex-auto" type="submit" data-attr:disabled="$_banning" data-class:busy="$_banning">Ban</button>
-  </form>
+  {#- Banning asks first, in the page's one question, whose yes posts the page's signals: the name travels as `banuser`. -#}
+  <div id="ban-form" class="flex flex-wrap items-center gap-2">
+    {{ kit::Input::text("username").label("Username to ban").placeholder("Username").autocomplete("off").attr("autocapitalize", "off").bind("banuser").class("basis-full") }}
+    {{ kit::Button::primary("Ban").class("flex-auto").post("/bans/add").confirm("Ban this user? They will get nothing more from you.", "Ban") }}
+  </div>
   {{ list|safe }}
 </div>

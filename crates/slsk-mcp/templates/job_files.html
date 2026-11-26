@@ -1,5 +1,5 @@
 <div id="files-{{ id }}" class="mt-1.5">
-{% if let Some(e) = error %}<p class="text-meta text-bad wrap-anywhere">{{ e }}</p>{% endif %}
+{% if let Some(e) = error %}{{ kit::Notice::bad(e).class("wrap-anywhere") }}{% endif %}
 {% for (album, search) in albums %}<p class="my-1 text-meta"><span class="text-muted">Tagged as</span> {{ album }} · <a href="{{ search }}" target="_blank" rel="noopener">search MusicBrainz</a></p>{% endfor %}
 <ul class="grid gap-1.5">
 {% for t in tracks %}

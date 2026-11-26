@@ -1813,6 +1813,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "koan-kit-web"
+version = "0.5.0"
+source = "git+https://github.com/radiosilence/koan?branch=koan-kit-web-components#9c7abb401d52c31195db3e7b8789e78db3eeec57"
+dependencies = [
+ "askama",
+ "askama_datastar",
+ "axum",
+ "base64 0.23.1",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3153,6 +3166,7 @@ dependencies = [
  "futures-util",
  "http",
  "image",
+ "koan-kit-web",
  "libc",
  "parking_lot 0.13.0",
  "percent-encoding",

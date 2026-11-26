@@ -2,39 +2,16 @@
  * The web UI's stylesheet, compiled by Tailwind into assets/app.css (`just css`). The compiled file is committed: the
  * crate embeds it, and building slsk-mcp must not need the Tailwind CLI.
  *
- * The controls come from the kōan web kit (@radiosilence/koan-kit-web): element defaults, the button weights, panels,
- * statuses, the meter and the toast. The pages carry their layout as utilities in the templates and in the HTML the
- * Rust code writes. What is here is what is particular to slsk-mcp: the tones of the statuses the server
- * writes into the markup.
+ * The controls come from the kōan web kit: koan-kit-web's components write the markup and its stylesheet, imported from
+ * the crate's source through the `kit` link `just kit` makes, draws it. The pages carry their layout as utilities in the
+ * templates and in the HTML the Rust code writes.
  */
 @import "tailwindcss" source(none);
 @source "../templates";
 @source "../src";
-@import "@radiosilence/koan-kit-web";
+@import "./kit/theme.css";
 
 @layer components {
-  /* The server writes a job's, a peer's or the session's state as a class on its status, and the tone follows it. */
-  .status:is(.connected, .online, .keep, .imported) {
-    --tone: var(--ok);
-  }
-
-  .status:is(.displaced, .disconnected, .rejected, .failed, .suspect) {
-    --tone: var(--bad);
-  }
-
-  .status:is(.spare, .away, .review, .downloading, .importing, .waiting) {
-    --tone: var(--warn);
-  }
-
-  /* Still being found out: the waiting tone, breathing. */
-  .status.connecting {
-    --tone: var(--muted);
-  }
-
-  .status.connecting::before {
-    @apply animate-pulse motion-reduce:animate-none;
-  }
-
   /* Rows inside a panel's detail: closer together than a page's list. */
   .rows.tight > li {
     @apply py-1;

@@ -4,11 +4,12 @@
 use askama::Template;
 use axum::Router;
 use axum::body::Bytes;
-use axum::extract::{Query, State};
+use axum::extract::{Query, RawQuery, State};
 use axum::response::Response;
 use axum::routing::{get, post};
+use koan_kit_web as kit;
 
-use super::{UiState, failed, fields, flash_ok, human, one, patch, signals, status_html};
+use super::{UiState, failed, fields, human, one, patch, sent, signals, status_html};
 use crate::App;
 use crate::graphql::TriageCause;
 
@@ -69,34 +70,43 @@ async fn bans(State(s): State<UiState>) -> Response {
     one(bans_html(&s.app).await)
 }
 
-async fn set_ban(s: &UiState, body: &[u8], banned: bool) -> Response {
-    let form = fields(body);
-    let Some(user) = super::field(&form, "username").map(str::trim) else {
+async fn set_ban(s: &UiState, user: &str, banned: bool) -> Response {
+    let user = user.trim();
+    if user.is_empty() {
         return failed(&anyhow::anyhow!("Say who."));
-    };
+    }
     match crate::graphql::set_ban(&s.app, user, banned).await {
         Ok(_) => askama_datastar::events(vec![
             patch(&format!(
                 "{}\n{}",
                 bans_html(&s.app).await,
-                flash_ok(&if banned {
+                kit::Flash::ok(&if banned {
                     format!("Banned {user}")
                 } else {
                     format!("Unbanned {user}")
                 })
             )),
-            signals(r#"{"_banuser":""}"#),
+            signals(r#"{"banuser":""}"#),
+            kit::Confirm::close().into(),
         ]),
-        Err(e) => one(super::flash_err(&e.message)),
+        Err(e) => one(kit::Flash::bad(&e.message).to_string()),
     }
 }
 
-async fn ban(State(s): State<UiState>, body: Bytes) -> Response {
-    set_ban(&s, &body, true).await
+/// The name typed on the bans page. Its Ban asks first, and the page's
+/// question posts the page's signals, so the name travels as one.
+#[derive(serde::Deserialize)]
+struct BanAsk {
+    #[serde(default)]
+    banuser: String,
 }
 
-async fn unban(State(s): State<UiState>, body: Bytes) -> Response {
-    set_ban(&s, &body, false).await
+async fn ban(State(s): State<UiState>, axum::Json(ask): axum::Json<BanAsk>) -> Response {
+    set_ban(&s, &ask.banuser, true).await
+}
+
+async fn unban(State(s): State<UiState>, Query(p): Query<super::PeerQuery>) -> Response {
+    set_ban(&s, &p.username, false).await
 }
 
 // --- Settings --------------------------------------------------------------
@@ -177,7 +187,11 @@ async fn settings(State(s): State<UiState>) -> Response {
 }
 
 async fn saved(app: &App, msg: &str) -> Response {
-    one(format!("{}\n{}", settings_html(app).await, flash_ok(msg)))
+    one(format!(
+        "{}\n{}",
+        settings_html(app).await,
+        kit::Flash::ok(msg)
+    ))
 }
 
 /// A whole number from a form field, or a message saying which field.
@@ -229,7 +243,8 @@ async fn rescan(State(s): State<UiState>) -> Response {
             one(format!(
                 "{}\n{}",
                 status_html(&s.app).await,
-                flash_ok("Rescanning shares; the count above updates when it finishes")
+                kit::Flash::ok("Rescanning shares; the count above updates when it finishes")
+                    .to_string()
             ))
         }
         Err(e) => failed(&e),
@@ -238,8 +253,8 @@ async fn rescan(State(s): State<UiState>) -> Response {
 
 /// Like, dislike or forget an interest: `liked` is "true", "false" or
 /// absent.
-async fn interest(State(s): State<UiState>, body: Bytes) -> Response {
-    let form = fields(&body);
+async fn interest(State(s): State<UiState>, RawQuery(query): RawQuery, body: Bytes) -> Response {
+    let form = sent(query.as_deref(), &body);
     let Some(item) = super::field(&form, "item").map(str::trim) else {
         return failed(&anyhow::anyhow!("Say what the interest is."));
     };
@@ -251,8 +266,9 @@ async fn interest(State(s): State<UiState>, body: Bytes) -> Response {
     match s.app.social.set_interest(item, liked).await {
         Ok(()) => askama_datastar::events(vec![
             patch(&format!(
-                "{}\n<div id=\"flash\"></div>",
-                settings_html(&s.app).await
+                "{}\n{}",
+                settings_html(&s.app).await,
+                kit::Flash::region()
             )),
             signals(r#"{"_interest":""}"#),
         ]),

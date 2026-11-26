@@ -1,7 +1,7 @@
 <article id="job-{{ j.id.as_str() }}" class="panel{% if warn %} border-l-2 border-l-warn{% endif %}">
   <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
     <strong class="min-w-0 flex-auto wrap-anywhere" title="{% match j.folder %}{% when Some with (f) %}{{ f }}{% when None %}{% endmatch %}">{% if full %}{{ self.heading(j) }}{% else %}<a class="text-ink" href="/jobs/{{ j.id.as_str() }}">{{ self.heading(j) }}</a>{% endif %}</strong>
-    <span class="status {{ j.status }}" data-class:busy="${{ self.sig(j) }}">{{ self.label(j.status) }}</span>
+    {{ crate::ui::state(j.status, self.label(j.status)) }}
   </div>
   <div class="text-meta text-muted wrap-anywhere">
     {% match self.asked(j) %}{% when Some with (q) %}asked for “{{ q }}” · {% when None %}{% endmatch %}{% match j.username %}{% when Some with (u) %}from <a class="wrap-anywhere" href="{{ crate::ui::profile_href(u) }}">{{ u }}</a>{% when None %}{% match j.host %}{% when Some with (h) %}from {{ h }}{% when None %}{% endmatch %}{% endmatch %}
@@ -12,95 +12,92 @@
     {% if !warn && j.alternates > 0 %} · {{ j.alternates }} other {% if j.alternates == 1 %}copy{% else %}copies{% endif %} to fall back on{% endif %}
     {% if let Some(href) = self.filed(j) %} · <a href="{{ href }}">in the library</a>{% endif %}
   </div>
-  {% if j.status == "downloading" %}<progress class="meter mt-2" max="{{ j.total_bytes.max(1) }}" value="{{ j.downloaded_bytes }}" {{ self.measure(j.downloaded_bytes, j.total_bytes, j.bytes_per_sec, j.measured_at)|safe }}>{{ self.pct(j) }}%</progress>{% endif %}
-  {% if j.status == "importing" %}{% match j.stage_total %}{% when Some with (t) %}<progress class="meter mt-2" max="{{ (*t).max(1) }}" value="{{ j.stage_done.unwrap_or_default() }}" title="{{ self.size(&j.stage_done.unwrap_or_default()) }} of {{ self.size(t) }} checked">{{ self.size(&j.stage_done.unwrap_or_default()) }} of {{ self.size(t) }}</progress>{% when None %}{% endmatch %}{% endif %}
+  {% if j.status == "downloading" %}{{ self.meter(j.downloaded_bytes, j.total_bytes, j.bytes_per_sec, j.measured_at).class("mt-2") }}{% endif %}
+  {% if j.status == "importing" %}{% if let Some(m) = self.stage(j) %}{{ m }}{% endif %}{% endif %}
   {% if (full || !warn) && !j.files.is_empty() %}{% let shown = self.is_open(j) %}
-  {% if !full %}<button type="button" class="quiet mt-1.5 px-0" data-on:click="{{ self.toggle(j) }}" data-text="({{ shown }} ? '▾ ' : '▸ ') + '{{ j.files.len() }} files'">{% if open %}▾{% else %}▸{% endif %} {{ j.files.len() }} files</button>{% endif %}
+  {#- The files' toggle names its job in `data-job`, so the expressions that open them and say so are constant. -#}
+  {% if !full %}{{ kit::Button::quiet(self.files_label(j)).class("mt-1.5 px-0").data("job", j.id.as_str()).data("count", j.files.len().to_string()).datastar("on:click", "$files = $files.includes(el.dataset.job + ',') ? $files.replace(el.dataset.job + ',', '') : $files + el.dataset.job + ','").datastar("text", "($files.includes(el.dataset.job + ',') ? '▾ ' : '▸ ') + el.dataset.count + ' files'") }}{% endif %}
   {% if open %}
   <ul class="mt-1 grid gap-1 text-meta"{% if !full %} data-attr:hidden="!({{ shown }})"{% endif %}>
     {% for f in j.files %}
     <li class="flex min-w-0 flex-wrap items-baseline gap-x-2">
       <span class="min-w-0 flex-[1_1_60%] wrap-anywhere{% if f.state == "completed" %} text-muted{% endif %}">{{ f.name }}</span>
       <span class="{% if f.error.is_some() %}text-bad{% else %}text-muted{% endif %}">{% if f.bytes_per_sec > 0 && f.state == "transferring" %}<span {{ self.measure(f.bytes, f.size, f.bytes_per_sec, j.measured_at)|safe }} data-draw="bytes">{{ self.size(f.bytes) }}</span> of {{ self.size(f.size) }} · {{ self.size(f.bytes_per_sec) }}/s · <span {{ self.measure(f.bytes, f.size, f.bytes_per_sec, j.measured_at)|safe }} data-draw="eta"></span>{% else %}{{ self.file_progress(f) }}{% match f.place %}{% when Some with (p) %} · place {{ p }} in the queue{% when None %}{% endmatch %}{% endif %}</span>
-      {% if f.state == "transferring" %}<progress class="meter basis-full" max="{{ f.size.max(1) }}" value="{{ f.bytes }}" {{ self.measure(f.bytes, f.size, f.bytes_per_sec, j.measured_at)|safe }}></progress>{% endif %}
+      {% if f.state == "transferring" %}{{ self.meter(f.bytes, f.size, f.bytes_per_sec, j.measured_at).class("basis-full") }}{% endif %}
     </li>
     {% endfor %}
   </ul>
   {% endif %}
   {% endif %}
   {% match self.ask(j) %}{% when Some with (a) %}<p class="mt-2 mb-0.5">{{ a }}</p>{% when None %}{% endmatch %}
-  {% match j.error %}{% when Some with (e) %}<p class="my-0.5 text-meta {% if j.status == "failed" %}text-bad{% else %}text-muted{% endif %} wrap-anywhere">{{ e }}</p>{% when None %}{% endmatch %}
+  {% match j.error %}{% when Some with (e) %}{% if j.status == "failed" %}{{ kit::Notice::bad(e).class("my-0.5 wrap-anywhere") }}{% else %}<p class="my-0.5 text-meta text-muted wrap-anywhere">{{ e }}</p>{% endif %}{% when None %}{% endmatch %}
   {% if !j.analysis.is_empty() && (full || j.status == "suspect" || j.status == "review") %}
-  <details class="disclosure mt-2" data-ignore-morph>
-    <summary class="text-muted">spectral analysis</summary>
+  {% filter kit::wrap(kit::Disclosure::new("spectral analysis").class("mt-2").datastar("ignore-morph", "")) %}
     <ul class="mt-1.5 grid gap-1">
     {% for t in j.analysis %}
       <li class="flex flex-wrap items-baseline gap-2">
-        <span class="status {% let v = self.verdict(t) %}{% if v == "lossless" %}ok{% else if v == "lossy" || v == "upsampled" %}bad{% else %}wait{% endif %}">{{ self.verdict(t) }}</span>
+        {% let v = self.verdict(t) %}{% if v == "lossless" %}{{ kit::Status::ok(v) }}{% else if v == "lossy" || v == "upsampled" %}{{ kit::Status::bad(v) }}{% else %}{{ kit::Status::wait(v) }}{% endif %}
         <span>{{ t.file }}</span>
         <span class="text-meta text-muted wrap-anywhere">{% match t.cutoff_hz %}{% when Some with (c) %}ends at {{ c / 1000.0 }} kHz{% when None %}{% endmatch %}{% match t.estimate %}{% when Some with (e) %} · {{ e }}{% when None %}{% endmatch %}</span>
         <a href="/jobs/{{ j.id.as_str() }}/spectrogram/{{ loop.index0 }}" target="_blank" rel="noopener">spectrogram</a>
       </li>
     {% endfor %}
     </ul>
-  </details>
+  {% endfilter %}
   {% endif %}
   {% if warn && !full %}
-  <details class="disclosure mt-2" data-ignore-morph data-on:toggle="el.open && @get('/jobs/{{ j.id.as_str() }}/sources')">
-    <summary class="text-muted">sources and history{% if j.alternates > 0 %} · {{ j.alternates }} other {% if j.alternates == 1 %}copy{% else %}copies{% endif %}{% endif %}</summary>
+  {% filter kit::wrap(kit::Disclosure::new(self.sources_label(j)).loads(self.url(j, "sources"), "").class("mt-2").datastar("ignore-morph", "")) %}
     <div id="sources-{{ j.id.as_str() }}" class="mt-1.5 text-meta text-muted">Reading history…</div>
-  </details>
+  {% endfilter %}
   {% endif %}
   {% if j.status == "downloading" && j.username.is_some() %}
-  <details class="disclosure mt-2" data-ignore-morph data-on:toggle="el.open && @get('/jobs/{{ j.id.as_str() }}/pick')">
-    <summary class="text-muted">choose files</summary>
+  {% filter kit::wrap(kit::Disclosure::new("choose files").loads(self.url(j, "pick"), "").class("mt-2").datastar("ignore-morph", "")) %}
     <div id="pick-{{ j.id.as_str() }}" class="mt-1.5 text-meta text-muted">Reading files…</div>
-  </details>
+  {% endfilter %}
   {% endif %}
   {% if j.status == "review" || j.status == "suspect" %}
-  <details class="disclosure mt-2" data-ignore-morph data-on:toggle="el.open && @get('/jobs/{{ j.id.as_str() }}/files')">
-    <summary class="text-muted">files and their tags</summary>
+  {% filter kit::wrap(kit::Disclosure::new("files and their tags").loads(self.url(j, "files"), "").class("mt-2").datastar("ignore-morph", "")) %}
     <div id="files-{{ j.id.as_str() }}" class="mt-1.5 text-meta text-muted">Reading tags…</div>
-  </details>
+  {% endfilter %}
   {% endif %}
   {% if j.status == "review" %}
   <ul class="mt-2 grid gap-1.5">
     {% for c in j.candidates %}
     <li class="flex flex-wrap items-baseline gap-2">
-      <button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/resolve/{{ c.release_id }}')">Use</button>
+      {{ kit::Button::bordered("Use").post(self.url(j, "resolve/{}"|format(c.release_id))) }}
       <span>{{ c.artist }} — {{ c.title }}</span>
       <span class="text-meta text-muted wrap-anywhere">{% match c.date %}{% when Some with (d) %}{{ d }}{% when None %}{% endmatch %} {% match c.country %}{% when Some with (x) %}{{ x }}{% when None %}{% endmatch %} {% match c.media %}{% when Some with (m) %}{{ m }}{% when None %}{% endmatch %} · {{ c.tracks }} tracks · distance {{ c.distance }}{% if c.missing > 0 %} · {{ c.missing }} missing{% endif %}{% if c.extra > 0 %} · {{ c.extra }} extra{% endif %}</span>
       {% let (site, href) = crate::library::release_link(c.release_id) %}<a class="text-meta" href="{{ href }}" target="_blank" rel="noopener">{{ site }}</a>
-      <details class="disclosure basis-full" data-ignore-morph data-on:toggle="el.open && @get('/jobs/{{ j.id.as_str() }}/compare/{{ c.release_id }}')">
-        <summary class="text-meta text-muted">compare track by track</summary>
+      {% filter kit::wrap(kit::Disclosure::new("compare track by track").loads(self.url(j, "compare/{}"|format(c.release_id)), "").class("basis-full").datastar("ignore-morph", "")) %}
         <div id="cmp-{{ crate::ui::compare_id(j.id.as_str(), c.release_id) }}" class="mt-1.5 text-meta text-muted">Fetching the release…</div>
-      </details>
+      {% endfilter %}
     </li>
     {% endfor %}
   </ul>
-  <form id="release-{{ j.id.as_str() }}" class="my-1.5 flex flex-wrap items-center gap-2" data-indicator="{{ self.sig(j) }}" data-on:submit="@post('/jobs/{{ j.id.as_str() }}/release', {contentType: 'form'})">
+  {% let release = kit::Form::post(self.url(j, "release")).id("release-{}"|format(j.id.as_str())) %}
+  <form {{ release.attrs() }} class="my-1.5 flex flex-wrap items-center gap-2">
     <input type="hidden" name="jobs" value="{{ crate::ui::PAGE }}" data-attr:value="$jobs">
     <input type="hidden" name="job" data-attr:value="$job">
     <input type="hidden" name="files" data-attr:value="$files">
-    <input class="flex-[1_1_12em]" name="release" aria-label="Release id or link" placeholder="{% if discogs %}MusicBrainz or Discogs release id or link{% else %}MusicBrainz release id or link{% endif %}" autocomplete="off" required>
-    <button data-attr:disabled="${{ self.sig(j) }}">Use release</button>
+    {{ kit::Input::text("release").label("Release id or link").placeholder(self.release_hint()).autocomplete("off").required().class("flex-[1_1_12em]") }}
+    {{ release.submit(kit::Button::bordered("Use release")) }}
   </form>
   {% endif %}
-  {% match self.advice(j) %}{% when Some with (a) %}<p class="notice mt-2.5 mb-0"><span><strong>suggested:</strong> {{ a.why }}</span></p>{% when None %}{% endmatch %}
+  {% match self.advice(j) %}{% when Some with (a) %}{% filter kit::wrap(kit::Notice::new("").class("mt-2.5")) %}<strong>suggested:</strong> {{ a.why }}{% endfilter %}{% when None %}{% endmatch %}
   {% match self.as_is_blocker_line(j) %}{% when Some with (b) %}{% if j.status == "review" %}<p class="my-0.5 text-meta text-muted">Import as-is won't work: {{ b }}</p>{% endif %}{% when None %}{% endmatch %}
   <div class="mt-2.5 flex flex-wrap items-center gap-2">
-    {% match self.advice(j) %}{% when Some with (a) %}<button class="primary" data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/{{ a.action }}')">{{ a.label }}</button>{% when None %}{% endmatch %}
-    {% if self.offer(j, "approve") %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/approve')">Import anyway</button>{% endif %}
-    {% if self.offer(j, "next") %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/next')">Try another copy</button>{% endif %}
-    {% if self.offer(j, "as-is") %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/as-is')">Import as-is</button>{% endif %}
-    {% if self.offer(j, "retry") %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/retry')">Retry</button>{% endif %}
-    {% if self.offer(j, "finish") %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/finish')" title="Stop waiting for the files still to come and import what has arrived">Mark complete</button>{% endif %}
-    {% if self.offer(j, "cancel") %}<button data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/cancel')">Cancel</button>{% endif %}
+    {% match self.advice(j) %}{% when Some with (a) %}{{ kit::Button::primary(a.label).post(self.url(j, a.action)) }}{% when None %}{% endmatch %}
+    {% if self.offer(j, "approve") %}{{ kit::Button::bordered("Import anyway").post(self.url(j, "approve")) }}{% endif %}
+    {% if self.offer(j, "next") %}{{ kit::Button::bordered("Try another copy").post(self.url(j, "next")) }}{% endif %}
+    {% if self.offer(j, "as-is") %}{{ kit::Button::bordered("Import as-is").post(self.url(j, "as-is")) }}{% endif %}
+    {% if self.offer(j, "retry") %}{{ kit::Button::bordered("Retry").post(self.url(j, "retry")) }}{% endif %}
+    {% if self.offer(j, "finish") %}{{ kit::Button::bordered("Mark complete").post(self.url(j, "finish")).attr("title", "Stop waiting for the files still to come and import what has arrived") }}{% endif %}
+    {% if self.offer(j, "cancel") %}{{ kit::Button::bordered("Cancel").post(self.url(j, "cancel")) }}{% endif %}
     <span class="flex-1 max-sm:hidden"></span>
-    {% if self.offer(j, "scam") %}<button class="quiet bad" data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="confirm('Mark this download as a scam? Its peer is banned, everything downloaded from them is deleted, and each album is fetched from another peer.') && @post('/jobs/{{ j.id.as_str() }}/scam')" title="The peer sent something other than what it listed">Scam</button>{% endif %}
-    {% if full %}{% if let Some(u) = j.username %}{{ crate::ui::ban_button(u, *banned)|safe }}{% endif %}{% endif %}
-    {% if self.offer(j, "match") %}<button class="quiet" data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/retry')">Match again</button>{% endif %}
-    {% if j.status == "imported" %}<button class="quiet" data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="@post('/jobs/{{ j.id.as_str() }}/remove')" title="Forget this entry; the album stays in the library">Clear</button>
-    {% else if j.status != "importing" %}<button class="quiet bad" data-indicator="{{ self.sig(j) }}" data-attr:disabled="${{ self.sig(j) }}" data-on:click="confirm('Remove this album and delete its downloaded files?') && @post('/jobs/{{ j.id.as_str() }}/remove')">Remove</button>{% endif %}
+    {% if self.offer(j, "scam") %}{{ kit::Button::quiet("Scam").bad().post(self.url(j, "scam")).confirm("Mark this download as a scam? Its peer is banned, everything downloaded from them is deleted, and each album is fetched from another peer.", "Mark as scam").attr("title", "The peer sent something other than what it listed") }}{% endif %}
+    {% if full %}{% if let Some(u) = j.username %}{{ crate::ui::ban_button(u, *banned) }}{% endif %}{% endif %}
+    {% if self.offer(j, "match") %}{{ kit::Button::quiet("Match again").post(self.url(j, "retry")) }}{% endif %}
+    {% if j.status == "imported" %}{{ kit::Button::quiet("Clear").post(self.url(j, "remove")).attr("title", "Forget this entry; the album stays in the library") }}
+    {% else if j.status != "importing" %}{{ kit::Button::quiet("Remove").bad().post(self.url(j, "remove")).confirm("Remove this album and delete its downloaded files?", "Remove") }}{% endif %}
   </div>
 </article>

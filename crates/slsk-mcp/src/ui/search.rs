@@ -18,6 +18,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use koan_kit_web as kit;
 use slsk_engine::Event;
 use slsk_engine::slsk_proto::RawStr;
 use slsk_engine::slsk_proto::peer::SearchResponse;
@@ -519,9 +520,7 @@ async fn peers(
                 UserStatus::Offline => "offline",
             };
             for id in ids {
-                yield patch(&format!(
-                    r#"<span id="peer-{id}" class="status {word}">{word}</span>"#
-                ));
+                yield patch(&super::state(word, word).id(format!("peer-{id}")).to_string());
             }
         }
     };
@@ -533,7 +532,11 @@ const PEERS_WAIT: Duration = Duration::from_secs(5);
 
 /// Send the browser to `url`, a page of the app's own.
 fn go(url: &str) -> Response {
-    one(format!(
+    askama_datastar::events([going(url)])
+}
+
+fn going(url: &str) -> axum::response::sse::Event {
+    patch(&format!(
         r#"<div id="flash" data-init="location.assign('{}')"></div>"#,
         escape(url)
     ))
@@ -541,14 +544,18 @@ fn go(url: &str) -> Response {
 
 /// The strip redrawn, or the page moved when the tab it showed was closed.
 async fn redraw(app: &App, shown: &Shown) -> Response {
+    askama_datastar::events([redrawn(app, shown).await])
+}
+
+async fn redrawn(app: &App, shown: &Shown) -> axum::response::sse::Event {
     let active = Uuid::parse_str(&shown.tab).ok();
     let tabs = db::search_tabs(&app.db).await.unwrap_or_default();
     match active {
-        Some(id) if !tabs.iter().any(|t| t.id == id) => go(&match tabs.first() {
+        Some(id) if !tabs.iter().any(|t| t.id == id) => going(&match tabs.first() {
             Some(t) => format!("/search?tab={}", t.id),
             None => "/search".to_string(),
         }),
-        _ => one(TabsView { tabs, active }.render().unwrap_or_default()),
+        _ => patch(&TabsView { tabs, active }.render().unwrap_or_default()),
     }
 }
 
@@ -591,11 +598,12 @@ async fn close(
     redraw(&s.app, &shown).await
 }
 
+/// Asked first, in the page's question, which closes once the strip is redrawn.
 async fn close_unpinned(State(s): State<UiState>, Signals(shown): Signals<Shown>) -> Response {
     if let Err(e) = db::close_search_tabs(&s.app.db, None).await {
         return failed(&e.into());
     }
-    redraw(&s.app, &shown).await
+    askama_datastar::events([redrawn(&s.app, &shown).await, kit::Confirm::close().into()])
 }
 
 async fn again(State(s): State<UiState>, Path(id): Path<Uuid>) -> Response {

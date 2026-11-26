@@ -8,20 +8,21 @@
     </div>
     {% if kind == "pm" %}
     <div class="mt-2.5 flex flex-wrap items-center gap-2">
-      <a class="button quiet" href="{{ crate::ui::profile_href(name) }}">Profile</a>
-      <a class="button quiet" href="{{ crate::ui::browse_href(name, "") }}">Browse shares</a>
-      <form class="contents" data-indicator="_bud_add" data-on:submit="@post('/chat/buddy/add', {contentType: 'form'})"><input type="hidden" name="username" value="{{ name }}"><button class="quiet" data-attr:disabled="$_bud_add" data-class:busy="$_bud_add">Add buddy</button></form>
+      {{ kit::Button::quiet("Profile").href(crate::ui::profile_href(name)) }}
+      {{ kit::Button::quiet("Browse shares").href(crate::ui::browse_href(name, "")) }}
+      {{ kit::Button::quiet("Add buddy").post(crate::ui::row_url("/chat/buddy/add", "username", name)) }}
     </div>
     {% else %}
     <div class="mt-2.5 flex flex-wrap items-center gap-2">
-      <form class="contents" data-indicator="_leaving" data-on:submit="@post('/chat/leave', {contentType: 'form'})"><button class="quiet" name="room" value="{{ name }}" data-attr:disabled="$_leaving" data-class:busy="$_leaving">Leave room</button></form>
+      {{ kit::Button::quiet("Leave room").post(crate::ui::row_url("/chat/leave", "room", name)) }}
     </div>
-    {% if !members.is_empty() %}<details class="disclosure"><summary class="text-muted">{{ members.len() }} in the room</summary><p class="text-meta text-muted wrap-anywhere">{% for m in members %}{% if !loop.first %}, {% endif %}<a href="{{ crate::ui::profile_href(m) }}">{{ m }}</a>{% endfor %}</p></details>{% endif %}
+    {% if !members.is_empty() %}{% filter kit::wrap(kit::Disclosure::new("{} in the room"|format(members.len()))) %}<p class="text-meta text-muted wrap-anywhere">{% for m in members %}{% if !loop.first %}, {% endif %}<a href="{{ crate::ui::profile_href(m) }}">{{ m }}</a>{% endfor %}</p>{% endfilter %}{% endif %}
     {% endif %}
-    <form id="composer" class="mt-2.5 flex items-end gap-2" data-indicator="_sending" data-on:submit="@post('/chat/send', {contentType: 'form'})">
+    {% let composer = kit::Form::post("/chat/send").id("composer") %}
+    <form {{ composer.attrs() }} class="mt-2.5 flex items-end gap-2">
       <input type="hidden" name="kind" value="{{ kind }}"><input type="hidden" name="name" value="{{ name }}">
-      <textarea class="min-w-0 flex-1 resize-y" name="message" rows="2" data-bind:_msg placeholder="Message" aria-label="Message" required></textarea>
-      <button type="submit" class="primary" data-attr:disabled="$_sending" data-class:busy="$_sending">Send</button>
+      {{ kit::Textarea::new("message").rows(2).label("Message").placeholder("Message").required().bind("_msg").class("min-w-0 flex-1 resize-y") }}
+      {{ composer.submit(kit::Button::primary("Send")) }}
     </form>
     {{ lines|safe }}
   </article>

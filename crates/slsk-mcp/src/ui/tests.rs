@@ -5,7 +5,6 @@ fn asset_urls_change_with_their_contents() {
     assert_eq!(versioned("/a.css", "x"), versioned("/a.css", "x"));
     assert_ne!(versioned("/a.css", "x"), versioned("/a.css", "y"));
     assert!(CSS_URL.starts_with("/assets/app.css?v="));
-    assert!(DATASTAR_URL.starts_with("/assets/datastar.js?v="));
 }
 
 #[test]
@@ -1129,9 +1128,9 @@ mod profile {
     }
 }
 
+/// The committed stylesheet asks for the font beside it by the hash of the
+/// one koan-kit-web serves there, so a kit bump without `just css` fails.
 #[test]
-fn the_typeface_is_served_as_woff2() {
-    let response = font(GEIST_MONO).into_response();
-    assert_eq!(response.headers()[header::CONTENT_TYPE], "font/woff2");
-    assert!(GEIST_MONO.starts_with(b"wOF2"));
+fn the_stylesheet_names_the_font_the_kit_serves() {
+    assert!(APP_CSS.contains(&kit::font::url("app.css")));
 }

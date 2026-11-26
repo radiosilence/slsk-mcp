@@ -1,13 +1,14 @@
 <div id="library">
-{% if let Some(e) = error %}<p class="text-meta text-bad wrap-anywhere">{{ e }}</p>{% else %}
-{% if total == 0 %}<p class="text-meta text-muted">No albums match.</p>{% else %}
-{#- Every button in the form submits it to its own `formaction`; `data-scroll` brings the preview it draws into view. -#}
+{% if let Some(e) = error %}{{ kit::Notice::bad(e).class("wrap-anywhere") }}{% else %}
+{% if total == 0 %}{{ kit::Empty::new("No albums match.") }}{% else %}
+{#- Every button in the form submits it to its own `formaction`, which kit::Form does not take, so the form and its
+    buttons are wired by hand; `data-scroll` brings the preview it draws into view. -#}
 <form id="lib-sel" data-signals="{_sel: 0, _spares: 0, _lib_via: ''}" data-indicator="_lib_busy"
   data-on:submit="$_lib_via = evt.submitter?.getAttribute('formaction') ?? ''; @post($_lib_via, {contentType: 'form'}); evt.submitter?.hasAttribute('data-scroll') && document.getElementById('lib-preview').scrollIntoView({block: 'start'})"
   data-on:change="evt.target.name == 'all' ? el.querySelectorAll('input[name=path]').forEach(c => c.checked = evt.target.checked) : (evt.target.checked || (el.querySelector('input[name=all]').checked = false)); $_sel = el.querySelector('input[name=all]').checked ? {{ total }} : el.querySelectorAll('input[name=path]:checked').length; $_spares = el.querySelector('input[name=all]').checked ? {{ spares }} : el.querySelectorAll('input[name=path][data-spare]:checked').length">
   {% include "library_filter.html" %}
   <div class="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-rule pt-1 pb-2">
-    <label class="flex items-center gap-1.5 text-muted"><input type="checkbox" name="all" value="1"> select all {{ total }}</label>
+    {{ kit::Check::new("all", "select all {}"|format(total)).value("1") }}
     <span class="text-meta text-muted">{{ total }} album{% if total != 1 %}s{% endif %}, newest import first</span>
   </div>
   {# One handler opens or closes any album the list shows, rows added later included, in its own row. #}

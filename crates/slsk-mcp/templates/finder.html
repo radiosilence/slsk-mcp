@@ -1,4 +1,4 @@
 <form id="finder" class="flex flex-wrap items-center gap-2" action="/search">
-  <span class="combo flex-auto"><input class="min-w-0 flex-auto" name="q" value="{{ q }}" placeholder="Artist album" aria-label="Artist and album" autocomplete="off" autofocus required><button class="primary" type="submit">Search</button></span>
-  <label class="flex items-center gap-1.5 text-muted"><input type="checkbox" name="lossless" value="true"{% if lossless %} checked{% endif %}> lossless</label>
+  {{ kit::Combo::new(kit::Input::text("q").value(q).label("Artist and album").placeholder("Artist album").autocomplete("off").autofocus().required().class("min-w-0 flex-auto"), kit::Button::primary("Search").submit()).class("flex-auto") }}
+  {{ kit::Check::new("lossless", "lossless").value("true").checked(lossless) }}
 </form>

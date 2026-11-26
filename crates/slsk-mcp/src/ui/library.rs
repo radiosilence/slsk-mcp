@@ -8,6 +8,7 @@
 //! what the person was shown, and goes through the same `Library` calls as
 //! the GraphQL mutations.
 
+use koan_kit_web as kit;
 use std::collections::{HashMap, HashSet};
 
 use askama::Template;
@@ -17,7 +18,7 @@ use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 
-use super::{UiState, escape, failed, fields, flash_ok, patch};
+use super::{UiState, escape, failed, fields, patch};
 use crate::art::{AlbumArt, ArtRemoved, ArtSet, Image, Target};
 use crate::library::{
     AlbumEdit, AlbumMove, CreditWrite, LibraryAlbum, Overview, Preview, TagEdits, by_path,
@@ -523,6 +524,23 @@ struct Page {
     run: String,
 }
 
+impl Page {
+    /// The date imports are found since: shown only while "imported since…" is chosen.
+    fn from(&self) -> kit::Input<'static> {
+        let input = kit::Input::new(kit::InputKind::Date, "from")
+            .label("Imported since")
+            .bind("_libfrom")
+            .datastar("attr:hidden", "$_libsince != 'date'")
+            .datastar("on:change", "el.form.requestSubmit()")
+            .class("flex-auto");
+        if self.dated {
+            input
+        } else {
+            input.attr("hidden", "")
+        }
+    }
+}
+
 /// The page around the list, which it fetches once drawn.
 pub(super) fn page(s: &UiState, filter: &Filter) -> String {
     Page {
@@ -623,6 +641,10 @@ impl ArtView {
 }
 
 impl AlbumView<'_> {
+    fn image_input(&self) -> kit::Input<'static> {
+        kit::Input::new(kit::InputKind::File, "image").attr("accept", "image/jpeg,image/png")
+    }
+
     fn rel<'b>(&self, p: &'b str) -> &'b str {
         rel(self.root, p)
     }
@@ -727,8 +749,8 @@ async fn album_html(s: &UiState, filter: &Filter, path: &str) -> String {
         .render()
         .unwrap_or_default(),
         Err(e) => format!(
-            r#"<div id="{slot}" class="basis-full empty:hidden"><p class="mt-2 text-meta text-bad wrap-anywhere">{}</p></div>"#,
-            escape(&format!("{e:#}"))
+            r#"<div id="{slot}" class="basis-full empty:hidden">{}</div>"#,
+            kit::Notice::bad(&format!("{e:#}")).class("mt-2 wrap-anywhere")
         ),
     }
 }
@@ -749,8 +771,8 @@ async fn art_html(s: &UiState, path: &str) -> String {
         .render()
         .unwrap_or_default(),
         Err(e) => format!(
-            r#"<div id="{slot}-artinfo" class="my-2.5 text-meta text-bad wrap-anywhere">{}</div>"#,
-            escape(&format!("{e:#}"))
+            r#"<div id="{slot}-artinfo" class="my-2.5">{}</div>"#,
+            kit::Notice::bad(&format!("{e:#}")).class("wrap-anywhere")
         ),
     }
 }
@@ -957,6 +979,16 @@ struct ReleasesView<'a> {
     discogs: bool,
 }
 
+impl ReleasesView<'_> {
+    fn paste_hint(&self) -> &'static str {
+        if self.discogs {
+            "Or paste a MusicBrainz or Discogs release id or link"
+        } else {
+            "Or paste a MusicBrainz release id or link"
+        }
+    }
+}
+
 /// The releases MusicBrainz (and Discogs, when enabled) has for an album's
 /// files, closest first, to re-tag it from; or one pasted.
 async fn releases(
@@ -986,6 +1018,14 @@ struct EditView<'a> {
 }
 
 impl EditView<'_> {
+    fn differs(&self, field: &str) -> &'static str {
+        if self.varies(field) {
+            "(differs between files)"
+        } else {
+            ""
+        }
+    }
+
     fn fields(&self) -> &'static [(&'static str, &'static str)] {
         ALBUM_FIELDS
     }
@@ -1802,7 +1842,7 @@ async fn previewed(s: UiState, action: Action, form: Vec<(String, String)>) -> R
             match s.app.library.known_artists().await {
                 Ok(k) => k.splitting_on(&split),
                 Err(e) => {
-                    yield patch(&super::flash_err(&format!("{e:#}")));
+                    yield kit::Flash::bad(&format!("{e:#}")).patch().into();
                     return;
                 }
             }
@@ -2571,7 +2611,7 @@ async fn apply(State(s): State<UiState>, Path(action): Path<String>, body: Bytes
             done - failed,
             if failed > 0 { format!(", {failed} failed") } else { String::new() }
         );
-        yield patch(&flash_ok(&msg));
+        yield kit::Flash::ok(&msg).patch().into();
     })
     .into_response()
 }
