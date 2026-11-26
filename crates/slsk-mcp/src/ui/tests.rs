@@ -71,7 +71,7 @@ fn sources_link_folders_by_their_bytes_and_skip_unrecorded_counts() {
             },
         ],
     );
-    let view = SourcesView::new("t".into(), Some(&row), Vec::new());
+    let view = SourcesView::new(Some("t".into()), Some(&row), Vec::new());
     let current = view.current.as_ref().unwrap();
     assert_eq!(
         current.folder.as_ref().unwrap().1,
