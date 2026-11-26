@@ -803,6 +803,7 @@
 
   .combo > :is(input, select) {
     flex: 1;
+    min-width: 0;
   }
 
   .combo > :focus-visible {
