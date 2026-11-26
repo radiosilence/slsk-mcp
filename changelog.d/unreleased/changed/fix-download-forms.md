@@ -1,0 +1,1 @@
+- Fix download form styling and use combi/compact fields where sensible.
