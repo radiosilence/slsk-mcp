@@ -315,6 +315,33 @@ fn wrapped(
     }
     .draw()
 }
+/// An element of the server's own around `inner`: a fragment's markup kept as it is, words escaped.
+#[derive(Template)]
+#[template(
+    ext = "html",
+    source = r#"<{{ tag }} id="{{ id }}"{% if !class.is_empty() %} class="{{ class }}"{% endif %}>{{ inner|safe }}</{{ tag }}>"#
+)]
+struct WrappedSafe<'a, T: std::fmt::Display> {
+    tag: &'static str,
+    id: &'a str,
+    class: &'static str,
+    inner: T,
+}
+
+fn wrapped_safe(
+    tag: &'static str,
+    id: &str,
+    class: &'static str,
+    inner: impl std::fmt::Display,
+) -> Fragment {
+    WrappedSafe {
+        tag,
+        id,
+        class,
+        inner,
+    }
+    .draw()
+}
 
 /// What stands in an element while its content is on its way: the ensō and what is awaited.
 #[derive(Template)]
@@ -1298,7 +1325,7 @@ async fn live_jobs(app: &App, shown: &Shown, settled: bool) -> LiveDrawn {
 async fn jobs_html(app: &App, shown: &Shown) -> Fragment {
     let settled = settled_jobs(app, shown.jobs).await;
     let live = live_jobs_html(app, shown, !settled.settled.is_empty()).await;
-    wrapped(
+    wrapped_safe(
         "div",
         "jobs",
         "",
@@ -1615,7 +1642,7 @@ fn up_count_html(app: &App) -> Fragment {
 
 /// The Uploads page: who is taking what now, then what has been sent.
 async fn uploads_html(app: &App, shown: i64) -> Fragment {
-    wrapped(
+    wrapped_safe(
         "div",
         "uploads",
         "",
