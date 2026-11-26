@@ -9,7 +9,7 @@ publish = false
 [dependencies]
 anyhow = "1.0.104"
 askama = "0.16"
-askama_datastar = "0.2"
+askama_datastar = "0.2.1"
 async-graphql = { version = "7", features = ["uuid", "chrono"] }
 async-stream = "0.3.6"
 axum = { version = "0.8", features = ["macros", "multipart"] }
@@ -24,7 +24,7 @@ http = "1"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 # The kōan web kit's components and the stylesheet they are drawn with; `just css` compiles the stylesheet from this
 # release's source.
-koan-kit-web = "0.5"
+koan-kit-web = "0.6"
 parking_lot = "0.13.0"
 percent-encoding = "2.3.2"
 png = "0.18.1"
