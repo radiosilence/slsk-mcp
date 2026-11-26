@@ -441,7 +441,7 @@ pub(in crate::web) async fn pin(State(s): State<UiState>, Path(id): Path<Uuid>) 
 /// The page's own tab, as it posts it: the address it shows.
 #[derive(serde::Deserialize, Default)]
 pub(in crate::web) struct Showing {
-    #[serde(rename = "_url", default)]
+    #[serde(default)]
     url: String,
 }
 

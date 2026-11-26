@@ -356,12 +356,6 @@ fn insert(selector: &str, mode: ElementPatchMode, html: &Html) -> Event {
     html.patch().selector(selector).mode(mode).into()
 }
 
-/// The element `selector` names emptied: a region the server filled (a
-/// preview, a form) closed.
-fn clear(selector: &str) -> Event {
-    insert(selector, ElementPatchMode::Inner, &Html::new())
-}
-
 /// Signals set from the server, as JSON: how a form is cleared once what it sent has been accepted.
 fn signals(json: serde_json::Value) -> Event {
     PatchSignals::new(json.to_string()).into()
@@ -504,7 +498,7 @@ fn row_url(path: &str, key: &str, value: &str) -> String {
 /// within a page reports it, so a reload, a shared link or back and forward
 /// return to the same place: the address is the one that draws it.
 fn place(url: &str) -> Event {
-    signals(serde_json::json!({ "_url": url }))
+    signals(serde_json::json!({ "url": url }))
 }
 
 /// The view an address describes; one that does not parse (a repeated key,

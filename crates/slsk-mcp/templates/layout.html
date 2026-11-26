@@ -10,8 +10,8 @@
 <script type="module" src="{{ self.live() }}"></script>
 </head>
 <body data-now="{{ now }}" data-signals="{{ signals }}"
-  data-effect="$_url && $_url != location.pathname + location.search && history.pushState(null, '', $_url)"
-  data-on:popstate__window="location.pathname + location.search != $_url && location.reload()">
+  data-effect="$url && $url != location.pathname + location.search && history.pushState(null, '', $url)"
+  data-on:popstate__window="location.pathname + location.search != $url && location.reload()">
 {{ kit::SkipLink::new("Skip to content", "main") }}
 <div hidden{{ self.stream() }}></div>
 <header class="sticky top-0 z-2 border-b border-rule bg-surface px-4 py-2.5 pt-[max(10px,env(safe-area-inset-top))] max-sm:px-3 max-sm:py-2">

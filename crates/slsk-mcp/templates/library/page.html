@@ -8,7 +8,7 @@
     {{ find.submit(kit::Button::primary("Find").class("flex-auto")) }}
   </form>
   {{ run }}
-  <div id="lib-preview"></div>
+  {% let slot = "lib" %}{% let part = "preview" %}{% include "library/closed.html" %}
   {# Reading the library takes a moment, so the page's stream draws the list. #}
   <div id="library"><p class="text-meta text-muted">{{ kit::Spinner::new() }} Reading the library…</p></div>
 </div>

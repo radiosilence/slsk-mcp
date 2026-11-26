@@ -48,7 +48,7 @@ impl Layout {
     /// The page's live stream, opened again whenever it ends or goes quiet, and afresh when a signal it answers for
     /// changes.
     fn stream(&self) -> Html {
-        askama_datastar::reopen_on(self.stream, &["_url", "jobs", "history", "files"])
+        askama_datastar::reopen_on(self.stream, &["url", "jobs", "history", "files"])
     }
 }
 

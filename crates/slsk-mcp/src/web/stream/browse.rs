@@ -16,12 +16,15 @@ use crate::web::{Draw, UiState};
 /// How long a peer is given to send their profile beside their shares.
 const INFO_WAIT: Duration = Duration::from_secs(20);
 
+/// A peer's shares and what they say of themselves, or why they did not answer.
+type Answer = Result<(Listing, Option<Info>), String>;
+
 pub(in crate::web) struct Browse {
     place: Option<Place>,
     /// The peer's answer, while it is awaited.
-    asking: Option<JoinHandle<Result<(Listing, Option<Info>), String>>>,
+    asking: Option<JoinHandle<Answer>>,
     /// The answer, once it came, to draw.
-    answer: Option<Result<(Listing, Option<Info>), String>>,
+    answer: Option<Answer>,
     shares: Last,
     /// Something new to draw: the first time, and once the peer answers.
     due: bool,

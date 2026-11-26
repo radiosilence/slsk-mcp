@@ -16,6 +16,6 @@
       {% if let Some((change, to)) = r.refile() %}<div class="text-meta text-muted wrap-anywhere">{% if let Some(to) = to %}Rules file it at {{ self.rel(to) }} ({{ change.label() }}){% else %}The rules cannot file it here: {{ change.label() }}{% endif %}</div>{% endif %}
     </div>
     <span class="flex-none text-meta whitespace-nowrap text-muted">{{ self.imported(r.album) }}</span>
-    <div id="{{ self.slot(r.album.path) }}" class="basis-full empty:hidden"></div>
+    {% let slot = self.slot(r.album.path) %}{% include "library/slot.html" %}
   </li>
 {% endfor %}

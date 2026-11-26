@@ -21,7 +21,7 @@ use koan_kit_web as kit;
 use super::{Body, Page, Tab, View};
 use crate::art::{AlbumArt, Image};
 use crate::library::{AlbumMove, LibraryAlbum, Overview, by_path};
-use crate::web::{Draw, UiState, clear, failed, field, fields, insert, place};
+use crate::web::{Draw, UiState, failed, field, fields, insert, place};
 
 pub(in crate::web) mod plan;
 pub(in crate::web) mod run;
@@ -224,12 +224,8 @@ impl Filter {
         terms
     }
 
-    pub(in crate::web) fn url(&self) -> String {
-        crate::web::place_url("/library", &self.params())
-    }
-
     /// The list's address with `open` open in their rows.
-    fn url_with(&self, open: &[String]) -> String {
+    pub(in crate::web) fn url_with(&self, open: &[String]) -> String {
         let mut params = self.params();
         params.extend(open.iter().map(|p| ("album", p.as_str())));
         crate::web::place_url("/library", &params)
@@ -571,7 +567,7 @@ pub(in crate::web) async fn album(
     if open.contains(&path) {
         open.retain(|p| *p != path);
         return askama_datastar::events([
-            clear(&format!("#{slot}")),
+            Slot { slot }.draw().patch().into(),
             place(&filter.url_with(&open)),
         ]);
     }
@@ -588,7 +584,7 @@ pub(in crate::web) async fn album(
 /// The page's own address, as Datastar sends it with every request.
 #[derive(serde::Deserialize, Default)]
 pub(in crate::web) struct Showing {
-    #[serde(rename = "_url", default)]
+    #[serde(default)]
     url: String,
 }
 
@@ -605,7 +601,23 @@ pub(in crate::web) async fn dismiss(Query(q): Query<DismissQuery>) -> Response {
         _ => return http::StatusCode::BAD_REQUEST.into_response(),
     };
     let slot = slot_in(&[("slot".to_string(), q.slot)]);
-    askama_datastar::events([clear(&format!("#{slot}-{part}"))])
+    askama_datastar::events([Closed { slot: &slot, part }.draw().patch().into()])
+}
+
+/// An album's place in its row, closed.
+#[derive(Template)]
+#[template(path = "library/slot.html")]
+struct Slot {
+    slot: String,
+}
+
+/// A region the server fills in an album's place (or above the list, for
+/// the slot `lib`), closed: a re-tag, an edit form or a preview.
+#[derive(Template)]
+#[template(path = "library/closed.html")]
+pub(in crate::web) struct Closed<'a> {
+    pub(in crate::web) slot: &'a str,
+    pub(in crate::web) part: &'a str,
 }
 
 #[derive(Template)]

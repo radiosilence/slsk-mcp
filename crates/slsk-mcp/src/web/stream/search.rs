@@ -29,6 +29,8 @@ pub(in crate::web) struct Search {
     results: Last,
     /// The running search shown, while it runs.
     heard: Option<watch::Receiver<Heard>>,
+    /// Peers have answered since the results were last drawn.
+    answered: bool,
     /// Whether the peers behind the results have been asked about.
     asked: bool,
     /// The peers asked about and the folders of each, until they answer.
@@ -63,6 +65,7 @@ impl Live for Search {
             strip: Last::default(),
             results: Last::default(),
             heard,
+            answered: false,
             asked: false,
             asking: None,
             statuses: Vec::new(),
@@ -75,14 +78,17 @@ impl Live for Search {
             let tabs = Tabs::of(&s.app, self.view.tab()).await;
             events.extend(self.strip.send(tabs.draw()));
         }
-        if let (Some(heard), Some(tab), Some(engine)) =
-            (self.heard.as_mut(), &self.tab, s.app.session.engine())
-            && heard.has_changed().unwrap_or(true)
-        {
+        if let (Some(heard), Some(tab), Some(engine), true) = (
+            self.heard.as_mut(),
+            &self.tab,
+            s.app.session.engine(),
+            std::mem::take(&mut self.answered),
+        ) {
             let now = heard.borrow_and_update().clone();
             let results = Results::heard(engine, tab, &now, self.view.shown());
             events.extend(self.results.send(results.draw()));
-            if now.done {
+            // Done, or its search went away: drawn as it ended, and not waited on again.
+            if now.done || heard.has_changed().is_err() {
                 self.heard = None;
                 self.ask(s, &results);
             }
@@ -106,6 +112,7 @@ impl Live for Search {
     async fn wake(&mut self) {
         if let Some(heard) = self.heard.as_mut() {
             let _ = heard.changed().await;
+            self.answered = true;
             return;
         }
         let Some(asking) = self.asking.as_mut() else {

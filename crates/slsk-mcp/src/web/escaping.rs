@@ -203,7 +203,7 @@ async fn get(router: &axum::Router, uri: &str, datastar: bool, wait: Duration) -
 /// A stream's address, with the signals of the page at `url`.
 fn stream(path: &str, url: &str) -> String {
     let signals =
-        serde_json::json!({ "_url": url, "jobs": 100, "history": 100, "files": "", "libseen": 0 });
+        serde_json::json!({ "url": url, "jobs": 100, "history": 100, "files": "", "libseen": 0 });
     super::place_url(path, &[("datastar", &signals.to_string())])
 }
 

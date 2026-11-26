@@ -44,9 +44,7 @@
       {{ art.submit(kit::Button::bordered("Preview")) }}
     </div>
   </form>
-  <div id="{{ slot }}-retag"></div>
-  <div id="{{ slot }}-edit"></div>
-  <div id="{{ slot }}-preview"></div>
+  {% for part in ["retag", "edit", "preview"] %}{% include "library/closed.html" %}{% endfor %}
   <ul class="rows tight mt-2">
   {% for t in tracks %}
     <li>

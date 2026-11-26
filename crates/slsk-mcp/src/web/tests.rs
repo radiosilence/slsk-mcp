@@ -243,7 +243,7 @@ mod library {
             from: "2026-09-01".into(),
             show: "dups".into(),
         };
-        let url = f.url();
+        let url = f.url_with(&[]);
         let Query(back) = Query::<Filter>::try_from_uri(&url.parse().unwrap()).unwrap();
         assert_eq!(back, f);
         let Query(AlbumQuery { filter, path }) =

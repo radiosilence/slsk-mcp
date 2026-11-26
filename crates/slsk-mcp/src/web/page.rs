@@ -185,7 +185,7 @@ pub(super) fn shown<P: Page>(body: Body, url: &str) -> Vec<Event> {
     }
     let mut signals = serde_json::Value::Object(body.signals);
     if let Some(all) = signals.as_object_mut() {
-        all.insert("_url".into(), url.into());
+        all.insert("url".into(), url.into());
     }
     vec![
         super::patch(&Html::from_iter([
@@ -195,6 +195,21 @@ pub(super) fn shown<P: Page>(body: Body, url: &str) -> Vec<Event> {
         ])),
         super::signals(signals),
     ]
+}
+
+/// The page's address as the person sees it: the request's, less the
+/// signals Datastar adds to a GET it sends.
+fn address(uri: &Uri) -> String {
+    let query: Vec<(String, String)> =
+        url::form_urlencoded::parse(uri.query().unwrap_or_default().as_bytes())
+            .into_owned()
+            .filter(|(k, _)| k != "datastar")
+            .collect();
+    let params: Vec<(&str, &str)> = query
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    super::place_url(uri.path(), &params)
 }
 
 /// Draw page `P`: whole for a browser, or in place for the page itself.
@@ -210,7 +225,7 @@ pub(super) async fn serve<P: Page>(
         Err(e) if in_place => return super::failed(&e),
         Err(e) => return crate::error::AppError::from(e).into_response(),
     };
-    let url = uri.path_and_query().map_or("/", |p| p.as_str());
+    let url = &address(&uri);
     if in_place {
         return askama_datastar::events(shown::<P>(body, url));
     }
@@ -219,7 +234,7 @@ pub(super) async fn serve<P: Page>(
     }
     // Every page has the signals its stream reads, so every stream reads the same names.
     let mut signals = serde_json::json!({
-        "_url": url,
+        "url": url,
         "files": "",
         "jobs": super::PAGE,
         "history": super::PAGE,
@@ -239,5 +254,17 @@ pub(super) async fn serve<P: Page>(
     match Html::render(&layout) {
         Ok(html) => (body.status, html).into_response(),
         Err(e) => crate::error::AppError::from(anyhow::Error::from(e)).into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_address_leaves_out_what_datastar_adds() {
+        let uri = "/search?tab=t1&datastar=%7B%22url%22%3A%22%2F%22%7D&shown=200"
+            .parse()
+            .unwrap();
+        assert_eq!(super::address(&uri), "/search?tab=t1&shown=200");
+        assert_eq!(super::address(&"/".parse().unwrap()), "/");
     }
 }

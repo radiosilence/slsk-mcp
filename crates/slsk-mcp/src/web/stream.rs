@@ -93,7 +93,6 @@ impl<const TAB: u8> Live for Quiet<TAB> {
 #[serde(default)]
 pub(super) struct Shown {
     /// The page's address, path and query.
-    #[serde(rename = "_url")]
     pub(super) url: String,
     /// Rows of the long lists shown: each kind of job, and upload history.
     pub(super) jobs: i64,

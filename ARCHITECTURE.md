@@ -93,7 +93,7 @@ redirect when the address now shows another page.
 `page::serve::<P>` draws any page two ways. A browser asking for the address
 gets the layout around the body. The page itself asking, through a link or
 form that loads in place (`kit::Link::in_place`, `kit::Form::get`), gets the
-body morphed into `main`, the title, and the address as `$_url`; the address
+body morphed into `main`, the title, and the address as `$url`; the address
 bar follows. An action that takes the page elsewhere answers the same way,
 through `page::shown`. So a reload, a shared link, back and forward all draw
 exactly what the address names.
@@ -119,7 +119,7 @@ moved, so each stream draws only the regions that could have changed, and
 `stream::Last` sends a region only when it differs from what was last sent.
 
 A page opens its stream through `askama_datastar::reopen_on`, which opens it
-again when it ends or goes quiet, and afresh when `$_url` changes. A stream
+again when it ends or goes quiet, and afresh when `$url` changes. A stream
 therefore never tracks navigation: it draws the page its address names, and is
 replaced when the address moves. Streams end themselves after a minute, which
 bounds how long a page can sit on a connection that died without either end
@@ -143,7 +143,9 @@ An action changes something and answers with as little as it can:
 - When the action moves the page (opening a conversation, leaving a room), it
   answers with the page it leads to (`page::shown`).
 - A region the server filled that the person closes (a preview, an edit form)
-  is closed by an action that clears it (`web::clear`).
+  is closed by an action that sends the region again empty, from the template
+  that declares its closed state (`library/closed.html`). Datastar morphs by
+  the elements a patch carries, so a patch with none changes nothing.
 
 Form bodies whose fields repeat are read with `web::fields`; a button's row is
 named in its URL's query, since a button posts the page's signals rather than
@@ -160,7 +162,10 @@ template, or a kit component with a slot (`{% filter kit::wrap(…) %}`).
 
 Datastar expressions are constants. A value that differs per row goes in a
 `data-*` attribute, escaped, and the expression reads `el.dataset`. Signals are
-named by the program, never built from data.
+named by the program, never built from data. Datastar sends a request every signal
+except those whose names start with `_`, so a signal the server reads (the
+address `url`, the rows shown, `libseen`) has no underscore, and one only the
+page reads (a form's text, the open art form) has one.
 
 ### Patch targets
 
