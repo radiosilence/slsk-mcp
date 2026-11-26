@@ -2,18 +2,19 @@
 <html lang="en-GB">
 <head>
 {{ kit::Head::new(self.css()).title(self.title()).datastar("/assets/datastar.js") }}
-<link rel="icon" href="/assets/icon-32.png" sizes="32x32">
-<link rel="icon" href="/assets/icon-192.png" sizes="192x192">
-<link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+{% let icons = self.icons() %}
+<link rel="icon" href="{{ icons[0] }}" sizes="32x32">
+<link rel="icon" href="{{ icons[1] }}" sizes="192x192">
+<link rel="apple-touch-icon" href="{{ icons[2] }}">
 <script type="module" src="{{ self.live() }}"></script>
 </head>
 <body data-now="{{ now }}" data-signals="{{ signals }}"
   data-effect="$_url && $_url != location.pathname + location.search && history.pushState(null, '', $_url)"
   data-on:popstate__window="location.pathname + location.search != $_url && location.reload()">
 {{ kit::SkipLink::new("Skip to content", "main") }}
-<header class="sticky top-0 z-2 border-b border-rule bg-surface px-4 py-2.5 pt-[max(10px,env(safe-area-inset-top))] max-sm:px-3 max-sm:py-2" data-effect="$jobs; $history; $tab; $files; @get('/stream?page={{ tab }}')"
-  data-on-interval__duration.60s="@get('/stream?page={{ tab }}')"
-  data-on:visibilitychange__document="!document.hidden && @get('/stream?page={{ tab }}')">
+{#- The live stream, kept open by `reopen`, and opened afresh when the signals it reads change. -#}
+<div hidden{{ self.stream() }} data-effect="$jobs; $history; $tab; $files; @get(el.dataset.reopenUrl)"></div>
+<header class="sticky top-0 z-2 border-b border-rule bg-surface px-4 py-2.5 pt-[max(10px,env(safe-area-inset-top))] max-sm:px-3 max-sm:py-2">
   {{ status|safe }}
 </header>
 <nav class="sticky top-0 z-1 flex gap-1 overflow-x-auto border-b border-rule bg-surface px-4 pt-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">

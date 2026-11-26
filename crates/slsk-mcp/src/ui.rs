@@ -8,15 +8,15 @@
 //! session layer, which wraps the router whole so a route added later is
 //! protected by construction.
 
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 use askama::Template;
-use askama_datastar::{ElementPatchMode, PatchSignals, Signals};
+use askama_datastar::{Asset, Csp, ElementPatchMode, PatchSignals, SecurityHeaders, Signals};
 use axum::Router;
 use axum::body::Bytes;
-use axum::extract::{Path, Query, RawQuery, Request, State};
-use axum::http::{HeaderValue, StatusCode, header};
+use axum::extract::{Path, Query, Request, State};
+use axum::http::{StatusCode, header};
 use axum::middleware::Next;
 use axum::response::sse::Event;
 use axum::response::{Html, IntoResponse, Response};
@@ -63,9 +63,6 @@ pub struct UiState {
     browsed: browse::Cache,
     profiles: profile::Cache,
 }
-
-const CSP: &str = "default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self'; img-src 'self' data:; \
-     connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'";
 
 pub fn router(app: Arc<App>) -> Router {
     let state = UiState {
@@ -133,28 +130,14 @@ pub fn router(app: Arc<App>) -> Router {
         .merge(crate::auth::routes::router(state.sessions.clone()))
         .route("/healthz", get(|| async { "ok" }))
         .route("/assets/datastar.js", get(askama_datastar::script::serve))
-        .route(
-            "/assets/live.js",
-            get(|q: RawQuery| async { asset(LIVE_JS, "text/javascript; charset=utf-8", q) }),
-        )
-        .route(
-            "/assets/app.css",
-            get(|q: RawQuery| async { asset(APP_CSS, "text/css; charset=utf-8", q) }),
-        )
+        .route("/assets/live.js", get(LIVE_JS.serve()))
+        .route("/assets/app.css", get(APP_CSS.serve()))
         .route("/assets/geist-mono.woff2", get(kit::font::serve))
-        .route(
-            "/assets/icon-32.png",
-            get(|| async { png(include_bytes!("../assets/icon-32.png")) }),
-        )
-        .route(
-            "/assets/icon-192.png",
-            get(|| async { png(include_bytes!("../assets/icon-192.png")) }),
-        )
-        .route(
-            "/assets/apple-touch-icon.png",
-            get(|| async { png(include_bytes!("../assets/apple-touch-icon.png")) }),
-        )
-        .layer(axum::middleware::from_fn(security_headers))
+        // Public like the other assets: a browser asks for the icon before anyone signs in.
+        .route("/assets/icon-32.png", get(ICON_32.serve()))
+        .route("/assets/icon-192.png", get(ICON_192.serve()))
+        .route("/assets/apple-touch-icon.png", get(TOUCH_ICON.serve()))
+        .layer(SecurityHeaders::new(&Csp::new().datastar()))
         .layer(axum::middleware::from_fn(compress_events))
         .layer(tower_http::compression::CompressionLayer::new())
         .with_state(state)
@@ -213,15 +196,20 @@ async fn compress_events(request: Request, next: Next) -> Response {
     Response::from_parts(parts, axum::body::Body::from_stream(stream))
 }
 
-const APP_CSS: &str = include_str!("../assets/app.css");
-const LIVE_JS: &str = include_str!("../assets/live.js");
-
-/// `path` with a hash of `body`, the asset served there, so a page from a
-/// new build fetches its own stylesheet and script rather than a cached copy
-/// of the previous build's.
-fn versioned(path: &str, body: &str) -> String {
-    format!("{path}?v={}", fingerprint(body.as_bytes()))
-}
+static APP_CSS: Asset = Asset::new(
+    include_bytes!("../assets/app.css"),
+    "text/css; charset=utf-8",
+);
+static LIVE_JS: Asset = Asset::new(
+    include_bytes!("../assets/live.js"),
+    "text/javascript; charset=utf-8",
+);
+static ICON_32: Asset = Asset::new(include_bytes!("../assets/icon-32.png"), "image/png");
+static ICON_192: Asset = Asset::new(include_bytes!("../assets/icon-192.png"), "image/png");
+static TOUCH_ICON: Asset = Asset::new(
+    include_bytes!("../assets/apple-touch-icon.png"),
+    "image/png",
+);
 
 /// A short hash of `bytes` (FNV-1a) for an address that changes with them.
 fn fingerprint(bytes: &[u8]) -> String {
@@ -229,48 +217,6 @@ fn fingerprint(bytes: &[u8]) -> String {
         (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3)
     });
     format!("{hash:016x}")
-}
-
-static CSS_URL: LazyLock<String> = LazyLock::new(|| versioned("/assets/app.css", APP_CSS));
-static LIVE_URL: LazyLock<String> = LazyLock::new(|| versioned("/assets/live.js", LIVE_JS));
-
-/// A text asset. Requested by its hashed URL (`?v=`), it never changes, so it
-/// is kept for good; a bare URL is rechecked hourly.
-fn asset(body: &'static str, kind: &'static str, query: RawQuery) -> Response {
-    let cache = if query.0.is_some_and(|q| q.starts_with("v=")) {
-        "public, max-age=31536000, immutable"
-    } else {
-        "public, max-age=3600"
-    };
-    (
-        [(header::CONTENT_TYPE, kind), (header::CACHE_CONTROL, cache)],
-        body,
-    )
-        .into_response()
-}
-
-/// Public like the other assets: a browser asks for the icon before anyone signs in.
-fn png(bytes: &'static [u8]) -> impl IntoResponse {
-    ([(header::CONTENT_TYPE, "image/png")], bytes)
-}
-
-async fn security_headers(request: Request, next: Next) -> Response {
-    let mut response = next.run(request).await;
-    let h = response.headers_mut();
-    h.insert(
-        header::CONTENT_SECURITY_POLICY,
-        HeaderValue::from_static(CSP),
-    );
-    h.insert(
-        header::X_CONTENT_TYPE_OPTIONS,
-        HeaderValue::from_static("nosniff"),
-    );
-    h.insert(
-        header::REFERRER_POLICY,
-        HeaderValue::from_static("no-referrer"),
-    );
-    h.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
-    response
 }
 
 /// Markup this server built, as a patch of the elements with its ids.
@@ -439,11 +385,22 @@ impl Page {
             })
             .collect()
     }
-    fn css(&self) -> &str {
-        &CSS_URL
+    fn css(&self) -> String {
+        APP_CSS.url("/assets/app.css")
     }
-    fn live(&self) -> &str {
-        &LIVE_URL
+    fn live(&self) -> String {
+        LIVE_JS.url("/assets/live.js")
+    }
+    fn icons(&self) -> [String; 3] {
+        [
+            ICON_32.url("/assets/icon-32.png"),
+            ICON_192.url("/assets/icon-192.png"),
+            TOUCH_ICON.url("/assets/apple-touch-icon.png"),
+        ]
+    }
+    /// The page's live stream, opened again whenever it ends or goes quiet.
+    fn stream(&self) -> askama_datastar::Html {
+        askama_datastar::reopen(&format!("/stream?page={}", self.tab))
     }
     fn title(&self) -> String {
         let name = self.heading.as_deref().unwrap_or_else(|| {
@@ -1720,10 +1677,11 @@ const LIFETIME: Duration = Duration::from_secs(60);
 /// only when something in them could have changed, so a page showing
 /// hundreds of rows does not redraw them while one download moves.
 ///
-/// The stream ends itself after [`LIFETIME`] and the page reopens it on an
-/// interval: a stream can die without either end noticing (a suspended
-/// phone, a replaced pod), and reopening on a timer is what bounds how long
-/// a page can sit showing stale state.
+/// The stream ends itself after [`LIFETIME`], and the page's `reopen`
+/// attributes open it again within seconds, as they do one that ends or goes
+/// quiet for any other reason: a stream can die without either end noticing
+/// (a suspended phone, a replaced pod), and ending it on a timer bounds how
+/// long a page can sit showing stale state.
 async fn stream(
     State(s): State<UiState>,
     Query(StreamQuery { page }): Query<StreamQuery>,

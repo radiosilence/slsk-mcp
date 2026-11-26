@@ -9,7 +9,7 @@ publish = false
 [dependencies]
 anyhow = "1.0.104"
 askama = "0.16"
-askama_datastar = "0.1.0"
+askama_datastar = "0.2"
 async-graphql = { version = "7", features = ["uuid", "chrono"] }
 async-stream = "0.3.6"
 axum = { version = "0.8", features = ["macros", "multipart"] }
