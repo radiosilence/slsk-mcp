@@ -808,6 +808,7 @@
 
   .combo > :focus-visible {
     z-index: 10;
+    outline-offset: calc(2px * -1);
     position: relative;
   }
 
@@ -1235,6 +1236,11 @@
     display: grid;
   }
 
+  .empty.compact {
+    gap: var(--spacing);
+    padding-block: calc(var(--spacing) * 3);
+  }
+
   .empty > strong {
     --tw-font-weight: var(--font-weight-normal);
     font-weight: var(--font-weight-normal);
@@ -1309,6 +1315,15 @@
   }
 
   dialog.sheet > header > h2 {
+    margin: 0;
+  }
+
+  #kit-confirm-detail {
+    padding-inline: calc(var(--spacing) * 5);
+    padding-bottom: calc(var(--spacing) * 3);
+    font-size: var(--text-control);
+    line-height: var(--tw-leading, var(--text-control--line-height));
+    color: var(--muted);
     margin: 0;
   }
 

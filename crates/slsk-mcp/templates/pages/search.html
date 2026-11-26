@@ -1,11 +1,12 @@
 <section class="min-w-0">
   {% include "finder.html" %}
   {% filter kit::wrap(kit::Disclosure::new("search several at once").class("mt-2")) %}
-    <form class="mt-2 grid gap-2" action="/search">
+    {% let several = kit::Form::plain_get("/search") %}
+    <form {{ several.attrs() }} class="mt-2 grid gap-2">
       {{ kit::Textarea::new("q").rows(6).label("Searches, one per line").placeholder("One search per line: artist album").attr("autocomplete", "off").required() }}
       <div class="flex flex-wrap items-center gap-2">
         {{ kit::Check::new("lossless", "lossless").value("true").checked(lossless) }}
-        {{ kit::Button::primary("Search all").submit().class("flex-auto") }}
+        {{ several.submit(kit::Button::primary("Search all").class("flex-auto")) }}
       </div>
     </form>
   {% endfilter %}

@@ -16,7 +16,7 @@
   {% if j.status == "importing" %}{% if let Some(m) = self.stage(j) %}{{ m }}{% endif %}{% endif %}
   {% if (full || !warn) && !j.files.is_empty() %}{% let shown = self.is_open(j) %}
   {#- The files' toggle names its job in `data-job`, so the expressions that open them and say so are constant. -#}
-  {% if !full %}{{ kit::Button::quiet(self.files_label(j)).class("mt-1.5 px-0").data("job", j.id.as_str()).data("count", j.files.len().to_string()).datastar("on:click", "$files = $files.includes(el.dataset.job + ',') ? $files.replace(el.dataset.job + ',', '') : $files + el.dataset.job + ','").datastar("text", "($files.includes(el.dataset.job + ',') ? '▾ ' : '▸ ') + el.dataset.count + ' files'") }}{% endif %}
+  {% if !full %}{{ kit::Button::quiet(self.files_label(j)).class("mt-1.5 px-0").data("job", j.id.as_str()).data("count", j.files.len()).datastar("on:click", "$files = $files.includes(el.dataset.job + ',') ? $files.replace(el.dataset.job + ',', '') : $files + el.dataset.job + ','").datastar("text", "($files.includes(el.dataset.job + ',') ? '▾ ' : '▸ ') + el.dataset.count + ' files'") }}{% endif %}
   {% if open %}
   <ul class="mt-1 grid gap-1 text-meta"{% if !full %} data-attr:hidden="!({{ shown }})"{% endif %}>
     {% for f in j.files %}
@@ -32,7 +32,7 @@
   {% match self.ask(j) %}{% when Some with (a) %}<p class="mt-2 mb-0.5">{{ a }}</p>{% when None %}{% endmatch %}
   {% match j.error %}{% when Some with (e) %}{% if j.status == "failed" %}{{ kit::Notice::bad(e).class("my-0.5 wrap-anywhere") }}{% else %}<p class="my-0.5 text-meta text-muted wrap-anywhere">{{ e }}</p>{% endif %}{% when None %}{% endmatch %}
   {% if !j.analysis.is_empty() && (full || j.status == "suspect" || j.status == "review") %}
-  {% filter kit::wrap(kit::Disclosure::new("spectral analysis").class("mt-2").datastar("ignore-morph", "")) %}
+  {% filter kit::wrap(kit::Disclosure::new("spectral analysis").class("mt-2").ignore_morph()) %}
     <ul class="mt-1.5 grid gap-1">
     {% for t in j.analysis %}
       <li class="flex flex-wrap items-baseline gap-2">
@@ -46,39 +46,31 @@
   {% endfilter %}
   {% endif %}
   {% if warn && !full %}
-  {% filter kit::wrap(kit::Disclosure::new(self.sources_label(j)).loads(self.url(j, "sources"), "").class("mt-2").datastar("ignore-morph", "")) %}
-    <div id="sources-{{ j.id.as_str() }}" class="mt-1.5 text-meta text-muted">Reading history…</div>
-  {% endfilter %}
+  {{ crate::ui::sources_disclosure(j.id.as_str(), j.alternates).closed() }}
   {% endif %}
   {% if j.status == "downloading" && j.username.is_some() %}
-  {% filter kit::wrap(kit::Disclosure::new("choose files").loads(self.url(j, "pick"), "").class("mt-2").datastar("ignore-morph", "")) %}
-    <div id="pick-{{ j.id.as_str() }}" class="mt-1.5 text-meta text-muted">Reading files…</div>
-  {% endfilter %}
+  {{ crate::ui::pick_disclosure(j.id.as_str()).closed() }}
   {% endif %}
   {% if j.status == "review" || j.status == "suspect" %}
-  {% filter kit::wrap(kit::Disclosure::new("files and their tags").loads(self.url(j, "files"), "").class("mt-2").datastar("ignore-morph", "")) %}
-    <div id="files-{{ j.id.as_str() }}" class="mt-1.5 text-meta text-muted">Reading tags…</div>
-  {% endfilter %}
+  {{ crate::ui::files_disclosure(j.id.as_str()).closed() }}
   {% endif %}
   {% if j.status == "review" %}
   <ul class="mt-2 grid gap-1.5">
     {% for c in j.candidates %}
     <li class="flex flex-wrap items-baseline gap-2">
-      {{ kit::Button::bordered("Use").post(self.url(j, "resolve/{}"|format(c.release_id))) }}
+      {{ kit::Button::bordered("Use").busy_key(j.id.as_str()).post(self.url(j, "resolve/{}"|format(c.release_id))) }}
       <span>{{ c.artist }} — {{ c.title }}</span>
       <span class="text-meta text-muted wrap-anywhere">{% match c.date %}{% when Some with (d) %}{{ d }}{% when None %}{% endmatch %} {% match c.country %}{% when Some with (x) %}{{ x }}{% when None %}{% endmatch %} {% match c.media %}{% when Some with (m) %}{{ m }}{% when None %}{% endmatch %} · {{ c.tracks }} tracks · distance {{ c.distance }}{% if c.missing > 0 %} · {{ c.missing }} missing{% endif %}{% if c.extra > 0 %} · {{ c.extra }} extra{% endif %}</span>
       {% let (site, href) = crate::library::release_link(c.release_id) %}<a class="text-meta" href="{{ href }}" target="_blank" rel="noopener">{{ site }}</a>
-      {% filter kit::wrap(kit::Disclosure::new("compare track by track").loads(self.url(j, "compare/{}"|format(c.release_id)), "").class("basis-full").datastar("ignore-morph", "")) %}
-        <div id="cmp-{{ crate::ui::compare_id(j.id.as_str(), c.release_id) }}" class="mt-1.5 text-meta text-muted">Fetching the release…</div>
-      {% endfilter %}
+      {{ crate::ui::compare_disclosure(j.id.as_str(), c.release_id).closed() }}
     </li>
     {% endfor %}
   </ul>
-  {% let release = kit::Form::post(self.url(j, "release")).id("release-{}"|format(j.id.as_str())) %}
+  {% let release = kit::Form::post(self.url(j, "release")).id("release-{}"|format(j.id.as_str())).busy_key(j.id.as_str()) %}
   <form {{ release.attrs() }} class="my-1.5 flex flex-wrap items-center gap-2">
-    <input type="hidden" name="jobs" value="{{ crate::ui::PAGE }}" data-attr:value="$jobs">
-    <input type="hidden" name="job" data-attr:value="$job">
-    <input type="hidden" name="files" data-attr:value="$files">
+    {{ kit::Input::hidden("jobs", crate::ui::PAGE).datastar("attr:value", "$jobs") }}
+    {{ kit::Input::hidden("job", "").datastar("attr:value", "$job") }}
+    {{ kit::Input::hidden("files", "").datastar("attr:value", "$files") }}
     {{ kit::Input::text("release").label("Release id or link").placeholder(self.release_hint()).autocomplete("off").required().class("flex-[1_1_12em]") }}
     {{ release.submit(kit::Button::bordered("Use release")) }}
   </form>
@@ -86,18 +78,18 @@
   {% match self.advice(j) %}{% when Some with (a) %}{% filter kit::wrap(kit::Notice::new("").class("mt-2.5")) %}<strong>suggested:</strong> {{ a.why }}{% endfilter %}{% when None %}{% endmatch %}
   {% match self.as_is_blocker_line(j) %}{% when Some with (b) %}{% if j.status == "review" %}<p class="my-0.5 text-meta text-muted">Import as-is won't work: {{ b }}</p>{% endif %}{% when None %}{% endmatch %}
   <div class="mt-2.5 flex flex-wrap items-center gap-2">
-    {% match self.advice(j) %}{% when Some with (a) %}{{ kit::Button::primary(a.label).post(self.url(j, a.action)) }}{% when None %}{% endmatch %}
-    {% if self.offer(j, "approve") %}{{ kit::Button::bordered("Import anyway").post(self.url(j, "approve")) }}{% endif %}
-    {% if self.offer(j, "next") %}{{ kit::Button::bordered("Try another copy").post(self.url(j, "next")) }}{% endif %}
-    {% if self.offer(j, "as-is") %}{{ kit::Button::bordered("Import as-is").post(self.url(j, "as-is")) }}{% endif %}
-    {% if self.offer(j, "retry") %}{{ kit::Button::bordered("Retry").post(self.url(j, "retry")) }}{% endif %}
-    {% if self.offer(j, "finish") %}{{ kit::Button::bordered("Mark complete").post(self.url(j, "finish")).attr("title", "Stop waiting for the files still to come and import what has arrived") }}{% endif %}
-    {% if self.offer(j, "cancel") %}{{ kit::Button::bordered("Cancel").post(self.url(j, "cancel")) }}{% endif %}
+    {% match self.advice(j) %}{% when Some with (a) %}{{ kit::Button::primary(a.label).busy_key(j.id.as_str()).post(self.url(j, a.action)) }}{% when None %}{% endmatch %}
+    {% if self.offer(j, "approve") %}{{ kit::Button::bordered("Import anyway").busy_key(j.id.as_str()).post(self.url(j, "approve")) }}{% endif %}
+    {% if self.offer(j, "next") %}{{ kit::Button::bordered("Try another copy").busy_key(j.id.as_str()).post(self.url(j, "next")) }}{% endif %}
+    {% if self.offer(j, "as-is") %}{{ kit::Button::bordered("Import as-is").busy_key(j.id.as_str()).post(self.url(j, "as-is")) }}{% endif %}
+    {% if self.offer(j, "retry") %}{{ kit::Button::bordered("Retry").busy_key(j.id.as_str()).post(self.url(j, "retry")) }}{% endif %}
+    {% if self.offer(j, "finish") %}{{ kit::Button::bordered("Mark complete").busy_key(j.id.as_str()).post(self.url(j, "finish")).attr("title", "Stop waiting for the files still to come and import what has arrived") }}{% endif %}
+    {% if self.offer(j, "cancel") %}{{ kit::Button::bordered("Cancel").busy_key(j.id.as_str()).post(self.url(j, "cancel")) }}{% endif %}
     <span class="flex-1 max-sm:hidden"></span>
-    {% if self.offer(j, "scam") %}{{ kit::Button::quiet("Scam").bad().post(self.url(j, "scam")).confirm("Mark this download as a scam? Its peer is banned, everything downloaded from them is deleted, and each album is fetched from another peer.", "Mark as scam").attr("title", "The peer sent something other than what it listed") }}{% endif %}
+    {% if self.offer(j, "scam") %}{{ kit::Button::quiet("Scam").bad().busy_key(j.id.as_str()).post(self.url(j, "scam")).confirm("Mark this download as a scam?", "Mark as scam").detail("Its peer is banned, everything downloaded from them is deleted, and each album is fetched from another peer.").attr("title", "The peer sent something other than what it listed") }}{% endif %}
     {% if full %}{% if let Some(u) = j.username %}{{ crate::ui::ban_button(u, *banned) }}{% endif %}{% endif %}
-    {% if self.offer(j, "match") %}{{ kit::Button::quiet("Match again").post(self.url(j, "retry")) }}{% endif %}
-    {% if j.status == "imported" %}{{ kit::Button::quiet("Clear").post(self.url(j, "remove")).attr("title", "Forget this entry; the album stays in the library") }}
-    {% else if j.status != "importing" %}{{ kit::Button::quiet("Remove").bad().post(self.url(j, "remove")).confirm("Remove this album and delete its downloaded files?", "Remove") }}{% endif %}
+    {% if self.offer(j, "match") %}{{ kit::Button::quiet("Match again").busy_key(j.id.as_str()).post(self.url(j, "retry")) }}{% endif %}
+    {% if j.status == "imported" %}{{ kit::Button::quiet("Clear").busy_key(j.id.as_str()).post(self.url(j, "remove")).attr("title", "Forget this entry; the album stays in the library") }}
+    {% else if j.status != "importing" %}{{ kit::Button::quiet("Remove").bad().busy_key(j.id.as_str()).post(self.url(j, "remove")).confirm("Remove this album and delete its downloaded files?", "Remove") }}{% endif %}
   </div>
 </article>

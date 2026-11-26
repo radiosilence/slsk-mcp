@@ -9,13 +9,13 @@
   <h3>Uploads</h3>
   {% let slots_form = kit::Form::post("/settings/slots").id("set-slots") %}
   <form {{ slots_form.attrs() }} class="my-1.5 flex flex-wrap items-end gap-2">
-    {{ kit::Field::new("upload slots", kit::Input::number("slots").value(slots.to_string()).min(1).required().attr("inputmode", "numeric").class("w-[7em]")) }}
+    {{ kit::Field::new("upload slots", kit::Input::number("slots").value(slots).min(1).required().attr("inputmode", "numeric").class("w-[7em]")) }}
     {{ slots_form.submit(kit::Button::primary("Save")) }}
   </form>
   {% let limits_form = kit::Form::post("/settings/limits").id("set-limits") %}
   <form {{ limits_form.attrs() }} class="my-1.5 flex flex-wrap items-end gap-2">
-    {{ kit::Field::new("upload KB/s", kit::Input::number("up").value(up_kb.to_string()).min(0).required().attr("inputmode", "numeric").class("w-[7em]")) }}
-    {{ kit::Field::new("download KB/s", kit::Input::number("down").value(down_kb.to_string()).min(0).required().attr("inputmode", "numeric").class("w-[7em]")) }}
+    {{ kit::Field::new("upload KB/s", kit::Input::number("up").value(up_kb).min(0).required().attr("inputmode", "numeric").class("w-[7em]")) }}
+    {{ kit::Field::new("download KB/s", kit::Input::number("down").value(down_kb).min(0).required().attr("inputmode", "numeric").class("w-[7em]")) }}
     {{ limits_form.submit(kit::Button::primary("Save")) }}
   </form>
   <p class="text-meta text-muted">Now: {{ slots }} slots, up {{ self.rate(up_kb) }}, down {{ self.rate(down_kb) }}. 0 is unlimited. These hold until the service restarts, which returns to the deployment's settings.</p>

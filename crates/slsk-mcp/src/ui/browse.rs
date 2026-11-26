@@ -635,12 +635,9 @@ pub(super) fn tree_download<'a>(
         &[("username", username), ("key", key)],
     ));
     if *files > 100 {
-        button.confirm(
-            format!(
-                "Download everything under this folder? It is {files} files, one job per album."
-            ),
-            "Download",
-        )
+        button
+            .confirm("Download everything under this folder?", "Download")
+            .detail(format!("It is {files} files, one job per album."))
     } else {
         button
     }

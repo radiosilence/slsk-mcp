@@ -4,22 +4,22 @@
   <p class="text-meta text-muted">{{ t.searches }} searches reached you; your shares answered {{ t.matched }} ({{ self.share(t.matched, t.searches) }}%). {{ self.share(t.distributed, t.searches) }}% came through the distributed network.</p>
   <div>
     <h3>Most searched</h3>
-    {% if t.searched.is_empty() %}<p class="text-meta text-muted">No searches counted yet.</p>{% endif %}
+    {% if t.searched.is_empty() %}{{ kit::Empty::new("No searches counted yet.").compact() }}{% endif %}
     <ul class="rows">{% for s in t.searched %}<li class="flex min-w-0 flex-wrap items-baseline gap-x-2"><span class="min-w-0 flex-auto wrap-anywhere">{{ s.term }}</span><span class="text-meta text-muted">{{ s.searches }}{% if s.matched > 0 %} · you answered {{ s.matched }}{% endif %}</span></li>{% endfor %}</ul>
   </div>
   <div>
     <h3>Searched for, not in your shares</h3>
-    {% if t.missing.is_empty() %}<p class="text-meta text-muted">Nothing searched more than once that you lack.</p>{% endif %}
+    {% if t.missing.is_empty() %}{{ kit::Empty::new("Nothing searched more than once that you lack.").compact() }}{% endif %}
     <ul class="rows">{% for s in t.missing %}<li class="flex min-w-0 flex-wrap items-baseline gap-x-2"><span class="min-w-0 flex-auto wrap-anywhere">{{ s.term }}</span><span class="text-meta text-muted">{{ s.searches }}</span><a class="text-meta" href="{{ self.search_href(s.term) }}">search</a></li>{% endfor %}</ul>
   </div>
   <div>
     <h3>Your folders people want</h3>
-    {% if t.folders.is_empty() %}<p class="text-meta text-muted">No folder opened or downloaded from yet.</p>{% endif %}
+    {% if t.folders.is_empty() %}{{ kit::Empty::new("No folder opened or downloaded from yet.").compact() }}{% endif %}
     <ul class="rows">{% for f in t.folders %}<li class="flex min-w-0 flex-wrap items-baseline gap-x-2"><span class="min-w-0 flex-auto wrap-anywhere">{{ f.folder }}</span><span class="text-meta text-muted">{% if f.downloads > 0 %}{{ f.downloads }} file{% if f.downloads != 1 %}s{% endif %} downloaded{% endif %}{% if f.downloads > 0 && f.opens > 0 %} · {% endif %}{% if f.opens > 0 %}opened {{ f.opens }}×{% endif %}</span></li>{% endfor %}</ul>
   </div>
   <div>
     <h3>People who came back</h3>
-    {% if t.visitors.is_empty() %}<p class="text-meta text-muted">Nobody yet on more than one day.</p>{% endif %}
+    {% if t.visitors.is_empty() %}{{ kit::Empty::new("Nobody yet on more than one day.").compact() }}{% endif %}
     <ul class="rows">{% for v in t.visitors %}<li class="flex min-w-0 flex-wrap items-baseline gap-x-2"><a class="min-w-0 flex-auto wrap-anywhere" href="{{ crate::ui::profile_href(v.username) }}">{{ v.username }}</a><span class="text-meta text-muted">{{ v.days }} days · {{ v.events }} times · last {{ self.ago(v.last) }}</span></li>{% endfor %}</ul>
   </div>
 {% when None %}{% endmatch %}

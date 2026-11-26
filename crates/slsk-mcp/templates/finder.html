@@ -1,4 +1,5 @@
-<form id="finder" class="flex flex-wrap items-center gap-2" action="/search">
-  {{ kit::Combo::new(kit::Input::text("q").value(q).label("Artist and album").placeholder("Artist album").autocomplete("off").autofocus().required().class("min-w-0 flex-auto"), kit::Button::primary("Search").submit()).class("flex-auto") }}
+{% let finder = kit::Form::plain_get("/search").id("finder") %}
+<form {{ finder.attrs() }} class="flex flex-wrap items-center gap-2">
+  {{ kit::Combo::new(kit::Input::text("q").value(q).label("Artist and album").placeholder("Artist album").autocomplete("off").autofocus().required().class("min-w-0 flex-auto"), finder.submit(kit::Button::primary("Search"))).class("flex-auto") }}
   {{ kit::Check::new("lossless", "lossless").value("true").checked(lossless) }}
 </form>

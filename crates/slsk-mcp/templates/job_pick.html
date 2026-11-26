@@ -1,8 +1,8 @@
-{% let form = kit::Form::post("/jobs/{}/pick"|format(id)).id("pick-{}"|format(id)) %}
+{% let form = kit::Form::post("/jobs/{}/pick"|format(id)).id("pick-form-{}"|format(id)) %}
 <form {{ form.attrs() }} class="grid gap-1">
-  <input type="hidden" name="jobs" value="{{ crate::ui::PAGE }}" data-attr:value="$jobs">
-  <input type="hidden" name="job" data-attr:value="$job">
-  <input type="hidden" name="files" data-attr:value="$files">
+  {{ kit::Input::hidden("jobs", crate::ui::PAGE).datastar("attr:value", "$jobs") }}
+  {{ kit::Input::hidden("job", "").datastar("attr:value", "$job") }}
+  {{ kit::Input::hidden("files", "").datastar("attr:value", "$files") }}
   {% if let Some(e) = error %}{{ kit::Notice::bad(e).class("my-0.5 wrap-anywhere") }}{% endif %}
   {% for f in files %}
   <input type="hidden" name="shown" value="{{ f.path }}"><div class="flex min-w-0 items-center gap-2">{{ kit::Check::new("want", f.path).value(f.path).checked(f.state != "skipped").class("min-w-0 flex-[1_1_60%] wrap-anywhere") }}<span class="text-muted">{{ self.size(f.size) }}</span></div>

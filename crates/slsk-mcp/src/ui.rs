@@ -902,24 +902,16 @@ impl CardView {
         let at = if *rate > 0 { at.timestamp_millis() } else { 0 };
         kit::Meter::new(bytes, (*total).max(1))
             .label("download")
-            .data("bytes", bytes.to_string())
-            .data("total", total.to_string())
-            .data("rate", rate.to_string())
-            .data("at", at.to_string())
+            .data("bytes", bytes)
+            .data("total", total)
+            .data("rate", rate)
+            .data("at", at)
     }
 
     /// The files' toggle, as drawn before Datastar takes it over.
     fn files_label(&self, j: &Job) -> String {
         let arrow = if self.open { "▾" } else { "▸" };
         format!("{arrow} {} files", j.files.len())
-    }
-
-    fn sources_label(&self, j: &Job) -> String {
-        match j.alternates {
-            0 => "sources and history".into(),
-            1 => "sources and history · 1 other copy".into(),
-            n => format!("sources and history · {n} other copies"),
-        }
     }
 
     fn release_hint(&self) -> &'static str {
@@ -1285,8 +1277,8 @@ struct JobPageView {
 #[derive(Template)]
 #[template(path = "job_sources.html")]
 struct SourcesView {
-    /// The id of the element this fills.
-    target: String,
+    /// Its id, on the job's own page.
+    target: Option<String>,
     current: Option<SourceLine>,
     others: Vec<SourceLine>,
     events: Vec<crate::db::JobEvent>,
@@ -1317,7 +1309,11 @@ impl SourceLine {
 }
 
 impl SourcesView {
-    fn new(target: String, job: Option<&crate::db::Job>, events: Vec<crate::db::JobEvent>) -> Self {
+    fn new(
+        target: Option<String>,
+        job: Option<&crate::db::Job>,
+        events: Vec<crate::db::JobEvent>,
+    ) -> Self {
         use crate::db::Source;
         let current = job.map(|j| match &j.source.0 {
             Source::Soulseek {
@@ -1388,7 +1384,7 @@ async fn job_page(app: &App, id: Uuid) -> anyhow::Result<Option<(String, String)
     if job.is_none() && events.is_empty() {
         return Ok(None);
     }
-    let sources = SourcesView::new("job-sources".into(), job.as_ref(), events);
+    let sources = SourcesView::new(Some("job-sources".into()), job.as_ref(), events);
     let (title, card, import_log) = match job {
         Some(job) => {
             let view = graphql::job_view(app, job, true)
@@ -1437,20 +1433,21 @@ async fn job_sources(State(s): State<UiState>, Path(id): Path<Uuid>) -> Response
         crate::db::job(&s.app.db, id),
         crate::db::job_events(&s.app.db, id)
     );
-    let target = format!("sources-{id}");
     match (job, events) {
-        (Ok(job), Ok(events)) => in_disclosure(
-            &target,
-            &SourcesView::new(target.clone(), job.as_ref(), events)
+        (Ok(job), Ok(events)) => opened(
+            &sources_disclosure(
+                &id.to_string(),
+                &job.as_ref().map_or(0, |j| j.alternates.0.len()),
+            ),
+            SourcesView::new(None, job.as_ref(), events)
                 .render()
                 .unwrap_or_default(),
         ),
-        (Err(e), _) | (_, Err(e)) => in_disclosure(
-            &target,
-            &format!(
-                r#"<div id="{target}" class="mt-1.5">{}</div>"#,
-                kit::Notice::bad(format!("Couldn't read the history: {e:#}"))
-            ),
+        (Err(e), _) | (_, Err(e)) => opened(
+            &sources_disclosure(&id.to_string(), &0),
+            kit::Notice::bad(format!("Couldn't read the history: {e:#}"))
+                .class("mt-1.5")
+                .to_string(),
         ),
     }
 }
@@ -1549,10 +1546,10 @@ impl UploadPeers {
     fn meter(&self, t: &Transfer) -> kit::Meter<'static> {
         kit::Meter::new(t.bytes, t.size.max(1))
             .label("upload")
-            .data("bytes", t.bytes.to_string())
-            .data("total", t.size.to_string())
-            .data("rate", t.speed.to_string())
-            .data("at", self.at.to_string())
+            .data("bytes", t.bytes)
+            .data("total", t.size)
+            .data("rate", t.speed)
+            .data("at", self.at)
     }
     fn size(&self, b: &u64) -> String {
         human(*b)
@@ -2144,7 +2141,6 @@ async fn spectrogram(State(s): State<UiState>, Path((id, n)): Path<(Uuid, u32)>)
 #[derive(Template)]
 #[template(path = "job_files.html")]
 struct JobFiles {
-    id: Uuid,
     error: Option<String>,
     /// Each album the tags name, with a MusicBrainz search for it.
     albums: Vec<(String, String)>,
@@ -2214,14 +2210,13 @@ async fn job_files(State(s): State<UiState>, Path(id): Path<Uuid>) -> Response {
         albums.push((shown, format!("https://musicbrainz.org/search?{search}")));
     }
     let html = JobFiles {
-        id,
         error,
         albums,
         tracks,
     }
     .render()
     .unwrap_or_default();
-    in_disclosure(&format!("files-{id}"), &html)
+    opened(&files_disclosure(&id.to_string()), html)
 }
 
 /// The files of a downloading job, each ticked to fetch or not.
@@ -2251,18 +2246,101 @@ async fn job_pick_html(app: &App, id: Uuid, error: Option<String>) -> String {
 }
 
 async fn job_pick(State(s): State<UiState>, Path(id): Path<Uuid>) -> Response {
-    in_disclosure(
-        &format!("pick-{id}"),
-        &job_pick_html(&s.app, id, None).await,
+    opened(
+        &pick_disclosure(&id.to_string()),
+        job_pick_html(&s.app, id, None).await,
     )
 }
 
-/// What a job card's disclosure loads, put in place whole. The disclosure
-/// keeps `data-ignore-morph`, so the stream's redraws of the card leave it
-/// open, and Datastar morphs nothing inside such an element; a replacement
-/// it does make.
-fn in_disclosure(id: &str, html: &str) -> Response {
-    askama_datastar::events([insert(&format!("#{id}"), ElementPatchMode::Replace, html)])
+/// One of a job card's disclosures, read from `url` when it opens and kept
+/// open across the stream's redraws of the card.
+struct Lazy {
+    id: String,
+    url: String,
+    summary: String,
+    placeholder: &'static str,
+    class: &'static str,
+}
+
+impl Lazy {
+    fn shell(&self) -> kit::Disclosure<'_> {
+        kit::Disclosure::new(&self.summary)
+            .id(&self.id)
+            .ignore_morph()
+            .class(self.class)
+    }
+
+    /// As the card draws it: closed, reading `url` the first time it opens.
+    fn closed(&self) -> kit::Disclosure<'_> {
+        self.shell().loads(
+            &self.url,
+            askama_datastar::Html::trusted(format!(
+                r#"<p class="mt-1.5 text-meta text-muted">{}</p>"#,
+                self.placeholder
+            )),
+        )
+    }
+
+    /// The handler's answer: open and holding `body`, in place of the one the
+    /// page has. It does not read `url` again: a disclosure put in place open
+    /// fires its toggle, so one that loads would ask again, and again.
+    fn answer(&self, body: String) -> Event {
+        self.shell()
+            .open(true)
+            .body(askama_datastar::Html::trusted(body))
+            .patch_replace()
+            .into()
+    }
+}
+
+/// A job card disclosure's answer, alone.
+fn opened(disclosure: &Lazy, body: String) -> Response {
+    askama_datastar::events([disclosure.answer(body)])
+}
+
+fn sources_disclosure(id: &str, alternates: &usize) -> Lazy {
+    let summary = match alternates {
+        0 => "sources and history".into(),
+        1 => "sources and history · 1 other copy".into(),
+        n => format!("sources and history · {n} other copies"),
+    };
+    Lazy {
+        id: format!("sources-{id}"),
+        url: format!("/jobs/{id}/sources"),
+        summary,
+        placeholder: "Reading history…",
+        class: "mt-2",
+    }
+}
+
+fn pick_disclosure(id: &str) -> Lazy {
+    Lazy {
+        id: format!("pick-{id}"),
+        url: format!("/jobs/{id}/pick"),
+        summary: "choose files".into(),
+        placeholder: "Reading files…",
+        class: "mt-2",
+    }
+}
+
+fn files_disclosure(id: &str) -> Lazy {
+    Lazy {
+        id: format!("files-{id}"),
+        url: format!("/jobs/{id}/files"),
+        summary: "files and their tags".into(),
+        placeholder: "Reading tags…",
+        class: "mt-2",
+    }
+}
+
+fn compare_disclosure(id: &str, release: &str) -> Lazy {
+    Lazy {
+        id: format!("cmp-{}", compare_id(id, release)),
+        url: format!("/jobs/{id}/compare/{release}"),
+        summary: "compare track by track".into(),
+        placeholder: "Fetching the release…",
+        class: "basis-full",
+    }
 }
 
 /// The ticked files are fetched and the rest skipped.
@@ -2294,11 +2372,7 @@ async fn pick_files(State(s): State<UiState>, Path(id): Path<Uuid>, body: Bytes)
         &s.app,
         &shown,
         false,
-        Some(insert(
-            &format!("#pick-{id}"),
-            ElementPatchMode::Replace,
-            &pick,
-        )),
+        Some(pick_disclosure(&id.to_string()).answer(pick)),
     )
     .await
 }
@@ -2308,7 +2382,6 @@ async fn pick_files(State(s): State<UiState>, Path(id): Path<Uuid>, body: Bytes)
 #[derive(Template)]
 #[template(path = "job_compare.html")]
 struct JobCompare {
-    id: String,
     error: Option<String>,
     cmp: Option<sift::Comparison>,
 }
@@ -2339,15 +2412,8 @@ async fn job_compare(
         Ok(c) => (Some(c), None),
         Err(e) => (None, Some(format!("Couldn't compare: {e:#}"))),
     };
-    let id = compare_id(id, &release);
-    let html = JobCompare {
-        id: id.clone(),
-        error,
-        cmp,
-    }
-    .render()
-    .unwrap_or_default();
-    in_disclosure(&format!("cmp-{id}"), &html)
+    let html = JobCompare { error, cmp }.render().unwrap_or_default();
+    opened(&compare_disclosure(&id.to_string(), &release), html)
 }
 
 #[derive(serde::Deserialize)]
@@ -2426,10 +2492,10 @@ fn ban_button(username: &str, banned: bool) -> kit::Button<'static> {
         (kit::Button::quiet("Unban"), "/peer/unban")
     } else {
         (
-            kit::Button::quiet("Ban").bad().confirm(
-                "Ban this user? They get nothing more from you, and nothing is downloaded from them.",
-                "Ban",
-            ),
+            kit::Button::quiet("Ban")
+                .bad()
+                .confirm("Ban this user?", "Ban")
+                .detail("They get nothing more from you, and nothing is downloaded from them."),
             "/peer/ban",
         )
     };

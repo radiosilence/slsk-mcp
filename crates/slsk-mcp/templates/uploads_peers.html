@@ -21,7 +21,7 @@
     </ul>
     <div class="mt-2.5 flex flex-wrap items-center gap-2">
       <span class="flex-1 max-sm:hidden"></span>
-      {{ kit::Button::quiet("Ban").bad().post(crate::ui::row_url("/ban", "username", p.username)).confirm("Ban this user? They will get nothing more from you.", "Ban") }}
+      {{ kit::Button::quiet("Ban").bad().post(crate::ui::row_url("/ban", "username", p.username)).confirm("Ban this user?", "Ban").detail("They will get nothing more from you.") }}
     </div>
   </article>
   {% endfor %}
