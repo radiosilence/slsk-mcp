@@ -2228,7 +2228,7 @@ impl Lazy {
             .class(self.class)
     }
 
-    /// As the card draws it: closed, reading `url` the first time it opens.
+    /// As the card draws it: closed, reading `url` each time it opens.
     fn closed(&self) -> kit::Disclosure<'_> {
         self.shell().loads(
             &self.url,
@@ -2239,15 +2239,10 @@ impl Lazy {
         )
     }
 
-    /// The handler's answer: open and holding `body`, in place of the one the
-    /// page has. It does not read `url` again: a disclosure put in place open
-    /// fires its toggle, so one that loads would ask again, and again.
+    /// The handler's answer: `body` in place of the disclosure's own, which
+    /// keeps its element and reads `url` again when next opened.
     fn answer(&self, body: String) -> Event {
-        self.shell()
-            .open(true)
-            .body(askama_datastar::Html::trusted(body))
-            .patch_replace()
-            .into()
+        kit::Disclosure::fill(&self.id, askama_datastar::Html::trusted(body)).into()
     }
 }
 

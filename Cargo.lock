@@ -1819,7 +1819,7 @@ dependencies = [
 [[package]]
 name = "koan-kit-web"
 version = "0.5.0"
-source = "git+https://github.com/radiosilence/koan?branch=koan-kit-web-components#965fa8816c4953e6a851d0e2309bf6e46d1f5193"
+source = "git+https://github.com/radiosilence/koan?branch=koan-kit-web-components#38d5209e9228abe7b7eb25d7d91ff622c9d7a6b4"
 dependencies = [
  "askama",
  "askama_datastar",
