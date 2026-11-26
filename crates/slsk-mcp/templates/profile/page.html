@@ -1,0 +1,20 @@
+<div class="grid min-w-0 gap-3 *:min-w-0">
+  {% let lookup = kit::Form::get("/profile") %}
+  <form {{ lookup.attrs() }} class="flex flex-wrap items-center gap-2">
+    {{ kit::Input::text("username").value(username).label("Username").placeholder("Username, or empty for your own").autocomplete("off").attr("autocapitalize", "off").class("basis-full") }}
+    {{ lookup.submit(kit::Button::primary("View profile").class("flex-auto")) }}
+  </form>
+  {% if let Some(html) = card %}{{ html }}{% else %}{{ kit::Empty::new("Sign in to Soulseek first.") }}{% endif %}
+  {#- Outside the card, which the stream redraws as answers arrive, so nothing being typed is redrawn over. -#}
+  {% if let Some((description, picture)) = edit %}
+  <h3>Edit</h3>
+  <p class="text-meta text-muted">Peers see this when they look you up.</p>
+  {% let edit = kit::Form::post("/profile") %}
+  <form {{ edit.attrs() }} class="my-2.5 flex flex-col gap-2" enctype="multipart/form-data">
+    {{ kit::Field::new("about you", kit::Textarea::new("description").rows(6).placeholder("About you and what you share").value(description).class("resize-y")) }}
+    {{ kit::Field::new("picture", self.picture_input()).hint("A JPEG or PNG.") }}
+    {% if *picture %}{{ kit::Check::new("clear", "remove the picture").value("1") }}{% endif %}
+    <div>{{ edit.submit(kit::Button::primary("Save")) }}</div>
+  </form>
+  {% endif %}
+</div>

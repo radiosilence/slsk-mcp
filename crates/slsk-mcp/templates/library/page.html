@@ -1,0 +1,14 @@
+<div class="grid min-w-0 gap-3 *:min-w-0">
+  {% let find = kit::Form::get("/library") %}
+  <form {{ find.attrs() }} class="flex flex-wrap items-center gap-2">
+    {{ kit::Input::text("q").value(q).label("Find albums").placeholder("burial, artist:burial, year:1990..1999").autocomplete("off").bind("_libq").class("basis-full") }}
+    {{ kit::Select::new("since").label("Imported when").option("", "imported any time").option("today", "imported today").option("week", "imported this week").option("month", "imported this month").option("date", "imported since…").bind("_libsince").datastar("on:change", "$_libsince != 'date' && el.form.requestSubmit()").class("flex-auto") }}
+    {{ self.from() }}
+    {{ kit::Select::new("show").label("Which albums").option("", "every album").option("dups", "held more than once").option("formats", "in more than one format").option("moves", "not where the rules file them").bind("_libshow").datastar("on:change", "el.form.requestSubmit()").class("flex-auto") }}
+    {{ find.submit(kit::Button::primary("Find").class("flex-auto")) }}
+  </form>
+  {{ run }}
+  {% let slot = "lib" %}{% let part = "preview" %}{% include "library/closed.html" %}
+  {# Reading the library takes a moment, so the page's stream draws the list. #}
+  <div id="library"><p class="text-meta text-muted">{{ kit::Spinner::new() }} Reading the library…</p></div>
+</div>

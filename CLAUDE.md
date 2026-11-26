@@ -24,6 +24,12 @@ The `changes` job decides from the diff which domains a change touches (`rust`, 
 
 The static binaries are built once per architecture (`linux-build`); the image only copies them in, and a release attaches the same tarballs. Windows is off the release path: the `windows` job lints and tests on pull requests only and is not part of `Checks`, so its result shows on a pull request without gating it; `windows-build` runs only in a release run, with `windows-release` attaching its zip after the release is created, so Windows never delays or blocks a release. A release that went out without its zip is fixed by re-running the release run's failed jobs, not by a manual run, which sees the release exists; the upload after publishing also needs immutable releases left off. Neither Windows job saves a cache, since the 10 GB cap would evict main's Linux caches. CI pushes the image as `:<sha>` on main; CD moves `main` onto it, and a release adds the version tags.
 
+## Web UI
+
+The web UI's layout (the route table, one page module and template directory per tab, one stream per page, how
+actions answer, where ids go) is in `ARCHITECTURE.md`; follow it for any change there, and add a new page, stream or
+field a person controls to the escaping test in `src/web/escaping.rs`.
+
 ## Check
 
 ```sh

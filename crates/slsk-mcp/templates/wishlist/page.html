@@ -1,0 +1,11 @@
+<div class="grid min-w-0 gap-3 *:min-w-0">
+  {% let wish = kit::Form::post("/wishlist/add") %}
+  <form {{ wish.attrs() }} class="flex flex-wrap items-center gap-2">
+    {{ kit::Input::text("q").label("Artist and album to wish for").placeholder("Artist album nobody shares yet").autocomplete("off").required().bind("_wishq").class("basis-full") }}
+    {{ kit::Check::new("lossless", "lossless").value("true").checked(true) }}
+    {{ kit::Check::new("grab", "grab when found").value("true").checked(true) }}
+    {{ wish.submit(kit::Button::primary("Add wish").class("flex-auto")) }}
+  </form>
+  <p class="text-meta text-muted">Searched in turn, one every few minutes, until something turns up. With grab on, the first good folder found becomes an album.</p>
+  {{ list }}
+</div>

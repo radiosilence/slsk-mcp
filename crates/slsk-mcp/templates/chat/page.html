@@ -1,0 +1,19 @@
+<div class="grid min-w-0 gap-3 *:min-w-0">
+  {{ thread }}
+  {{ side }}
+  {#- Two actions on one form, each sending its fields to its own URL. -#}
+  <form id="who" class="flex flex-wrap items-center gap-2">
+    {{ kit::Input::text("username").label("Username").placeholder("Username").autocomplete("off").attr("autocapitalize", "off").required().bind("_buddy").class("basis-full") }}
+    {{ kit::Input::text("note").label("Note for buddies").placeholder("Note (for buddies)").autocomplete("off").bind("_buddynote").class("basis-full") }}
+    {{ kit::Button::primary("Message").post("/chat/open").sends("who").busy_key("who").class("flex-auto") }}
+    {{ kit::Button::bordered("Add buddy").post("/chat/buddy/add").sends("who").busy_key("who").class("flex-auto") }}
+  </form>
+  {% filter kit::wrap(kit::Disclosure::new("public rooms")) %}
+    {% let join = kit::Form::post("/chat/join") %}
+    <form {{ join.attrs() }} class="flex flex-wrap items-center gap-2">
+      {{ kit::Input::text("room").label("Room name").placeholder("Room name").autocomplete("off").attr("autocapitalize", "off").required().datastar("on:input__debounce.250ms", "@get('/chat/rooms?q=' + encodeURIComponent(el.value))").class("basis-full") }}
+      {{ join.submit(kit::Button::primary("Join").class("flex-auto")) }}
+    </form>
+    {{ rooms }}
+  {% endfilter %}
+</div>

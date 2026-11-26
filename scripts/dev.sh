@@ -6,8 +6,9 @@ set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 dev="$root/.dev"
-network=127.0.0.1:22420
-# Off 8080, which other local services tend to hold; set DEV_PORT to move it.
+# Off 8080, which other local services tend to hold; DEV_PORT and DEV_NETWORK
+# move it and its Soulseek network, so a second checkout can run beside the first.
+network=${DEV_NETWORK:-127.0.0.1:22420}
 port=${DEV_PORT:-8090}
 mkdir -p "$dev"/{library,share,sharer,sharer-state,incomplete,complete,state}
 

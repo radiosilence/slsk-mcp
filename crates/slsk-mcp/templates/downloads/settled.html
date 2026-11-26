@@ -1,0 +1,20 @@
+<div id="jobs-settled">
+{% if !jobs.is_empty() %}
+<section class="mt-5 min-w-0">
+  <h2>In your library</h2>
+  <ul>
+  {% for j in jobs %}
+    <li class="flex min-w-0 items-center gap-2.5 py-2">
+      {% if let Some(href) = j.href %}<a class="min-w-0 truncate" href="{{ href }}">{{ j.title }}</a>{% else %}<span class="min-w-0 truncate{% if j.cancelled %} text-muted line-through{% endif %}">{{ j.title }}</span>{% endif %}
+      {% if j.cancelled %}<span class="min-w-0 flex-1 truncate text-meta text-muted">cancelled</span>{% endif %}
+      <a class="flex-none text-meta text-muted" href="/jobs/{{ j.id }}">history</a>
+      {% if j.cancelled %}{{ kit::Button::bordered("Retry").class("flex-none").busy_key(j.id).post("/jobs/{}/retry"|format(j.id)) }}
+      {{ kit::Button::quiet("Clear").class("flex-none").busy_key(j.id).post("/jobs/{}/remove"|format(j.id)).confirm("Remove this album and delete its downloaded files?", "Remove").attr("title", "Forget this entry; the album stays in the library") }}
+      {% else %}{{ kit::Button::quiet("Clear").class("flex-none").busy_key(j.id).post("/jobs/{}/remove"|format(j.id)).attr("title", "Forget this entry; the album stays in the library") }}{% endif %}
+    </li>
+  {% endfor %}
+  </ul>
+</section>
+{% endif %}
+{% if more %}{{ kit::Button::quiet("Show more").data("page", self.page()).datastar("on-intersect", "$jobs += +el.dataset.page").datastar("on:click", "$jobs += +el.dataset.page") }}{% endif %}
+</div>

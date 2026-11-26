@@ -18,7 +18,7 @@ pub enum Topic {
     Jobs = 0,
     /// Uploads recorded as sent.
     Uploads = 1,
-    /// Messages, buddies, rooms and the wishlist.
+    /// Private messages and the wishlist.
     Social = 2,
     /// Search tabs.
     Search = 3,
@@ -26,11 +26,17 @@ pub enum Topic {
     Library = 4,
     /// Other users browsing, searching or downloading from our shares.
     Activity = 5,
+    /// Rooms joined and what is said in them, and the buddies and whether
+    /// they are online: what only the Chat page shows.
+    Chat = 6,
+    /// An answer a page asked a peer or the server for: a share list, a
+    /// profile, whether a user is online.
+    Peers = 7,
 }
 
 /// Transfers, the search budget and the distributed network are not topics
 /// here: the engine has its own signal, [`slsk_engine::changes`].
-pub const TOPICS: usize = 6;
+pub const TOPICS: usize = 8;
 
 pub type Counts = [u64; TOPICS];
 
@@ -107,6 +113,7 @@ pub fn of_table(table: &str) -> Option<Topic> {
         "jobs" | "job_events" => Topic::Jobs,
         "uploads" => Topic::Uploads,
         "messages" | "wishes" => Topic::Social,
+        "buddies" => Topic::Chat,
         "search_tabs" => Topic::Search,
         _ => return None,
     })

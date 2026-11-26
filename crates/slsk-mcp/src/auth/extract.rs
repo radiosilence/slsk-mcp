@@ -13,7 +13,7 @@ use axum::response::{IntoResponse, Redirect, Response};
 
 use crate::auth::cookie::{SESSION_COOKIE, read_cookie};
 use crate::auth::session::Session;
-use crate::ui::UiState as AppState;
+use crate::web::UiState as AppState;
 
 /// Whether an unauthenticated request should be redirected or refused.
 ///

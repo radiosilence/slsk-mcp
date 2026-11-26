@@ -1,0 +1,11 @@
+<div id="bans">
+{% match error %}{% when Some with (e) %}{{ kit::Notice::bad(e) }}{% when None %}
+  <p class="text-meta text-muted">A banned user gets no uploads, browsing or search results from you.</p>
+  {% if bans.is_empty() %}{{ kit::Empty::new("Nobody is banned.") }}{% endif %}
+  <ul class="rows">
+  {% for b in bans %}
+    <li><a class="min-w-0 flex-[1_1_60%] truncate" href="{{ crate::web::profile_href(b) }}">{{ b }}</a>{{ kit::Button::bordered("Unban").post(crate::web::row_url("/bans/remove", "username", b)) }}</li>
+  {% endfor %}
+  </ul>
+{% endmatch %}
+</div>

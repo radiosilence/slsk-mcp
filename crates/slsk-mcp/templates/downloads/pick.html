@@ -1,0 +1,8 @@
+{% let form = kit::Form::post("/jobs/{}/pick"|format(id)) %}
+<form {{ form.attrs() }} class="grid gap-1">
+  {% if let Some(e) = error %}{{ kit::Notice::bad(e).class("my-0.5 wrap-anywhere") }}{% endif %}
+  {% for f in files %}
+  {{ kit::Input::hidden("shown", f.path) }}<div class="flex min-w-0 items-center gap-2">{{ kit::Check::new("want", f.path).value(f.path).checked(f.state != "skipped").class("min-w-0 flex-[1_1_60%] wrap-anywhere") }}<span class="text-muted">{{ self.size(f.size) }}</span></div>
+  {% endfor %}
+  <div class="mt-1">{{ form.submit(kit::Button::bordered("Update")) }}</div>
+</form>

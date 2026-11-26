@@ -90,66 +90,78 @@ impl Default for PeerLimits {
 const OPTIONAL_EXTENSIONS: &str =
     "nfo,txt,sfv,md5,ffp,st5,m3u,m3u8,pls,log,accurip,url,ini,db,jpg,jpeg,png,gif,bmp,pdf";
 
-fn var(key: &str) -> Result<String> {
-    std::env::var(key).with_context(|| format!("{key} is required"))
-}
+/// Settings by name, as the environment names them.
+struct Vars<F>(F);
 
-fn opt(key: &str) -> Option<String> {
-    std::env::var(key).ok().filter(|v| !v.trim().is_empty())
-}
+impl<F: Fn(&str) -> Option<String>> Vars<F> {
+    fn opt(&self, key: &str) -> Option<String> {
+        (self.0)(key).filter(|v| !v.trim().is_empty())
+    }
 
-fn or(key: &str, default: &str) -> String {
-    opt(key).unwrap_or_else(|| default.to_string())
-}
+    fn var(&self, key: &str) -> Result<String> {
+        (self.0)(key).with_context(|| format!("{key} is required"))
+    }
 
-fn num<T: std::str::FromStr>(key: &str, default: T) -> Result<T> {
-    match opt(key) {
-        Some(v) => v
-            .trim()
-            .parse()
-            .map_err(|_| anyhow::anyhow!("{key} must be a number")),
-        None => Ok(default),
+    fn or(&self, key: &str, default: &str) -> String {
+        self.opt(key).unwrap_or_else(|| default.to_string())
+    }
+
+    fn num<T: std::str::FromStr>(&self, key: &str, default: T) -> Result<T> {
+        match self.opt(key) {
+            Some(v) => v
+                .trim()
+                .parse()
+                .map_err(|_| anyhow::anyhow!("{key} must be a number")),
+            None => Ok(default),
+        }
     }
 }
 
 impl Config {
     pub fn from_env() -> Result<Self> {
+        Self::from_vars(|key| std::env::var(key).ok())
+    }
+
+    /// The configuration from settings named as the environment names them,
+    /// read through `lookup`.
+    pub fn from_vars(lookup: impl Fn(&str) -> Option<String>) -> Result<Self> {
+        let v = Vars(lookup);
         let seal_key = base64::engine::general_purpose::STANDARD
-            .decode(var("SEAL_KEY")?.trim())
+            .decode(v.var("SEAL_KEY")?.trim())
             .context("SEAL_KEY must be base64")?
             .try_into()
             .map_err(|_| anyhow::anyhow!("SEAL_KEY must decode to 32 bytes"))?;
 
         let oidc = match (
-            opt("OIDC_ISSUER"),
-            opt("OIDC_CLIENT_ID"),
-            opt("OIDC_CLIENT_SECRET"),
+            v.opt("OIDC_ISSUER"),
+            v.opt("OIDC_CLIENT_ID"),
+            v.opt("OIDC_CLIENT_SECRET"),
         ) {
             (Some(issuer), Some(client_id), Some(client_secret)) => Some(Oidc {
                 issuer: issuer.trim_end_matches('/').to_string(),
                 client_id,
                 client_secret,
             }),
-            (None, None, None) if opt("UI_INSECURE_NO_AUTH").as_deref() == Some("1") => None,
+            (None, None, None) if v.opt("UI_INSECURE_NO_AUTH").as_deref() == Some("1") => None,
             (None, None, None) => bail!(
                 "OIDC_ISSUER, OIDC_CLIENT_ID and OIDC_CLIENT_SECRET are required (or UI_INSECURE_NO_AUTH=1 for local development)"
             ),
             _ => bail!("OIDC_ISSUER, OIDC_CLIENT_ID and OIDC_CLIENT_SECRET must be set together"),
         };
 
-        let account = match (opt("SLSK_USERNAME"), opt("SLSK_PASSWORD")) {
+        let account = match (v.opt("SLSK_USERNAME"), v.opt("SLSK_PASSWORD")) {
             (Some(u), Some(p)) => Some((u, p)),
             (None, None) => None,
             _ => bail!("SLSK_USERNAME and SLSK_PASSWORD must be set together"),
         };
 
-        let library_dir = PathBuf::from(or("LIBRARY_DIR", "/music"));
-        let share_dirs = match opt("SHARE_DIRS") {
+        let library_dir = PathBuf::from(v.or("LIBRARY_DIR", "/music"));
+        let share_dirs = match v.opt("SHARE_DIRS") {
             Some(dirs) => dirs.split(',').map(|d| PathBuf::from(d.trim())).collect(),
             None => vec![library_dir.clone()],
         };
 
-        let ui_addr = or("UI_ADDR", "0.0.0.0:8080");
+        let ui_addr = v.or("UI_ADDR", "0.0.0.0:8080");
         if oidc.is_none() && !ui_addr.starts_with("127.0.0.1:") && !ui_addr.starts_with("[::1]:") {
             bail!(
                 "UI_INSECURE_NO_AUTH serves the UI with no sign-in; UI_ADDR must then be loopback, not {ui_addr}"
@@ -158,30 +170,30 @@ impl Config {
         Ok(Self {
             seal_key,
             account,
-            server: or("SLSK_SERVER", "server.slsknet.org:2242"),
+            server: v.or("SLSK_SERVER", "server.slsknet.org:2242"),
             library_dir,
             share_dirs,
-            staging_dir: PathBuf::from(or("STAGING_DIR", "/data/incomplete")),
-            complete_dir: PathBuf::from(or("COMPLETE_DIR", "/data/complete")),
-            state_dir: PathBuf::from(or("STATE_DIR", "/data")),
-            listen_port: num("LISTEN_PORT", 2234)?,
-            upload_slots: num("UPLOAD_SLOTS", 500)?,
-            upload_limit: num("UPLOAD_LIMIT", 0)?,
-            download_limit: num("DOWNLOAD_LIMIT", 0)?,
-            searches_per_hour: num("SEARCHES_PER_HOUR", 600)?,
-            max_inbound_connections: num("MAX_INBOUND_CONNECTIONS", 512)?,
-            max_inbound_per_address: num("MAX_INBOUND_PER_ADDRESS", 32)?,
-            internal_addr: or("INTERNAL_ADDR", "0.0.0.0:8081"),
-            metrics_addr: or("METRICS_ADDR", "0.0.0.0:9464"),
+            staging_dir: PathBuf::from(v.or("STAGING_DIR", "/data/incomplete")),
+            complete_dir: PathBuf::from(v.or("COMPLETE_DIR", "/data/complete")),
+            state_dir: PathBuf::from(v.or("STATE_DIR", "/data")),
+            listen_port: v.num("LISTEN_PORT", 2234)?,
+            upload_slots: v.num("UPLOAD_SLOTS", 500)?,
+            upload_limit: v.num("UPLOAD_LIMIT", 0)?,
+            download_limit: v.num("DOWNLOAD_LIMIT", 0)?,
+            searches_per_hour: v.num("SEARCHES_PER_HOUR", 600)?,
+            max_inbound_connections: v.num("MAX_INBOUND_CONNECTIONS", 512)?,
+            max_inbound_per_address: v.num("MAX_INBOUND_PER_ADDRESS", 32)?,
+            internal_addr: v.or("INTERNAL_ADDR", "0.0.0.0:8081"),
+            metrics_addr: v.or("METRICS_ADDR", "0.0.0.0:9464"),
             ui_addr,
-            public_url: or("PUBLIC_URL", "http://127.0.0.1:8080")
+            public_url: v.or("PUBLIC_URL", "http://127.0.0.1:8080")
                 .trim_end_matches('/')
                 .to_string(),
             oidc,
-            beets_config: opt("BEETS_CONFIG").map(PathBuf::from),
-            discogs_token: opt("DISCOGS_TOKEN"),
-            acoustid_client: opt("ACOUSTID_CLIENT"),
-            optional_extensions: or("OPTIONAL_EXTENSIONS", OPTIONAL_EXTENSIONS)
+            beets_config: v.opt("BEETS_CONFIG").map(PathBuf::from),
+            discogs_token: v.opt("DISCOGS_TOKEN"),
+            acoustid_client: v.opt("ACOUSTID_CLIENT"),
+            optional_extensions: v.or("OPTIONAL_EXTENSIONS", OPTIONAL_EXTENSIONS)
                 .split(',')
                 .map(|e| e.trim().trim_start_matches('.').to_lowercase())
                 .filter(|e| !e.is_empty())
@@ -189,12 +201,12 @@ impl Config {
             peer_limits: {
                 let d = PeerLimits::default();
                 PeerLimits {
-                    jobs: num("PEER_MAX_JOBS", d.jobs)?.max(1),
-                    files: num("PEER_MAX_FILES", d.files)?.max(1),
-                    bytes: num("PEER_MAX_MEGABYTES", d.bytes >> 20)?.max(1) << 20,
+                    jobs: v.num("PEER_MAX_JOBS", d.jobs)?.max(1),
+                    files: v.num("PEER_MAX_FILES", d.files)?.max(1),
+                    bytes: v.num("PEER_MAX_MEGABYTES", d.bytes >> 20)?.max(1) << 20,
                 }
             },
-            description: or(
+            description: v.or(
                 "DESCRIPTION",
                 concat!(
                     "slsk-mcp ",

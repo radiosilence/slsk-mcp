@@ -376,7 +376,8 @@ re-file, credit, enrich, re-import, edit or bin), browsing a user's shares, prof
 settings and triage. Each has its own address, and the server draws that
 page whole around a shared layout, so a link or a reload costs one request
 and nothing for the other pages; Datastar then patches parts of it in place,
-and a live stream updates only what that page shows. The patches, the streams,
+and a live stream updates only what that page shows. How pages, streams and
+actions are put together is in [ARCHITECTURE.md](ARCHITECTURE.md). The patches, the streams,
 the request checks and Datastar's script itself come from
 [askama_datastar](https://github.com/radiosilence/askama-datastar), which
 radiosilence's other web UIs share. Each action calls the
@@ -541,7 +542,8 @@ cargo test --workspace
 
 The network tests run real engines against `slsk-testserver` over loopback.
 
-`just dev` runs the service on http://127.0.0.1:8090 (`DEV_PORT` moves it)
+`just dev` runs the service on http://127.0.0.1:8090 (`DEV_PORT` moves it, and
+`DEV_NETWORK` its Soulseek network, so two checkouts can run side by side)
 against the same test server, with no sign-in, so the web UI can be worked on
 without a Soulseek account. It writes a few short FLACs of noise with ffmpeg
 into a library and onto one sharing peer, `dev-sharer`, so the library has
@@ -562,9 +564,12 @@ actions gives each its own button that sends the form's fields to its own URL,
 so Enter and `required` keep working and only the pressed button spins; links
 that move within a page load in place, with the address and history following;
 controls in a row or toolbar take the kit's compact size rather than restyling.
-A fragment the Rust code renders is an `askama_datastar::Html`, so templates
-splice it without `|safe`. Layout is Tailwind v4
-utilities in the templates and in the HTML the Rust code writes.
+All markup comes from the templates under `crates/slsk-mcp/templates/`, one
+directory per tab, and the kit's components; a view embedded in another is an
+`askama_datastar::Html`, so nothing is spliced with `|safe` and nothing is
+escaped by hand. A test renders every page and stream with markup in every
+field a person or peer controls and fails on anything escaped twice or not at
+all. Layout is Tailwind v4 utilities in the templates.
 `crates/slsk-mcp/styles/` holds only what is slsk-mcp's own. The kit removes
 Tailwind's palette, radii, shadows and type sizes, so such a class compiles to
 nothing; `just kit-check` reports any in the templates or `src/`, and CI fails
