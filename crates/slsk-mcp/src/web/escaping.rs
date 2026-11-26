@@ -112,15 +112,17 @@ fn problems(what: &str, text: &str, tags: &BTreeSet<String>) -> Vec<String> {
     out
 }
 
-/// A peer sharing one album, everything in it named with markup.
+/// A peer sharing one album, named with markup where the file system
+/// allows it: Windows refuses `<`, `>` and `"` in a file name.
 async fn peer(server: &TestServer, root: &Path) -> Engine {
-    let dir = root.join("peer").join(HOSTILE.replace('/', "-"));
+    let name = if cfg!(windows) {
+        "an album".to_string()
+    } else {
+        HOSTILE.replace('/', "-")
+    };
+    let dir = root.join("peer").join(&name);
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(
-        dir.join(format!("01 {}.flac", HOSTILE.replace('/', "-"))),
-        b"fLaC",
-    )
-    .unwrap();
+    std::fs::write(dir.join(format!("01 {name}.flac")), b"fLaC").unwrap();
     let mut cfg = EngineConfig::new(PEER, "hunter2");
     cfg.server = server.address();
     cfg.listen_port = 0;
