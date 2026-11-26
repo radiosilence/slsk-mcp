@@ -8,7 +8,7 @@
           {% if let Some(st) = status %}{{ crate::ui::state(st, st) }}{% endif %}{% if banned %}{{ kit::Status::bad("banned") }}{% endif %}
         </div>
         {% if !description.is_empty() %}<p class="whitespace-pre-wrap wrap-anywhere">{{ description }}</p>{% else if !mine && note.is_none() %}<p class="text-meta text-muted">No description.</p>{% endif %}
-        {% if let Some(n) = note %}<p class="text-meta text-muted wrap-anywhere">{{ n }}</p>{% endif %}
+        {% if let Some(n) = note %}<p class="text-meta text-muted wrap-anywhere">{% if asking %}{{ kit::Spinner::new() }} {% endif %}{{ n }}</p>{% endif %}
       </div>
     </div>
     <div class="mt-2.5 flex flex-wrap items-center gap-2">

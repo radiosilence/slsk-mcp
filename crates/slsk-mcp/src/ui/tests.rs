@@ -1050,6 +1050,7 @@ mod profile {
             &server,
             Some(&info(Some(b"\x89PNG\r\n\x1a\nxx"))),
             None,
+            false,
         );
         assert!(html.contains("&#60;b&#62;dub&#60;/b&#62; techno"), "{html}");
         assert!(
@@ -1075,6 +1076,7 @@ mod profile {
             &Server::default(),
             Some(&info(Some(b"<svg/>"))),
             None,
+            false,
         );
         assert!(!html.contains("/profile/picture"), "{html}");
     }
@@ -1094,6 +1096,7 @@ mod profile {
             &server,
             None,
             Some("ann did not send their profile".into()),
+            false,
         );
         assert!(html.contains("did not send their profile"));
         assert!(html.contains(">7<"));
@@ -1117,4 +1120,24 @@ mod profile {
 #[test]
 fn the_stylesheet_names_the_font_the_kit_serves() {
     assert!(include_str!("../../assets/app.css").contains(&kit::font::url("app.css")));
+}
+
+/// A fragment drawn twice from the same state is not sent again, though the kit names its buttons' own busy signals
+/// afresh each time.
+#[test]
+fn a_redraw_from_the_same_state_compares_equal() {
+    let draw = |url: &'static str| {
+        kit::Button::bordered("Retry")
+            .busy_key("job")
+            .post(url)
+            .to_string()
+    };
+    assert_eq!(
+        unnamed(&draw("/jobs/1/retry")),
+        unnamed(&draw("/jobs/1/retry"))
+    );
+    assert_ne!(
+        unnamed(&draw("/jobs/1/retry")),
+        unnamed(&draw("/jobs/2/retry"))
+    );
 }

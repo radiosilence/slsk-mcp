@@ -9,7 +9,9 @@ use axum::response::Response;
 use axum::routing::{get, post};
 use koan_kit_web as kit;
 
-use super::{UiState, failed, fields, human, one, patch, sent, signals, status_html};
+use super::{
+    Draw, Fragment, UiState, failed, fields, human, one, patch, sent, signals, status_html,
+};
 use crate::App;
 use crate::graphql::TriageCause;
 
@@ -35,7 +37,7 @@ struct BansView {
     error: Option<String>,
 }
 
-async fn bans_html(app: &App) -> String {
+async fn bans_html(app: &App) -> Fragment {
     let result = async {
         let engine = app.session.require()?;
         anyhow::Ok(crate::db::bans(&app.db, &engine.username()).await?)
@@ -48,22 +50,20 @@ async fn bans_html(app: &App) -> String {
             error: Some(format!("{e:#}")),
         },
     }
-    .render()
-    .unwrap_or_default()
+    .draw()
 }
 
 #[derive(Template)]
 #[template(path = "pages/bans.html")]
 struct BansPage {
-    list: String,
+    list: Fragment,
 }
 
-pub(super) async fn bans_page(app: &App) -> String {
+pub(super) async fn bans_page(app: &App) -> Fragment {
     BansPage {
         list: bans_html(app).await,
     }
-    .render()
-    .unwrap_or_default()
+    .draw()
 }
 
 async fn bans(State(s): State<UiState>) -> Response {
@@ -77,32 +77,31 @@ async fn set_ban(s: &UiState, user: &str, banned: bool) -> Response {
     }
     match crate::graphql::set_ban(&s.app, user, banned).await {
         Ok(_) => askama_datastar::events(vec![
-            patch(&format!(
-                "{}\n{}",
+            patch(&Fragment::from_iter([
                 bans_html(&s.app).await,
                 kit::Flash::ok(&if banned {
                     format!("Banned {user}")
                 } else {
                     format!("Unbanned {user}")
                 })
-            )),
-            signals(r#"{"banuser":""}"#),
+                .html(),
+            ])),
+            signals(r#"{"_banuser":""}"#),
             kit::Confirm::close().into(),
         ]),
-        Err(e) => one(kit::Flash::bad(&e.message).to_string()),
+        Err(e) => one(kit::Flash::bad(&e.message).html()),
     }
 }
 
-/// The name typed on the bans page. Its Ban asks first, and the page's
-/// question posts the page's signals, so the name travels as one.
-#[derive(serde::Deserialize)]
-struct BanAsk {
-    #[serde(default)]
-    banuser: String,
-}
-
-async fn ban(State(s): State<UiState>, axum::Json(ask): axum::Json<BanAsk>) -> Response {
-    set_ban(&s, &ask.banuser, true).await
+/// The name typed on the bans page, posted by its form once the page's question is answered.
+async fn ban(State(s): State<UiState>, body: axum::body::Bytes) -> Response {
+    let form = super::fields(&body);
+    set_ban(
+        &s,
+        super::field(&form, "username").unwrap_or_default(),
+        true,
+    )
+    .await
 }
 
 async fn unban(State(s): State<UiState>, Query(p): Query<super::PeerQuery>) -> Response {
@@ -136,7 +135,7 @@ impl SettingsView {
     }
 }
 
-async fn settings_html(app: &App) -> String {
+async fn settings_html(app: &App) -> Fragment {
     let view = match app.session.engine() {
         Some(e) => {
             let (up, down) = e.limits();
@@ -165,21 +164,20 @@ async fn settings_html(app: &App) -> String {
             acoustid: app.jobs.acoustid(),
         },
     };
-    view.render().unwrap_or_default()
+    view.draw()
 }
 
 #[derive(Template)]
 #[template(path = "pages/settings.html")]
 struct SettingsPage {
-    settings: String,
+    settings: Fragment,
 }
 
-pub(super) async fn settings_page(app: &App) -> String {
+pub(super) async fn settings_page(app: &App) -> Fragment {
     SettingsPage {
         settings: settings_html(app).await,
     }
-    .render()
-    .unwrap_or_default()
+    .draw()
 }
 
 async fn settings(State(s): State<UiState>) -> Response {
@@ -187,11 +185,10 @@ async fn settings(State(s): State<UiState>) -> Response {
 }
 
 async fn saved(app: &App, msg: &str) -> Response {
-    one(format!(
-        "{}\n{}",
+    one(Fragment::from_iter([
         settings_html(app).await,
-        kit::Flash::ok(msg)
-    ))
+        kit::Flash::ok(msg).html(),
+    ]))
 }
 
 /// A whole number from a form field, or a message saying which field.
@@ -240,11 +237,11 @@ async fn rescan(State(s): State<UiState>) -> Response {
         Ok(e) => {
             let e = e.clone();
             tokio::spawn(async move { e.rescan().await });
-            one(format!(
-                "{}\n{}",
+            one(Fragment::from_iter([
                 status_html(&s.app).await,
                 kit::Flash::ok("Rescanning shares; the count above updates when it finishes")
-            ))
+                    .html(),
+            ]))
         }
         Err(e) => failed(&e),
     }
@@ -264,11 +261,10 @@ async fn interest(State(s): State<UiState>, RawQuery(query): RawQuery, body: Byt
     };
     match s.app.social.set_interest(item, liked).await {
         Ok(()) => askama_datastar::events(vec![
-            patch(&format!(
-                "{}\n{}",
+            patch(&Fragment::from_iter([
                 settings_html(&s.app).await,
-                kit::Flash::region()
-            )),
+                kit::Flash::region().html(),
+            ])),
             signals(r#"{"_interest":""}"#),
         ]),
         Err(e) => failed(&e),
@@ -324,29 +320,26 @@ pub(super) struct Days {
 #[derive(Template)]
 #[template(path = "pages/triage.html")]
 struct TriagePage {
-    triage: String,
+    triage: Fragment,
 }
 
-pub(super) async fn triage_page(app: &App, q: &Days) -> String {
+pub(super) async fn triage_page(app: &App, q: &Days) -> Fragment {
     TriagePage {
         triage: triage_html(app, q.days).await,
     }
-    .render()
-    .unwrap_or_default()
+    .draw()
 }
 
 async fn triage(State(s): State<UiState>, Query(q): Query<Days>) -> Response {
     let days = q.days.unwrap_or(7).clamp(1, 365);
-    askama_datastar::events(vec![
-        patch(&triage_html(&s.app, Some(days)).await),
-        super::place(&super::place_url("/triage", &[("days", &days.to_string())])),
-    ])
+    // Its periods load in place, moving the address themselves.
+    one(triage_html(&s.app, Some(days)).await)
 }
 
 /// The newest events drawn for each cause; the count covers the rest.
 const EXAMPLES: usize = 20;
 
-async fn triage_html(app: &App, days: Option<i64>) -> String {
+async fn triage_html(app: &App, days: Option<i64>) -> Fragment {
     let days = days.unwrap_or(7).clamp(1, 365);
     let view = match crate::graphql::triage(app, days, EXAMPLES).await {
         Ok(causes) => TriageView {
@@ -360,5 +353,5 @@ async fn triage_html(app: &App, days: Option<i64>) -> String {
             error: Some(e.message),
         },
     };
-    view.render().unwrap_or_default()
+    view.draw()
 }

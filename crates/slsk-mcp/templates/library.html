@@ -1,10 +1,8 @@
 <div id="library">
 {% if let Some(e) = error %}{{ kit::Notice::bad(e).class("wrap-anywhere") }}{% else %}
 {% if total == 0 %}{{ kit::Empty::new("No albums match.") }}{% else %}
-{#- Every button in the form submits it to its own `formaction`, which kit::Form does not take, so the form and its
-    buttons are wired by hand; `data-scroll` brings the preview it draws into view. -#}
-<form id="lib-sel" data-signals="{_sel: 0, _spares: 0, _lib_via: ''}" data-indicator="_lib_busy"
-  data-on:submit="$_lib_via = evt.submitter?.getAttribute('formaction') ?? ''; @post($_lib_via, {contentType: 'form'}); evt.submitter?.hasAttribute('data-scroll') && document.getElementById('lib-preview').scrollIntoView({block: 'start'})"
+{#- Every action submits the form's fields to its own URL, the albums ticked in it, as one busy group. -#}
+<form id="lib-sel" data-signals="{_sel: 0, _spares: 0}"
   data-on:change="evt.target.name == 'all' ? el.querySelectorAll('input[name=path]').forEach(c => c.checked = evt.target.checked) : (evt.target.checked || (el.querySelector('input[name=all]').checked = false)); $_sel = el.querySelector('input[name=all]').checked ? {{ total }} : el.querySelectorAll('input[name=path]:checked').length; $_spares = el.querySelector('input[name=all]').checked ? {{ spares }} : el.querySelectorAll('input[name=path][data-spare]:checked').length">
   {% include "library_filter.html" %}
   <div class="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-rule pt-1 pb-2">
@@ -13,18 +11,18 @@
   </div>
   {# One handler opens or closes any album the list shows, rows added later included, in its own row. #}
   <ul id="lib-rows" class="rows" data-on:click="evt.target.closest('a[data-album]') && !(evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey) && (evt.preventDefault(), document.getElementById(evt.target.closest('a[data-album]').dataset.slot).firstElementChild ? document.getElementById(evt.target.closest('a[data-album]').dataset.slot).querySelector('[data-close]').click() : @get(evt.target.closest('a[data-album]').dataset.album + '&' + location.search.slice(1)))">
-{{ rows|safe }}
+{{ rows }}
   </ul>
-  {{ more|safe }}
-  <div class="sticky bottom-0 z-1 mt-2 flex flex-wrap items-center gap-2 border border-rule bg-bg px-3 py-2.5 pb-[max(10px,env(safe-area-inset-bottom))]" hidden data-attr:hidden="!($_sel > 0)">
+  {{ more }}
+  <div class="compact sticky bottom-0 z-1 mt-2 flex flex-wrap items-center gap-2 border border-rule bg-bg px-3 py-2.5 pb-[max(10px,env(safe-area-inset-bottom))]" hidden data-attr:hidden="!($_sel > 0)">
     <span class="mr-auto text-ink" data-text="$_sel + ' selected'"></span>
-    <button formaction="/library/preview/refile" data-scroll data-attr:disabled="$_lib_busy" data-class:busy="$_lib_busy && $_lib_via == '/library/preview/refile'">Re-file</button>
-    <span class="combo"><input class="w-24 px-2 py-1 text-meta" form="lib-sel" name="split" data-on:keydown="evt.key == 'Enter' && (evt.preventDefault(), el.nextElementSibling.click())" placeholder="split on" aria-label="Separator to split artist credits on" title="Split each credit on this, as typed, for artists the library holds nothing else by" autocomplete="off"><button formaction="/library/preview/credit" data-scroll data-attr:disabled="$_lib_busy" data-class:busy="$_lib_busy && $_lib_via == '/library/preview/credit'">Credit artists</button></span>
-    <button formaction="/library/preview/enrich" data-scroll data-attr:disabled="$_lib_busy" data-class:busy="$_lib_busy && $_lib_via == '/library/preview/enrich'">Enrich</button>
-    <button formaction="/library/preview/reimport" data-scroll data-attr:disabled="$_lib_busy" data-class:busy="$_lib_busy && $_lib_via == '/library/preview/reimport'">Re-tag</button>
-    <button formaction="/library/edit" data-scroll data-attr:disabled="$_lib_busy" data-class:busy="$_lib_busy && $_lib_via == '/library/edit'">Edit tags</button>
-    <button formaction="/library/preview/remove-art" data-scroll data-attr:disabled="$_lib_busy" data-class:busy="$_lib_busy && $_lib_via == '/library/preview/remove-art'">Remove art</button>
-    <button formaction="/library/preview/bin" data-scroll hidden data-attr:hidden="!($_spares > 0)" data-attr:disabled="$_lib_busy" data-class:busy="$_lib_busy && $_lib_via == '/library/preview/bin'">Bin spares</button>
+    {{ kit::Button::bordered("Re-file").post("/library/preview/refile").sends("lib-sel").busy_key("lib") }}
+    {{ kit::Combo::new(kit::Input::text("split").placeholder("split on").label("Separator to split artist credits on").autocomplete("off").attr("title", "Split each credit on this, as typed, for artists the library holds nothing else by").datastar("on:keydown", "evt.key == 'Enter' && (evt.preventDefault(), el.nextElementSibling.click())"), kit::Button::bordered("Credit artists").post("/library/preview/credit").sends("lib-sel").busy_key("lib")) }}
+    {{ kit::Button::bordered("Enrich").post("/library/preview/enrich").sends("lib-sel").busy_key("lib") }}
+    {{ kit::Button::bordered("Re-tag").post("/library/preview/reimport").sends("lib-sel").busy_key("lib") }}
+    {{ kit::Button::bordered("Edit tags").post("/library/edit").sends("lib-sel").busy_key("lib") }}
+    {{ kit::Button::bordered("Remove art").post("/library/preview/remove-art").sends("lib-sel").busy_key("lib") }}
+    {{ kit::Button::bordered("Bin spares").post("/library/preview/bin").sends("lib-sel").busy_key("lib").attr("hidden", "").datastar("attr:hidden", "!($_spares > 0)") }}
   </div>
 </form>
 {% endif %}

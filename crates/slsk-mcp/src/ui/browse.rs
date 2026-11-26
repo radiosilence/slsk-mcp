@@ -26,7 +26,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use slsk_engine::slsk_proto::RawStr;
 use slsk_engine::slsk_proto::peer::Directory;
 
-use super::{UiState, failed, human, one, patch, sent};
+use super::{Draw, Fragment, UiState, failed, human, one, patch, sent};
 
 pub(super) fn routes() -> Router<UiState> {
     Router::new()
@@ -299,7 +299,7 @@ pub(super) struct FolderRow {
     go: String,
     toggle: String,
     /// Its own rows, drawn when it is expanded.
-    inner: Option<String>,
+    inner: Option<Fragment>,
 }
 
 pub(super) enum Node {
@@ -327,7 +327,7 @@ impl Nodes {
     }
 }
 
-pub(super) fn tree(p: &Place, dirs: &[Directory], at: &[u8], mine: bool) -> String {
+pub(super) fn tree(p: &Place, dirs: &[Directory], at: &[u8], mine: bool) -> Fragment {
     let (children, here) = level(dirs, at);
     let files = here.into_iter().flat_map(|d| {
         d.files.iter().map(|f| {
@@ -365,8 +365,7 @@ pub(super) fn tree(p: &Place, dirs: &[Directory], at: &[u8], mine: bool) -> Stri
         top: at == p.at.as_slice(),
         mine,
     }
-    .render()
-    .unwrap_or_default()
+    .draw()
 }
 
 struct Crumb {
@@ -392,9 +391,11 @@ struct BrowseView {
     /// The open folder holds files of its own.
     has_files: bool,
     /// The open folder's rows, drawn by [`Nodes`].
-    rows: String,
+    rows: Fragment,
     info: Option<Info>,
     error: Option<String>,
+    /// The error is a note that the peer's answer is on its way.
+    asking: bool,
 }
 
 fn quality(f: &slsk_engine::slsk_proto::peer::FileEntry) -> String {
@@ -411,7 +412,7 @@ fn quality(f: &slsk_engine::slsk_proto::peer::FileEntry) -> String {
     }
 }
 
-fn render(p: &Place, dirs: &[Directory], info: Option<Info>, mine: bool, banned: bool) -> String {
+fn render(p: &Place, dirs: &[Directory], info: Option<Info>, mine: bool, banned: bool) -> Fragment {
     let mut crumbs = vec![Crumb {
         name: "top".into(),
         href: p.go(b""),
@@ -441,12 +442,12 @@ fn render(p: &Place, dirs: &[Directory], info: Option<Info>, mine: bool, banned:
         rows: tree(p, dirs, &p.at, mine),
         info,
         error: None,
+        asking: false,
     }
-    .render()
-    .unwrap_or_default()
+    .draw()
 }
 
-fn note(username: &str, error: String) -> String {
+fn note(username: &str, error: String, asking: bool) -> Fragment {
     BrowseView {
         username: username.to_string(),
         mine: false,
@@ -458,12 +459,12 @@ fn note(username: &str, error: String) -> String {
         here_key: String::new(),
         tree_files: 0,
         has_files: false,
-        rows: String::new(),
+        rows: Fragment::new(),
         info: None,
         error: Some(error),
+        asking,
     }
-    .render()
-    .unwrap_or_default()
+    .draw()
 }
 
 #[derive(Template)]
@@ -476,13 +477,12 @@ struct Page<'a> {
 
 /// The page around a user's shares, which it fetches once drawn: the peer
 /// takes its time to answer.
-pub(super) fn page(s: &UiState, username: &str) -> String {
+pub(super) fn page(s: &UiState, username: &str) -> Fragment {
     Page {
         username: username.trim(),
         me: s.app.session.engine().map(|e| e.username()),
     }
-    .render()
-    .unwrap_or_default()
+    .draw()
 }
 
 /// A tree's place as the address names it: see [`Place`]. `fresh` asks the
@@ -502,41 +502,44 @@ pub(super) struct BrowseQuery {
 /// Open a user's shares at their top. The username arrives in a form
 /// field, never in the URL or an expression.
 async fn browse(State(s): State<UiState>, Form(q): Form<BrowseQuery>) -> Response {
-    browse_at(s, &q)
+    browse_at(s, &q, true)
 }
 
 /// The same, from the address: `/browse?username=…&key=…&open=…`, which
-/// `browse` reports as the place it drew.
+/// `browse` reports as the place it drew. Read by a link that loads in place, which moves the address itself, or by the
+/// page for its own address, so it reports no place.
 async fn browse_get(State(s): State<UiState>, Query(q): Query<BrowseQuery>) -> Response {
-    browse_at(s, &q)
+    browse_at(s, &q, false)
 }
 
-fn browse_at(s: UiState, q: &BrowseQuery) -> Response {
+/// The shares `q` names; `moves` reports the place drawn, for the address bar.
+fn browse_at(s: UiState, q: &BrowseQuery, moves: bool) -> Response {
     let fresh = q.fresh.is_some();
     let p = match Place::from_query(q) {
         Ok(p) => p,
         Err(e) => return failed(&e),
     };
-    let here = super::place(&p.href());
+    let here = moves.then(|| super::place(&p.href()));
     let Some(engine) = s.app.session.engine().cloned() else {
         return failed(&anyhow::anyhow!("Sign in to Soulseek first."));
     };
     let cache = s.browsed.clone();
     if engine.username() == p.username {
         let listing = cache.own(&engine, fresh);
-        return askama_datastar::events(vec![
-            here,
+        return askama_datastar::events(here.into_iter().chain([
             patch(&render(&p, &listing, None, true, false)),
             kit::Flash::region().patch().into(),
-        ]);
+        ]));
     }
     askama_datastar::stream(async_stream::stream! {
         let username = p.username.clone();
-        yield here;
+        if let Some(here) = here {
+            yield here;
+        }
         let listing = match cache.get(&username).filter(|_| !fresh) {
             Some(l) => l,
             None => {
-                yield patch(&note(&username, format!("Asking {username} for their shares…")));
+                yield patch(&note(&username, format!("Asking {username} for their shares…"), true));
                 let info = tokio::time::timeout(Duration::from_secs(20), engine.user_info(&username));
                 let (dirs, info) = tokio::join!(engine.browse(&username), info);
                 match dirs {
@@ -553,7 +556,7 @@ fn browse_at(s: UiState, q: &BrowseQuery) -> Response {
                         return;
                     }
                     Err(e) => {
-                        yield patch(&note(&username, format!("{username} did not send their shares: {e}")));
+                        yield patch(&note(&username, format!("{username} did not send their shares: {e}"), false));
                         return;
                     }
                 }
@@ -617,7 +620,7 @@ async fn download_files(
         .unwrap_or_default()
         .to_string();
     match s.app.jobs.from_files(username, files, title).await {
-        Ok(job) => one(kit::Flash::ok(format!("Downloading {}", job.title)).to_string()),
+        Ok(job) => one(kit::Flash::ok(format!("Downloading {}", job.title)).html()),
         Err(e) => failed(&e),
     }
 }

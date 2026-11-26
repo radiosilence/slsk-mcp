@@ -1,6 +1,6 @@
 <div id="triage">
   <div class="mt-2.5 flex flex-wrap items-center gap-[18px]">
-    {% for d in [7, 30, 90] %}<a class="py-1 text-control {% if *d == days %}text-ink underline decoration-brand underline-offset-[5px]{% else %}text-muted hover:text-ink hover:no-underline{% endif %}" href="/triage?days={{ d }}" data-indicator="_tri_{{ d }}" data-class:busy="$_tri_{{ d }}" data-on:click="{{ crate::ui::follow("$_tri_" ~ d, "@get(el.getAttribute('href'))") }}">{{ d }} days</a>{% endfor %}
+    {% for d in [7, 30, 90] %}{% let tab = kit::Link::new("{} days"|format(d), "/triage?days={}"|format(d)).in_place().busy_key("triage").current(*d == days) %}{% if *d == days %}{{ tab.class("py-1 text-control text-ink underline decoration-brand underline-offset-[5px]") }}{% else %}{{ tab.class("py-1 text-control text-muted hover:text-ink hover:no-underline") }}{% endif %}{% endfor %}
   </div>
 {% match error %}{% when Some with (e) %}{{ kit::Notice::bad(e).class("wrap-anywhere") }}{% when None %}
   {% if causes.is_empty() %}{{ kit::Empty::new("Everything in the last {} days landed cleanly."|format(days)) }}{% endif %}

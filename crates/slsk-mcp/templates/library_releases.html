@@ -1,7 +1,7 @@
 {% let form = kit::Form::post("/library/preview/reimport").id("{}-retag"|format(slot)) %}
 <form {{ form.attrs() }} class="my-2 border-l-2 border-rule px-3 py-2.5">
-  <input type="hidden" name="path" value="{{ path }}">
-  <input type="hidden" name="slot" value="{{ slot }}">
+  {{ kit::Input::hidden("path", path) }}
+  {{ kit::Input::hidden("slot", slot) }}
   {% include "library_filter.html" %}
   {% if let Some(e) = error %}{{ kit::Notice::bad(e).class("wrap-anywhere") }}{% endif %}
   {% if candidates.is_empty() %}<p class="text-meta text-muted">{% if discogs %}Neither MusicBrainz nor Discogs has{% else %}MusicBrainz has{% endif %} nothing that fits these files. Paste a release from its page.</p>{% else %}

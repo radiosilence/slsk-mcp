@@ -7,8 +7,8 @@
     {{ kit::Select::new("show").label("Which albums").option("", "every album").option("dups", "held more than once").option("formats", "in more than one format").option("moves", "not where the rules file them").bind("_libshow").datastar("on:change", "el.form.requestSubmit()").class("flex-auto") }}
     {{ find.submit(kit::Button::primary("Find").class("flex-auto")) }}
   </form>
-  {{ run|safe }}
+  {{ run }}
   <div id="lib-preview"></div>
   {# Reading the library takes a moment, so the list follows the page. #}
-  <div id="library" data-init="@get(location.pathname + location.search)"><p class="text-meta text-muted">Reading the library…</p></div>
+  <div id="library" data-init="@get(location.pathname + location.search)"><p class="text-meta text-muted">{{ kit::Spinner::new() }} Reading the library…</p></div>
 </div>

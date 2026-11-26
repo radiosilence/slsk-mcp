@@ -9,7 +9,7 @@ use axum::routing::{get, post};
 use koan_kit_web as kit;
 use uuid::Uuid;
 
-use super::{UiState, failed, one, patch, signals};
+use super::{Draw, Fragment, UiState, failed, one, patch, signals};
 use crate::App;
 use crate::social::Wish;
 
@@ -52,7 +52,7 @@ impl WishlistView {
     }
 }
 
-pub(super) async fn html(app: &App) -> String {
+pub(super) async fn html(app: &App) -> Fragment {
     let view = match app.social.wishes().await {
         Ok(wishes) => {
             let mut rows = Vec::with_capacity(wishes.len());
@@ -86,21 +86,20 @@ pub(super) async fn html(app: &App) -> String {
             next: None,
         },
     };
-    view.render().unwrap_or_default()
+    view.draw()
 }
 
 #[derive(Template)]
 #[template(path = "pages/wishlist.html")]
 struct Page {
-    list: String,
+    list: Fragment,
 }
 
-pub(super) async fn page(app: &App) -> String {
+pub(super) async fn page(app: &App) -> Fragment {
     Page {
         list: html(app).await,
     }
-    .render()
-    .unwrap_or_default()
+    .draw()
 }
 
 async fn view(State(s): State<UiState>) -> Response {
@@ -123,11 +122,10 @@ async fn add(State(s): State<UiState>, axum::Form(f): axum::Form<AddForm>) -> Re
     }
     match s.app.social.add_wish(q, f.lossless, f.grab).await {
         Ok(_) => askama_datastar::events(vec![
-            patch(&format!(
-                "{}\n{}",
+            patch(&Fragment::from_iter([
                 html(&s.app).await,
-                kit::Flash::ok(format!("Wished for {q}"))
-            )),
+                kit::Flash::ok(format!("Wished for {q}")).html(),
+            ])),
             signals(r#"{"_wishq":""}"#),
         ]),
         Err(e) => failed(&e),
@@ -136,7 +134,10 @@ async fn add(State(s): State<UiState>, axum::Form(f): axum::Form<AddForm>) -> Re
 
 async fn remove(State(s): State<UiState>, Path(id): Path<Uuid>) -> Response {
     match s.app.social.remove_wish(id).await {
-        Ok(()) => one(format!("{}\n{}", html(&s.app).await, kit::Flash::region())),
+        Ok(()) => one(Fragment::from_iter([
+            html(&s.app).await,
+            kit::Flash::region().html(),
+        ])),
         Err(e) => failed(&e),
     }
 }

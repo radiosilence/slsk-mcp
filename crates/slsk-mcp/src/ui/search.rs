@@ -26,7 +26,7 @@ use slsk_engine::slsk_proto::server::{FromServer, ToServer, UserStatus};
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
-use super::{Shown, UiState, browse, escape, failed, human, one, patch, place_url};
+use super::{Draw, Fragment, Shown, UiState, browse, failed, human, one, patch, place_url};
 use crate::App;
 use crate::db::{self, SearchTab};
 use crate::folders::{Filter, Folder};
@@ -177,13 +177,13 @@ struct SearchPage<'a> {
     q: &'a str,
     lossless: bool,
     tab: Option<&'a SearchTab>,
-    tabs: String,
+    tabs: Fragment,
     /// The tab's results, when its search has finished; a running one is
     /// fetched once the page is drawn.
-    results: Option<String>,
+    results: Option<Fragment>,
 }
 
-pub(super) async fn page(app: &App, tab: Option<&SearchTab>, view: &SearchQuery) -> String {
+pub(super) async fn page(app: &App, tab: Option<&SearchTab>, view: &SearchQuery) -> Fragment {
     let results = match tab {
         Some(t) if t.searched_at.is_some() => Some(kept(app, t, shown(view)).await),
         _ => None,
@@ -195,8 +195,7 @@ pub(super) async fn page(app: &App, tab: Option<&SearchTab>, view: &SearchQuery)
         tabs: tabs_html(app, tab.map(|t| t.id)).await,
         results,
     }
-    .render()
-    .unwrap_or_default()
+    .draw()
 }
 
 /// How many folders the address asks to show.
@@ -218,7 +217,7 @@ fn next(tab: &SearchTab, shown: usize) -> String {
 }
 
 /// A finished tab's results, from what it kept.
-async fn kept(app: &App, tab: &SearchTab, shown: usize) -> String {
+async fn kept(app: &App, tab: &SearchTab, shown: usize) -> Fragment {
     let mut folders = match db::search_tab_folders(&app.db, tab.id).await {
         Ok(f) => f,
         Err(e) => {
@@ -244,8 +243,7 @@ async fn kept(app: &App, tab: &SearchTab, shown: usize) -> String {
         found: tab.found as usize,
         error: tab.error.clone(),
     }
-    .render()
-    .unwrap_or_default()
+    .draw()
 }
 
 #[derive(Template)]
@@ -259,20 +257,24 @@ impl TabsView {
     fn is_active(&self, t: &SearchTab) -> bool {
         self.active == Some(t.id)
     }
-    fn stale(&self, t: &SearchTab) -> bool {
-        stale(t)
+    /// A tab's tone: red when its search failed, turning while it runs, muted once stale.
+    fn tone(&self, t: &SearchTab) -> &'static str {
+        if t.error.is_some() {
+            "text-bad"
+        } else if t.searched_at.is_none() {
+            "text-ink busy"
+        } else if stale(t) {
+            "text-muted italic"
+        } else {
+            "text-ink"
+        }
     }
-    /// A tab's click handler: its results replace the shown ones in place,
-    /// through the one feed, which drops the request it had open.
-    fn switch(&self, t: &SearchTab) -> String {
-        super::follow(
-            "",
-            format!(
-                "$_url = '/search?tab={}', document.title = el.textContent + ' · slsk', \
-                 document.getElementById('search-feed').dispatchEvent(new Event('more'))",
-                t.id
-            ),
-        )
+    fn pin_label(&self, t: &SearchTab) -> String {
+        if t.pinned {
+            format!("Unpin {}", t.query)
+        } else {
+            format!("Pin {}", t.query)
+        }
     }
     fn about(&self, t: &SearchTab) -> String {
         let quality = if t.lossless {
@@ -297,12 +299,12 @@ impl TabsView {
 }
 
 /// The tab strip, with `active` the tab the page shows.
-pub(super) async fn tabs_html(app: &App, active: Option<Uuid>) -> String {
+pub(super) async fn tabs_html(app: &App, active: Option<Uuid>) -> Fragment {
     match db::search_tabs(&app.db).await {
-        Ok(tabs) => TabsView { tabs, active }.render().unwrap_or_default(),
+        Ok(tabs) => TabsView { tabs, active }.draw(),
         Err(e) => {
             tracing::warn!(error = %e, "could not list search tabs");
-            String::new()
+            Fragment::new()
         }
     }
 }
@@ -385,9 +387,12 @@ impl ResultsView {
 /// comes here too, so the strip, the `tab` signal and the address follow.
 pub(super) async fn results(State(s): State<UiState>, Query(view): Query<SearchQuery>) -> Response {
     let Some(tab) = active(&s.app, &view).await else {
-        return one(
-            r#"<div id="results" class="text-meta text-muted">This search is closed.</div>"#.into(),
-        );
+        return one(super::line(
+            "div",
+            "results",
+            false,
+            "This search is closed.",
+        ));
     };
     let shown = shown(&view);
     let url = place_url(
@@ -415,10 +420,12 @@ pub(super) async fn results(State(s): State<UiState>, Query(view): Query<SearchQ
         return askama_datastar::events(events);
     }
     let Some(engine) = s.app.session.engine().cloned() else {
-        return one(
-            r#"<div id="results" class="text-meta text-muted">Sign in to Soulseek first.</div>"#
-                .into(),
-        );
+        return one(super::line(
+            "div",
+            "results",
+            false,
+            "Sign in to Soulseek first.",
+        ));
     };
     // A search lost to a restart starts again here; one running is joined.
     run(s.app.clone(), tab.id, tab.query.clone(), tab.lossless);
@@ -449,7 +456,7 @@ pub(super) async fn results(State(s): State<UiState>, Query(view): Query<SearchQ
                 age: done.then(|| ago(chrono::Utc::now())),
                 stale: false,
             };
-            yield patch(&view.render().unwrap_or_default());
+            yield patch(&view.draw());
             if done || heard.changed().await.is_err() {
                 break;
             }
@@ -520,7 +527,7 @@ async fn peers(
                 UserStatus::Offline => "offline",
             };
             for id in ids {
-                yield patch(&super::state(word, word).id(format!("peer-{id}")).to_string());
+                yield patch(&super::state(word, word).id(format!("peer-{id}")).html());
             }
         }
     };
@@ -536,10 +543,7 @@ fn go(url: &str) -> Response {
 }
 
 fn going(url: &str) -> axum::response::sse::Event {
-    patch(&format!(
-        r#"<div id="flash" data-init="location.assign('{}')"></div>"#,
-        escape(url)
-    ))
+    kit::Confirm::go(url).into()
 }
 
 /// The strip redrawn, or the page moved when the tab it showed was closed.
@@ -555,7 +559,7 @@ async fn redrawn(app: &App, shown: &Shown) -> axum::response::sse::Event {
             Some(t) => format!("/search?tab={}", t.id),
             None => "/search".to_string(),
         }),
-        _ => patch(&TabsView { tabs, active }.render().unwrap_or_default()),
+        _ => patch(&TabsView { tabs, active }.draw()),
     }
 }
 

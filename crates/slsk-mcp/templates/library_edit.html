@@ -1,38 +1,32 @@
 {% let form = kit::Form::post("/library/preview/edit").id("{}-edit"|format(slot)) %}
 <form {{ form.attrs() }} class="my-2 border-l-2 border-rule px-3 py-2.5">
-  <input type="hidden" name="path" value="{{ path }}">
-  <input type="hidden" name="slot" value="{{ slot }}">
+  {{ kit::Input::hidden("path", path) }}
+  {{ kit::Input::hidden("slot", slot) }}
   {% include "library_filter.html" %}
   <p class="text-meta text-muted">Change what needs changing; the preview lists each field as it is and as it would be. A field the files disagree on is left alone unless typed. The release type is MusicBrainz's: one primary type, and any of the secondary types beside it. Changing an artist clears that file's list of artists and their MusicBrainz ids; Credit artists splits it again.</p>
   <div class="my-2 grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2">
   {% for (field, label) in self.fields() %}
     {% if *field == "albumtypes" %}
-    <div class="field col-span-full">
-      <label for="{{ slot }}-type"><span>{{ label }}</span></label>
+    {% filter kit::wrap(kit::Field::custom(label).class("col-span-full")) %}
       <div class="flex flex-wrap items-center gap-2">
-        <select id="{{ slot }}-type" name="type-primary" data-on:change="el.closest('.field').querySelectorAll('[data-primary]').forEach(c => c.checked = false)">
-        {% if self.varies(field) %}<option value="keep" selected>(differs between files)</option>{% endif %}
-          <option value="none"{% if !self.varies(field) && self.primary().is_none() %} selected{% endif %}>none</option>
-        {% for p in self.primaries() %}
-          <option value="{{ p }}"{% if !self.varies(field) && self.primary().as_deref() == Some(**p) %} selected{% endif %}>{{ p }}</option>
-        {% endfor %}
-        </select>
+        {{ self.primary_select() }}
         {% include "library_types.html" %}
       </div>
-    </div>
+    {% endfilter %}
     {% else %}
     {{ kit::Field::text("a-{}"|format(field), label).value(self.now(field)).placeholder(self.differs(field)).autocomplete("off").id("{}-a-{}"|format(slot, field)) }}
     {% endif %}
   {% endfor %}
   </div>
-  <table class="dense my-2">
-    <tr><th>disc</th><th>track</th><th>title</th><th>artist</th></tr>
+  <table class="dense compact my-2">
+    <tr><th class="w-[4.5em]">disc</th><th class="w-[4.5em]">track</th><th>title</th><th>artist</th></tr>
   {% for t in tracks %}
-    <tr class="*:first:w-[4.5em] *:nth-2:w-[4.5em] [&_input:not([type=hidden])]:w-full [&_input:not([type=hidden])]:px-[7px] [&_input:not([type=hidden])]:py-[5px] [&_input:not([type=hidden])]:text-body">
-      <td><input type="hidden" name="t{{ loop.index0 }}-file" value="{{ self.file(t) }}"><input name="t{{ loop.index0 }}-disc" value="{{ self.value(t, "disc") }}" inputmode="numeric" aria-label="Disc"></td>
-      <td><input name="t{{ loop.index0 }}-track" value="{{ self.value(t, "track") }}" inputmode="numeric" aria-label="Track"></td>
-      <td><input name="t{{ loop.index0 }}-title" value="{{ self.value(t, "title") }}" aria-label="Title"></td>
-      <td><input name="t{{ loop.index0 }}-artist" value="{{ self.value(t, "artist") }}" aria-label="Artist"></td>
+    {% let i = loop.index0 %}
+    <tr>
+      <td>{{ kit::Input::hidden("t{}-file"|format(i), self.file(t)) }}{{ kit::Input::text("t{}-disc"|format(i)).value(self.value(t, "disc")).attr("inputmode", "numeric").label("Disc").class("w-full") }}</td>
+      <td>{{ kit::Input::text("t{}-track"|format(i)).value(self.value(t, "track")).attr("inputmode", "numeric").label("Track").class("w-full") }}</td>
+      <td>{{ kit::Input::text("t{}-title"|format(i)).value(self.value(t, "title")).label("Title").class("w-full") }}</td>
+      <td>{{ kit::Input::text("t{}-artist"|format(i)).value(self.value(t, "artist")).label("Artist").class("w-full") }}</td>
     </tr>
   {% endfor %}
   </table>

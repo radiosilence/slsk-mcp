@@ -1,12 +1,12 @@
 <div class="grid min-w-0 gap-3 *:min-w-0" data-on-interval__duration.4s="@get('/chat?poll=true', {contentType: 'form', selector: '#thread-form'})">
-  {{ thread|safe }}
-  {{ side|safe }}
-  {#- Two actions on one form, each named by its button's `formaction`, which kit::Form does not take: drawn by hand. -#}
-  <form id="chat-who" class="flex flex-wrap items-center gap-2" data-signals="{_who_via: ''}" data-indicator="_who_busy" data-on:submit="$_who_via = evt.submitter?.getAttribute('formaction') ?? '/chat/open'; @post($_who_via, {contentType: 'form'})">
+  {{ thread }}
+  {{ side }}
+  {#- Two actions on one form, each sending its fields to its own URL. -#}
+  <form id="chat-who" class="flex flex-wrap items-center gap-2">
     {{ kit::Input::text("username").label("Username").placeholder("Username").autocomplete("off").attr("autocapitalize", "off").required().bind("_buddy").class("basis-full") }}
     {{ kit::Input::text("note").label("Note for buddies").placeholder("Note (for buddies)").autocomplete("off").bind("_buddynote").class("basis-full") }}
-    <button class="primary flex-auto" formaction="/chat/open" data-attr:disabled="$_who_busy" data-class:busy="$_who_busy && $_who_via == '/chat/open'">Message</button>
-    <button class="flex-auto" formaction="/chat/buddy/add" data-attr:disabled="$_who_busy" data-class:busy="$_who_busy && $_who_via == '/chat/buddy/add'">Add buddy</button>
+    {{ kit::Button::primary("Message").post("/chat/open").sends("chat-who").busy_key("who").class("flex-auto") }}
+    {{ kit::Button::bordered("Add buddy").post("/chat/buddy/add").sends("chat-who").busy_key("who").class("flex-auto") }}
   </form>
   {% filter kit::wrap(kit::Disclosure::new("public rooms")) %}
     {% let join = kit::Form::post("/chat/join").id("room-join") %}
@@ -14,6 +14,6 @@
       {{ kit::Input::text("room").label("Room name").placeholder("Room name").autocomplete("off").attr("autocapitalize", "off").required().datastar("on:input__debounce.250ms", "@get('/chat/rooms?q=' + encodeURIComponent(el.value))").class("basis-full") }}
       {{ join.submit(kit::Button::primary("Join").class("flex-auto")) }}
     </form>
-    {{ rooms|safe }}
+    {{ rooms }}
   {% endfilter %}
 </div>

@@ -8,6 +8,6 @@
   <div id="browse"><p class="text-meta text-muted">Browse someone's shares: type their name, or tap a name in search results, uploads or chat.{% if let Some(me) = me %} Or browse <a class="wrap-anywhere" href="{{ crate::ui::browse_href(me, "") }}">your own</a>.{% endif %}</p></div>
   {% else %}
   {# The peer takes a while to answer, so their shares follow the page. #}
-  <div id="browse" data-init="@get(location.pathname + location.search)"><p class="text-meta text-muted">Asking {{ username }} for their shares…</p></div>
+  <div id="browse" data-init="@get(location.pathname + location.search)"><p class="text-meta text-muted">{{ kit::Spinner::new() }} Asking {{ username }} for their shares…</p></div>
   {% endif %}
 </div>
