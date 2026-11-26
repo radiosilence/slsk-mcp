@@ -3,8 +3,9 @@
   <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5"><strong class="min-w-0 flex-auto wrap-anywhere">{{ action.name() }}: {{ shown }} album{% if shown != 1 %}s{% endif %}</strong>{{ kit::Status::wait("preview") }}</div>
   <p class="my-0.5 text-meta text-muted">{{ action.about() }} Nothing has changed yet.</p>
   {% if selected > shown %}{{ kit::Notice::warn("Only the first {} of the {} selected are worked out here, and only those are applied. Apply these, then preview the rest."|format(shown, selected)).class("my-0.5") }}{% endif %}
-  {#- Says how many are ticked beside its apply, and refuses to send none. -#}
-  <form id="{{ slot }}-apply" data-on:change="(n => (document.getElementById(el.id + '-count').textContent = n + (n == 1 ? ' album' : ' albums') + ' ticked', el.querySelector('input[name=path]')?.setCustomValidity(n ? '' : 'Tick an album to apply this to.')))(el.querySelectorAll('input[name=path]:checked').length)">
+  {#- Refuses to send none, and says how many are ticked beside its apply once that is drawn: none is while the rows
+      stream in, or when nothing applies. -#}
+  <form id="{{ slot }}-apply" data-on:change="(n => (el.querySelector('input[name=path]')?.setCustomValidity(n ? '' : 'Tick an album to apply this to.'), (c => c && (c.textContent = n + (n == 1 ? ' album' : ' albums') + ' ticked'))(document.getElementById(el.id + '-count'))))(el.querySelectorAll('input[name=path]:checked').length)">
     {% include "library_filter.html" %}
     {{ kit::Input::hidden("slot", slot) }}
     {% if all %}{{ kit::Input::hidden("all", "1") }}{% endif %}

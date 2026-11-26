@@ -26,7 +26,7 @@ use slsk_engine::slsk_proto::server::{FromServer, ToServer, UserStatus};
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
-use super::{Draw, Fragment, Shown, UiState, browse, escape, failed, human, one, patch, place_url};
+use super::{Draw, Fragment, Shown, UiState, browse, failed, human, one, patch, place_url};
 use crate::App;
 use crate::db::{self, SearchTab};
 use crate::folders::{Filter, Folder};
@@ -257,15 +257,16 @@ impl TabsView {
     fn is_active(&self, t: &SearchTab) -> bool {
         self.active == Some(t.id)
     }
-    /// A tab's words: red when its search failed, muted once stale, and turning while it runs.
-    fn look(&self, t: &SearchTab) -> &'static str {
-        match (t.error.is_some(), stale(t), t.searched_at.is_none()) {
-            (true, _, _) => "max-w-[18em] min-w-0 truncate ps-2.5 pe-1 text-meta text-bad",
-            (false, _, true) => "max-w-[18em] min-w-0 truncate ps-2.5 pe-1 text-meta text-ink busy",
-            (false, true, false) => {
-                "max-w-[18em] min-w-0 truncate ps-2.5 pe-1 text-meta text-muted italic"
-            }
-            (false, false, false) => "max-w-[18em] min-w-0 truncate ps-2.5 pe-1 text-meta text-ink",
+    /// A tab's tone: red when its search failed, turning while it runs, muted once stale.
+    fn tone(&self, t: &SearchTab) -> &'static str {
+        if t.error.is_some() {
+            "text-bad"
+        } else if t.searched_at.is_none() {
+            "text-ink busy"
+        } else if stale(t) {
+            "text-muted italic"
+        } else {
+            "text-ink"
         }
     }
     fn pin_label(&self, t: &SearchTab) -> String {
@@ -386,9 +387,12 @@ impl ResultsView {
 /// comes here too, so the strip, the `tab` signal and the address follow.
 pub(super) async fn results(State(s): State<UiState>, Query(view): Query<SearchQuery>) -> Response {
     let Some(tab) = active(&s.app, &view).await else {
-        return one(
-            r#"<div id="results" class="text-meta text-muted">This search is closed.</div>"#,
-        );
+        return one(super::line(
+            "div",
+            "results",
+            false,
+            "This search is closed.",
+        ));
     };
     let shown = shown(&view);
     let url = place_url(
@@ -416,9 +420,12 @@ pub(super) async fn results(State(s): State<UiState>, Query(view): Query<SearchQ
         return askama_datastar::events(events);
     }
     let Some(engine) = s.app.session.engine().cloned() else {
-        return one(
-            r#"<div id="results" class="text-meta text-muted">Sign in to Soulseek first.</div>"#,
-        );
+        return one(super::line(
+            "div",
+            "results",
+            false,
+            "Sign in to Soulseek first.",
+        ));
     };
     // A search lost to a restart starts again here; one running is joined.
     run(s.app.clone(), tab.id, tab.query.clone(), tab.lossless);
@@ -520,7 +527,7 @@ async fn peers(
                 UserStatus::Offline => "offline",
             };
             for id in ids {
-                yield patch(&super::state(word, word).id(format!("peer-{id}")).to_string());
+                yield patch(&super::state(word, word).id(format!("peer-{id}")).html());
             }
         }
     };
@@ -536,10 +543,7 @@ fn go(url: &str) -> Response {
 }
 
 fn going(url: &str) -> axum::response::sse::Event {
-    patch(&format!(
-        r#"<div id="flash" data-init="location.assign('{}')"></div>"#,
-        escape(url)
-    ))
+    kit::Confirm::go(url).into()
 }
 
 /// The strip redrawn, or the page moved when the tab it showed was closed.

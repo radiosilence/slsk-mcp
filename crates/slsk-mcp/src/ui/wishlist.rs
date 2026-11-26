@@ -122,11 +122,10 @@ async fn add(State(s): State<UiState>, axum::Form(f): axum::Form<AddForm>) -> Re
     }
     match s.app.social.add_wish(q, f.lossless, f.grab).await {
         Ok(_) => askama_datastar::events(vec![
-            patch(&format!(
-                "{}\n{}",
+            patch(&Fragment::from_iter([
                 html(&s.app).await,
-                kit::Flash::ok(format!("Wished for {q}"))
-            )),
+                kit::Flash::ok(format!("Wished for {q}")).html(),
+            ])),
             signals(r#"{"_wishq":""}"#),
         ]),
         Err(e) => failed(&e),
@@ -135,7 +134,10 @@ async fn add(State(s): State<UiState>, axum::Form(f): axum::Form<AddForm>) -> Re
 
 async fn remove(State(s): State<UiState>, Path(id): Path<Uuid>) -> Response {
     match s.app.social.remove_wish(id).await {
-        Ok(()) => one(format!("{}\n{}", html(&s.app).await, kit::Flash::region())),
+        Ok(()) => one(Fragment::from_iter([
+            html(&s.app).await,
+            kit::Flash::region().html(),
+        ])),
         Err(e) => failed(&e),
     }
 }

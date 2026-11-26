@@ -502,37 +502,40 @@ pub(super) struct BrowseQuery {
 /// Open a user's shares at their top. The username arrives in a form
 /// field, never in the URL or an expression.
 async fn browse(State(s): State<UiState>, Form(q): Form<BrowseQuery>) -> Response {
-    browse_at(s, &q)
+    browse_at(s, &q, true)
 }
 
 /// The same, from the address: `/browse?username=…&key=…&open=…`, which
-/// `browse` reports as the place it drew.
+/// `browse` reports as the place it drew. Read by a link that loads in place, which moves the address itself, or by the
+/// page for its own address, so it reports no place.
 async fn browse_get(State(s): State<UiState>, Query(q): Query<BrowseQuery>) -> Response {
-    browse_at(s, &q)
+    browse_at(s, &q, false)
 }
 
-fn browse_at(s: UiState, q: &BrowseQuery) -> Response {
+/// The shares `q` names; `moves` reports the place drawn, for the address bar.
+fn browse_at(s: UiState, q: &BrowseQuery, moves: bool) -> Response {
     let fresh = q.fresh.is_some();
     let p = match Place::from_query(q) {
         Ok(p) => p,
         Err(e) => return failed(&e),
     };
-    let here = super::place(&p.href());
+    let here = moves.then(|| super::place(&p.href()));
     let Some(engine) = s.app.session.engine().cloned() else {
         return failed(&anyhow::anyhow!("Sign in to Soulseek first."));
     };
     let cache = s.browsed.clone();
     if engine.username() == p.username {
         let listing = cache.own(&engine, fresh);
-        return askama_datastar::events(vec![
-            here,
+        return askama_datastar::events(here.into_iter().chain([
             patch(&render(&p, &listing, None, true, false)),
             kit::Flash::region().patch().into(),
-        ]);
+        ]));
     }
     askama_datastar::stream(async_stream::stream! {
         let username = p.username.clone();
-        yield here;
+        if let Some(here) = here {
+            yield here;
+        }
         let listing = match cache.get(&username).filter(|_| !fresh) {
             Some(l) => l,
             None => {
@@ -617,7 +620,7 @@ async fn download_files(
         .unwrap_or_default()
         .to_string();
     match s.app.jobs.from_files(username, files, title).await {
-        Ok(job) => one(kit::Flash::ok(format!("Downloading {}", job.title)).to_string()),
+        Ok(job) => one(kit::Flash::ok(format!("Downloading {}", job.title)).html()),
         Err(e) => failed(&e),
     }
 }

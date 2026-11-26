@@ -77,19 +77,19 @@ async fn set_ban(s: &UiState, user: &str, banned: bool) -> Response {
     }
     match crate::graphql::set_ban(&s.app, user, banned).await {
         Ok(_) => askama_datastar::events(vec![
-            patch(&format!(
-                "{}\n{}",
+            patch(&Fragment::from_iter([
                 bans_html(&s.app).await,
                 kit::Flash::ok(&if banned {
                     format!("Banned {user}")
                 } else {
                     format!("Unbanned {user}")
                 })
-            )),
-            signals(r#"{"banuser":""}"#),
+                .html(),
+            ])),
+            signals(r#"{"_banuser":""}"#),
             kit::Confirm::close().into(),
         ]),
-        Err(e) => one(kit::Flash::bad(&e.message).to_string()),
+        Err(e) => one(kit::Flash::bad(&e.message).html()),
     }
 }
 
@@ -185,11 +185,10 @@ async fn settings(State(s): State<UiState>) -> Response {
 }
 
 async fn saved(app: &App, msg: &str) -> Response {
-    one(format!(
-        "{}\n{}",
+    one(Fragment::from_iter([
         settings_html(app).await,
-        kit::Flash::ok(msg)
-    ))
+        kit::Flash::ok(msg).html(),
+    ]))
 }
 
 /// A whole number from a form field, or a message saying which field.
@@ -238,11 +237,11 @@ async fn rescan(State(s): State<UiState>) -> Response {
         Ok(e) => {
             let e = e.clone();
             tokio::spawn(async move { e.rescan().await });
-            one(format!(
-                "{}\n{}",
+            one(Fragment::from_iter([
                 status_html(&s.app).await,
                 kit::Flash::ok("Rescanning shares; the count above updates when it finishes")
-            ))
+                    .html(),
+            ]))
         }
         Err(e) => failed(&e),
     }
@@ -262,11 +261,10 @@ async fn interest(State(s): State<UiState>, RawQuery(query): RawQuery, body: Byt
     };
     match s.app.social.set_interest(item, liked).await {
         Ok(()) => askama_datastar::events(vec![
-            patch(&format!(
-                "{}\n{}",
+            patch(&Fragment::from_iter([
                 settings_html(&s.app).await,
-                kit::Flash::region()
-            )),
+                kit::Flash::region().html(),
+            ])),
             signals(r#"{"_interest":""}"#),
         ]),
         Err(e) => failed(&e),
@@ -334,10 +332,8 @@ pub(super) async fn triage_page(app: &App, q: &Days) -> Fragment {
 
 async fn triage(State(s): State<UiState>, Query(q): Query<Days>) -> Response {
     let days = q.days.unwrap_or(7).clamp(1, 365);
-    askama_datastar::events(vec![
-        patch(&triage_html(&s.app, Some(days)).await),
-        super::place(&super::place_url("/triage", &[("days", &days.to_string())])),
-    ])
+    // Its periods load in place, moving the address themselves.
+    one(triage_html(&s.app, Some(days)).await)
 }
 
 /// The newest events drawn for each cause; the count covers the rest.

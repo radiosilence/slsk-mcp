@@ -1121,3 +1121,23 @@ mod profile {
 fn the_stylesheet_names_the_font_the_kit_serves() {
     assert!(include_str!("../../assets/app.css").contains(&kit::font::url("app.css")));
 }
+
+/// A fragment drawn twice from the same state is not sent again, though the kit names its buttons' own busy signals
+/// afresh each time.
+#[test]
+fn a_redraw_from_the_same_state_compares_equal() {
+    let draw = |url: &'static str| {
+        kit::Button::bordered("Retry")
+            .busy_key("job")
+            .post(url)
+            .to_string()
+    };
+    assert_eq!(
+        unnamed(&draw("/jobs/1/retry")),
+        unnamed(&draw("/jobs/1/retry"))
+    );
+    assert_ne!(
+        unnamed(&draw("/jobs/1/retry")),
+        unnamed(&draw("/jobs/2/retry"))
+    );
+}

@@ -4,9 +4,9 @@
       closes it. -#}
   <div class="compact flex max-w-full min-w-0 items-center border {% if self.is_active(t) %}border-brand bg-surface{% else %}border-rule{% endif %}" title="{{ self.about(t) }}"
     data-close="/search/tabs/{{ t.id }}/close" data-on:auxclick="evt.button == 1 && (evt.preventDefault(), @post(el.dataset.close))">
-    {{ kit::Link::new(t.query, "/search?tab={}"|format(t.id)).current(self.is_active(t)).class(self.look(t)).datastar("on:click", "evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || evt.button || (evt.preventDefault(), $_url = el.getAttribute('href'), document.title = el.textContent + ' · slsk', document.getElementById('search-feed').dispatchEvent(new Event('more')))") }}
-    {{ kit::Button::quiet(self.pin_label(t)).icon_only(kit::icon::PIN).toggles(kit::icon::PIN_FILLED, t.pinned).post("/search/tabs/{}/pin"|format(t.id)) }}
-    {{ kit::Button::quiet("Close {}"|format(t.query)).icon_only(kit::icon::CLOSE).post("/search/tabs/{}/close"|format(t.id)) }}
+    {{ kit::Link::new(t.query, "/search?tab={}"|format(t.id)).current(self.is_active(t)).class("max-w-[18em] min-w-0 truncate ps-2.5 pe-1 text-meta").class(self.tone(t)).datastar("on:click", "evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || evt.button || (evt.preventDefault(), $_url = el.getAttribute('href'), document.title = el.textContent + ' · slsk', document.getElementById('search-feed').dispatchEvent(new Event('more')))") }}
+    {{ kit::Button::quiet(self.pin_label(t)).icon_only(kit::icon::PIN).toggles(kit::icon::PIN_FILLED, t.pinned).post("/search/tabs/{}/pin"|format(t.id)).busy_key(t.id.to_string()) }}
+    {{ kit::Button::quiet("Close {}"|format(t.query)).icon_only(kit::icon::CLOSE).post("/search/tabs/{}/close"|format(t.id)).busy_key(t.id.to_string()) }}
   </div>
 {% endfor %}
 {% if self.unpinned() > 1 %}{{ kit::Button::quiet("Close unpinned").post("/search/tabs/close-unpinned").confirm("Close every unpinned search?", "Close them").detail("Their results are forgotten. Pinned searches stay open.").yes_bad() }}{% endif %}

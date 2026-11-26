@@ -34,9 +34,7 @@ pub(super) fn routes() -> Router<UiState> {
 pub(super) async fn count_html(app: &App) -> Fragment {
     let n = app.social.unread().await.unwrap_or(0);
     let text = if n > 0 { n.to_string() } else { String::new() };
-    Fragment::trusted(format!(
-        r#"<span id="chat-count" class="text-ink empty:hidden">{text}</span>"#
-    ))
+    super::wrapped("span", "chat-count", "text-ink empty:hidden", text)
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -378,25 +376,22 @@ async fn view(State(s): State<UiState>, Query(q): Query<Poll>) -> Response {
     // the lists and the badge then reflect. A poll refreshes the lines of
     // the open thread; otherwise the thread is drawn whole, as when the
     // address names it.
-    let mut html = match &thread {
-        Some(t) if q.poll => format!("{}\n", lines_html(&s.app, t).await),
-        Some(t) => format!("{}\n", thread_html(&s.app, Some(t)).await),
-        None => String::new(),
-    };
-    html.push_str(&side_html(&s.app).await);
-    if !q.poll {
-        html.push('\n');
-        html.push_str(&room_list_html(&s.app, ""));
-        html.push_str(&format!("\n{}", kit::Flash::region()));
+    let mut parts = Vec::with_capacity(5);
+    match &thread {
+        Some(t) if q.poll => parts.push(lines_html(&s.app, t).await),
+        Some(t) => parts.push(thread_html(&s.app, Some(t)).await),
+        None => {}
     }
-    html.push('\n');
-    html.push_str(&count_html(&s.app).await);
+    parts.push(side_html(&s.app).await);
+    if !q.poll {
+        parts.push(room_list_html(&s.app, ""));
+        parts.push(kit::Flash::region().html());
+    }
+    parts.push(count_html(&s.app).await);
+    let html = Fragment::from_iter(parts);
+    // A conversation is opened by a link that loads in place, which moves the address itself.
     match thread.filter(|_| !q.poll) {
-        Some(t) => askama_datastar::events(vec![
-            patch(&html),
-            signals(r#"{"_msg":""}"#),
-            super::place(&t.url()),
-        ]),
+        Some(_) => askama_datastar::events(vec![patch(&html), signals(r#"{"_msg":""}"#)]),
         None => one(html),
     }
 }
@@ -422,15 +417,14 @@ async fn open(State(s): State<UiState>, body: Bytes) -> Response {
 
 /// The conversation drawn afresh, the lists (its unread count now zero) and
 /// the composer emptied.
-async fn opened(app: &App, t: &Thread, flash: Option<String>) -> Response {
+async fn opened(app: &App, t: &Thread, flash: Option<Fragment>) -> Response {
     askama_datastar::events(vec![
-        patch(&format!(
-            "{}\n{}\n{}\n{}",
+        patch(&Fragment::from_iter([
             thread_html(app, Some(t)).await,
             side_html(app).await,
             count_html(app).await,
-            flash.unwrap_or_else(|| kit::Flash::region().to_string())
-        )),
+            flash.unwrap_or_else(|| kit::Flash::region().html()),
+        ])),
         signals(r#"{"_msg":""}"#),
         super::place(&t.url()),
     ])
@@ -456,7 +450,7 @@ async fn send(State(s): State<UiState>, body: Bytes) -> Response {
         }
     };
     match result {
-        Ok(()) => opened(&s.app, &t, Some(kit::Flash::ok("Sent").to_string())).await,
+        Ok(()) => opened(&s.app, &t, Some(kit::Flash::ok("Sent").html())).await,
         Err(e) => failed(&e),
     }
 }
@@ -475,7 +469,7 @@ async fn join(State(s): State<UiState>, RawQuery(query): RawQuery, body: Bytes) 
             opened(
                 &s.app,
                 &t,
-                Some(kit::Flash::ok(format!("Joining {room}")).to_string()),
+                Some(kit::Flash::ok(format!("Joining {room}")).html()),
             )
             .await
         }
@@ -490,12 +484,11 @@ async fn leave(State(s): State<UiState>, RawQuery(query): RawQuery, body: Bytes)
     };
     match s.app.social.leave_room(room).await {
         Ok(()) => askama_datastar::events(vec![
-            patch(&format!(
-                "{}\n{}\n{}",
+            patch(&Fragment::from_iter([
                 thread_html(&s.app, None).await,
                 side_html(&s.app).await,
-                kit::Flash::ok(format!("Left {room}"))
-            )),
+                kit::Flash::ok(format!("Left {room}")).html(),
+            ])),
             super::place("/chat"),
         ]),
         Err(e) => failed(&e),
@@ -510,11 +503,10 @@ async fn add_buddy(State(s): State<UiState>, RawQuery(query): RawQuery, body: By
     let note = super::field(&form, "note").unwrap_or_default().trim();
     match s.app.social.add_buddy(user, note).await {
         Ok(()) => askama_datastar::events(vec![
-            patch(&format!(
-                "{}\n{}",
+            patch(&Fragment::from_iter([
                 side_html(&s.app).await,
-                kit::Flash::ok(format!("Added {user} as a buddy"))
-            )),
+                kit::Flash::ok(format!("Added {user} as a buddy")).html(),
+            ])),
             signals(r#"{"_buddy":"","_buddynote":""}"#),
         ]),
         Err(e) => failed(&e),
@@ -531,11 +523,10 @@ async fn remove_buddy(
         return failed(&anyhow::anyhow!("Say who to remove."));
     };
     match s.app.social.remove_buddy(user).await {
-        Ok(()) => one(format!(
-            "{}\n{}",
+        Ok(()) => one(Fragment::from_iter([
             side_html(&s.app).await,
-            kit::Flash::region()
-        )),
+            kit::Flash::region().html(),
+        ])),
         Err(e) => failed(&e),
     }
 }

@@ -18,7 +18,7 @@ use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 
-use super::{Draw, Fragment, UiState, escape, failed, fields, patch};
+use super::{Draw, Fragment, UiState, failed, fields, patch};
 use crate::art::{AlbumArt, ArtRemoved, ArtSet, Image, Target};
 use crate::library::{
     AlbumEdit, AlbumMove, CreditWrite, LibraryAlbum, Overview, Preview, TagEdits, by_path,
@@ -557,7 +557,7 @@ async fn view(State(s): State<UiState>, uri: http::Uri) -> Response {
     let filter: Filter = super::query(&uri);
     let open = open_albums(&uri);
     askama_datastar::stream(async_stream::stream! {
-        yield patch(&format!(r#"<div id="library"><p class="text-meta text-muted">{} Reading the library…</p></div>"#, kit::Spinner::new()));
+        yield patch(&super::line("div", "library", true, "Reading the library…"));
         yield patch(&list_html(&s, &filter).await);
         yield unselected();
         if !open.is_empty() {
@@ -582,7 +582,7 @@ async fn find(State(s): State<UiState>, body: Bytes) -> Response {
     askama_datastar::events(vec![
         patch(&list_html(&s, &filter).await),
         unselected(),
-        patch(r#"<div id="lib-preview"></div>"#),
+        patch(&super::emptied("lib-preview")),
         super::place(&filter.url()),
     ])
 }
@@ -753,10 +753,14 @@ async fn album_html(s: &UiState, filter: &Filter, path: &str) -> Fragment {
             tracks,
         }
         .draw(),
-        Err(e) => Fragment::trusted(format!(
-            r#"<div id="{slot}" class="basis-full empty:hidden">{}</div>"#,
-            kit::Notice::bad(format!("{e:#}")).class("mt-2 wrap-anywhere")
-        )),
+        Err(e) => super::wrapped(
+            "div",
+            &slot,
+            "basis-full empty:hidden",
+            kit::Notice::bad(format!("{e:#}"))
+                .class("mt-2 wrap-anywhere")
+                .html(),
+        ),
     }
 }
 
@@ -774,10 +778,14 @@ async fn art_html(s: &UiState, path: &str) -> Fragment {
             art,
         }
         .draw(),
-        Err(e) => Fragment::trusted(format!(
-            r#"<div id="{slot}-artinfo" class="my-2.5">{}</div>"#,
-            kit::Notice::bad(format!("{e:#}")).class("wrap-anywhere")
-        )),
+        Err(e) => super::wrapped(
+            "div",
+            &format!("{slot}-artinfo"),
+            "my-2.5",
+            kit::Notice::bad(format!("{e:#}"))
+                .class("wrap-anywhere")
+                .html(),
+        ),
     }
 }
 
@@ -1001,7 +1009,7 @@ async fn releases(
 ) -> Response {
     let slot = slot_of(&path);
     askama_datastar::stream(async_stream::stream! {
-        yield patch(&format!(r#"<div id="{slot}-retag"><p class="text-meta text-muted">{} Asking for releases that fit these files…</p></div>"#, kit::Spinner::new()));
+        yield patch(&super::line("div", &format!("{slot}-retag"), true, "Asking for releases that fit these files…"));
         let discogs = s.app.jobs.discogs();
         let view = match s.app.library.rematch(&path).await {
             Ok(r) => ReleasesView { path: &path, slot, filter: &filter, candidates: r.candidates, review: r.review, error: None, discogs },
@@ -1878,11 +1886,11 @@ async fn previewed(s: UiState, action: Action, form: Vec<(String, String)>) -> R
         // folder is refused when the batch is re-filed.
         let mut filed: HashMap<String, String> = HashMap::new();
         for (i, row) in rows.iter().take(shown).enumerate() {
-            yield patch(&format!(
-                r#"<p id="{slot}-pv-progress" class="text-meta text-muted">{} Working out {} of {shown}: {}</p>"#,
-                kit::Spinner::new(),
-                i + 1,
-                escape(&title_of(&row.album)),
+            yield patch(&super::line(
+                "p",
+                &format!("{slot}-pv-progress"),
+                true,
+                &format!("Working out {} of {shown}: {}", i + 1, title_of(&row.album)),
             ));
             let mut p = plan_one(&s, action, row, &known, &ask).await;
             if let Body::Edit { into: into @ Some(_), .. } = &mut p.body {
@@ -1901,28 +1909,41 @@ async fn previewed(s: UiState, action: Action, form: Vec<(String, String)>) -> R
             let html = PlannedView { p: &p, root: &root, slot: &slot }.draw();
             yield super::append(&format!("#{slot}-pv-albums"), &html);
         }
-        yield patch(&format!(
-            r#"<p id="{slot}-pv-progress" class="text-meta text-muted">{applicable} of {shown} would change.</p>"#
+        yield patch(&super::line(
+            "p",
+            &format!("{slot}-pv-progress"),
+            false,
+            &format!("{applicable} of {shown} would change."),
         ));
-        let apply = if applicable == 0 {
-            String::new()
-        } else {
-            format!(
-                r#"{}<span id="{slot}-apply-count" class="text-meta text-muted"></span>"#,
-                kit::Button::primary(action.name())
-                    .post(format!("/library/apply/{}", action.slug()))
-                    .sends(format!("{slot}-apply"))
-            )
-        };
-        // The form counts what is ticked once its last row is in.
-        yield patch(&format!(
-            r#"<div id="{slot}-pv-apply" class="mt-2.5 flex flex-wrap items-center gap-2" data-form="{slot}-apply" data-init="document.getElementById(el.dataset.form).dispatchEvent(new Event('change'))">{apply}{}</div>"#,
-            kit::Button::quiet("Cancel")
-                .data("slot", slot.as_str())
-                .datastar("on:click", "document.getElementById(el.dataset.slot + '-preview').replaceChildren()")
-        ));
+        yield patch(&ApplyRow { slot: &slot, action: (applicable > 0).then_some(action) }.draw());
     })
     .into_response()
+}
+
+/// A preview's last row: its apply, when anything applies, with the count of what is ticked beside it, and cancel.
+/// The form counts what is ticked once this row, after its last album, is in.
+#[derive(Template)]
+#[template(
+    ext = "html",
+    source = r#"<div id="{{ slot }}-pv-apply" class="mt-2.5 flex flex-wrap items-center gap-2" data-form="{{ slot }}-apply" data-init="document.getElementById(el.dataset.form).dispatchEvent(new Event('change'))">
+{%- if let Some(action) = action %}{{ kit::Button::primary(action.name()).post("/library/apply/{}"|format(action.slug())).sends("{}-apply"|format(slot)) }}<span id="{{ slot }}-apply-count" class="text-meta text-muted"></span>{% endif -%}
+{{ kit::Button::quiet("Cancel").data("slot", slot).datastar("on:click", "document.getElementById(el.dataset.slot + '-preview').replaceChildren()") }}</div>"#
+)]
+struct ApplyRow<'a> {
+    slot: &'a str,
+    action: Option<Action>,
+}
+
+/// Asks the page to redraw the rows a library run changed, those it shows and the albums it has open.
+#[derive(Template)]
+#[template(
+    ext = "html",
+    source = r#"<div hidden data-now="{{ now }}" data-after="{{ after }}" data-touched="{{ touched }}" data-init="$libseen = +el.dataset.now; @get('/library/redraw?after=' + el.dataset.after + '&shown=' + el.dataset.touched.split(',').filter(id => id && document.getElementById('row-' + id)).join(',') + '&open=' + [...document.querySelectorAll('#library li > div[id]:not(:empty)')].map(d => d.id).join(',') + '&' + location.search.slice(1))"></div>"#
+)]
+struct Redraw {
+    now: u64,
+    after: u64,
+    touched: String,
 }
 
 /// Album-wide fields the edit form offers, by beets name, with their labels.
@@ -2524,15 +2545,16 @@ pub(super) fn run_events(s: &UiState, sent: &mut RunSent) -> Vec<axum::response:
             .iter()
             .filter(|f| f.id > sent.finished)
             .filter_map(|f| f.rows.as_ref())
-            .flat_map(|(paths, _)| paths.iter().map(|p| format!("'{}'", slot_of(p))))
+            .flat_map(|(paths, _)| paths.iter().map(|p| slot_of(p)))
             .collect();
         events.push(super::append(
             "#lib-run",
-            &format!(
-                r#"<div hidden data-init="$libseen = {now}; @get('/library/redraw?after={}&shown=' + [{}].filter(id => document.getElementById('row-' + id)).join(',') + '&open=' + [...document.querySelectorAll('#library li > div[id]:not(:empty)')].map(d => d.id).join(',') + '&' + location.search.slice(1))"></div>"#,
-                sent.finished,
-                touched.join(",")
-            ),
+            &Redraw {
+                now,
+                after: sent.finished,
+                touched: touched.join(","),
+            }
+            .draw(),
         ));
         sent.finished = now;
     }
@@ -2611,14 +2633,11 @@ async fn apply(State(s): State<UiState>, Path(action): Path<String>, body: Bytes
     askama_datastar::stream(async_stream::stream! {
         yield patch(&run_html(&s));
         // The album goes back to how it reads, every form on it closed.
-        yield patch(&format!(r#"<div id="{from}-preview"></div>"#));
+        yield patch(&super::emptied(&format!("{from}-preview")));
         if from != "lib" {
-            yield patch(&format!(r#"<div id="{from}-edit"></div>"#));
-            yield patch(&format!(r#"<div id="{from}-retag"></div>"#));
-            yield super::append(
-                &format!("#{from}-art"),
-                r#"<div hidden data-init="el.parentElement.hidden = true; el.remove()"></div>"#,
-            );
+            yield patch(&super::emptied(&format!("{from}-edit")));
+            yield patch(&super::emptied(&format!("{from}-retag")));
+            yield super::signals(r#"{"_artform":""}"#);
         }
         let Ok((_, done, failed)) = rx.await else {
             return;
@@ -2631,7 +2650,9 @@ async fn apply(State(s): State<UiState>, Path(action): Path<String>, body: Bytes
         } else if from == "lib" {
             yield super::append(
                 "#lib-sel",
-                r#"<div hidden data-init="el.closest('form').querySelectorAll('input[type=checkbox]').forEach(c => c.checked = false); el.remove()"></div>"#,
+                &Fragment::trusted(
+                    r#"<div hidden data-init="el.closest('form').querySelectorAll('input[type=checkbox]').forEach(c => c.checked = false); el.remove()"></div>"#,
+                ),
             );
             yield unselected();
         }
@@ -2854,7 +2875,7 @@ async fn changed_rows(
             None => events.push(super::insert(
                 &target,
                 askama_datastar::ElementPatchMode::Remove,
-                "",
+                &Fragment::new(),
             )),
         }
     }
