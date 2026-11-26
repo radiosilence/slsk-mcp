@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.28.3
+
+### Fixed
+
+- fix: make wrapped_safe as a stopgap until wrapped and similar helpers are removed and refactored out, because they are fucking stupid
+
 ## 0.28.2
 
 ### Changed
