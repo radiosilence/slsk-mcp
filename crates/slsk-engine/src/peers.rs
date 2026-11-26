@@ -58,7 +58,7 @@ pub(crate) struct Peers {
     connecting: DashMap<String, Arc<Mutex<()>>>,
     addresses: DashMap<String, (SocketAddrV4, Instant)>,
     address_waiters: DashMap<String, Vec<oneshot::Sender<SocketAddrV4>>>,
-    pierce: DashMap<u32, oneshot::Sender<Option<Conn>>>,
+    pierce: DashMap<u32, (String, ConnKind, oneshot::Sender<Option<Conn>>)>,
     /// Indirect requests we stopped waiting for because the direct route won.
     /// The peer does not know that and pierces anyway; a pierce that arrives
     /// for one of these is adopted rather than closed, because closing it
@@ -132,7 +132,7 @@ pub(crate) fn on_address(inner: &Inner, username: &str, ip: Ipv4Addr, port: u32)
 }
 
 pub(crate) fn on_cant_connect(inner: &Inner, token: u32) {
-    if let Some((_, tx)) = inner.peers.pierce.remove(&token) {
+    if let Some((_, (_, _, tx))) = inner.peers.pierce.remove(&token) {
         let _ = tx.send(None);
     }
 }
@@ -168,8 +168,11 @@ async fn address(inner: &Inner, username: &str) -> Result<SocketAddrV4> {
 /// succeeds first. The peer init has been exchanged when this returns.
 pub(crate) async fn connect(inner: &Arc<Inner>, username: &str, kind: ConnKind) -> Result<Conn> {
     let token = inner.next_token();
-    let (tx, rx) = oneshot::channel();
-    inner.peers.pierce.insert(token, tx);
+    let (tx, mut rx) = oneshot::channel();
+    inner
+        .peers
+        .pierce
+        .insert(token, (username.to_string(), kind, tx));
     let own = inner.username();
     let indirect_requested = inner
         .send_server(ToServer::ConnectToPeer {
@@ -204,28 +207,39 @@ pub(crate) async fn connect(inner: &Arc<Inner>, username: &str, kind: ConnKind) 
             .await?;
         Ok::<_, Error>(conn)
     };
-    let indirect = async {
-        if !indirect_requested {
-            return Err(Error::NotConnected);
-        }
-        match tokio::time::timeout(INDIRECT_TIMEOUT, rx).await {
-            Ok(Ok(Some(conn))) => Ok(conn),
-            Ok(_) => Err(Error::Unreachable(username.to_string())),
-            Err(_) => Err(Error::TimedOut),
+    let result = {
+        let indirect = async {
+            if !indirect_requested {
+                return Err(Error::NotConnected);
+            }
+            match tokio::time::timeout(INDIRECT_TIMEOUT, &mut rx).await {
+                Ok(Ok(Some(conn))) => Ok(conn),
+                Ok(_) => Err(Error::Unreachable(username.to_string())),
+                Err(_) => Err(Error::TimedOut),
+            }
+        };
+        tokio::pin!(direct, indirect);
+        tokio::select! {
+            r = &mut direct => match r {
+                Ok(c) => Ok(c),
+                Err(Error::Offline(u)) => Err(Error::Offline(u)),
+                Err(_) => indirect.as_mut().await,
+            },
+            r = &mut indirect => match r {
+                Ok(c) => Ok(c),
+                Err(_) => direct.await,
+            },
         }
     };
-    tokio::pin!(direct, indirect);
-    let result = tokio::select! {
-        r = &mut direct => match r {
-            Ok(c) => Ok(c),
-            Err(Error::Offline(u)) => Err(Error::Offline(u)),
-            Err(_) => indirect.await,
-        },
-        r = &mut indirect => match r {
-            Ok(c) => Ok(c),
-            Err(_) => direct.await,
-        },
-    };
+    // A pierce that landed as the other route won is in the channel, unread.
+    // The peer already treats that connection as theirs to send on, so it is
+    // adopted; closing it loses whatever they send.
+    rx.close();
+    if let Ok(Some(late)) = rx.try_recv()
+        && kind == ConnKind::Peer
+    {
+        spawn_peer(inner.clone(), username.to_string(), late, None);
+    }
     result.map_err(|e| match e {
         Error::TimedOut | Error::Io(_) => Error::Unreachable(username.to_string()),
         e => e,
@@ -686,8 +700,15 @@ async fn accept(inner: Arc<Inner>, stream: TcpStream, addr: SocketAddr, inbound:
         }
         // A pierce answers a request of ours, so it is no stranger's.
         Ok(PeerInit::PierceFirewall { token }) => match inner.peers.pierce.remove(&token) {
-            Some((_, tx)) => {
-                let _ = tx.send(Some(conn));
+            Some((_, (username, kind, tx))) => {
+                // The attempt can end between the lookup and the send, the
+                // direct route having won; the receiver is gone and hands the
+                // connection back, to be adopted like a late pierce.
+                if let Err(Some(conn)) = tx.send(Some(conn))
+                    && kind == ConnKind::Peer
+                {
+                    spawn_peer(inner, username, conn, None);
+                }
             }
             None => match inner.peers.settled.remove(&token) {
                 Some((_, (username, ConnKind::Peer, _))) => {
