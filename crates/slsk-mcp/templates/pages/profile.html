@@ -1,7 +1,8 @@
 <div class="grid min-w-0 gap-3 *:min-w-0">
-  <form class="flex flex-wrap items-center gap-2" action="/profile" method="get">
-    <input class="basis-full" name="username" value="{{ username }}" placeholder="Username, or empty for your own" autocomplete="off" autocapitalize="off">
-    <button class="primary flex-auto" type="submit">View profile</button>
+  {% let lookup = kit::Form::plain_get("/profile") %}
+  <form {{ lookup.attrs() }} class="flex flex-wrap items-center gap-2">
+    {{ kit::Input::text("username").value(username).label("Username").placeholder("Username, or empty for your own").autocomplete("off").attr("autocapitalize", "off").class("basis-full") }}
+    {{ lookup.submit(kit::Button::primary("View profile").class("flex-auto")) }}
   </form>
   {% if !signed_in %}
   <div id="profile"><p class="text-meta text-muted">Sign in to Soulseek first.</p></div>

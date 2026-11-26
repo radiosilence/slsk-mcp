@@ -1,14 +1,14 @@
 <div id="chat-side">
 {% match error %}{% when Some with (e) %}<p class="text-meta text-muted">{{ e }}</p>{% when None %}
   <h3>Rooms</h3>
-  {% if rooms.is_empty() %}<p class="text-meta text-muted">In no rooms.</p>{% endif %}
+  {% if rooms.is_empty() %}{{ kit::Empty::new("In no rooms.").compact() }}{% endif %}
   <ul class="rows">
   {% for r in rooms %}
     <li><a class="wrap-anywhere" href="{{ crate::ui::chat_href("room", r.0) }}" data-indicator="_opening" data-on:click="{{ crate::ui::follow("$_opening", "$_msg = '', @get(el.getAttribute('href'))") }}">{{ r.0 }}</a><span class="text-meta text-muted wrap-anywhere">{{ r.1 }} in the room</span></li>
   {% endfor %}
   </ul>
   <h3>Messages</h3>
-  {% if conversations.is_empty() %}<p class="text-meta text-muted">No private messages.</p>{% endif %}
+  {% if conversations.is_empty() %}{{ kit::Empty::new("No private messages.").compact() }}{% endif %}
   <ul class="rows">
   {% for c in conversations %}
     <li>
@@ -22,17 +22,17 @@
   {% endfor %}
   </ul>
   <h3>Buddies</h3>
-  {% if buddies.is_empty() %}<p class="text-meta text-muted">No buddies.</p>{% endif %}
+  {% if buddies.is_empty() %}{{ kit::Empty::new("No buddies.").compact() }}{% endif %}
   <ul class="rows">
   {% for b in buddies %}
-    <li class="[&.busy]:opacity-70" data-class:busy="$_bud_{{ loop.index }}">
+    <li>
       <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5 basis-full">
         <a class="wrap-anywhere" href="{{ crate::ui::chat_href("pm", b.username) }}" data-indicator="_opening" data-on:click="{{ crate::ui::follow("$_opening", "$_msg = '', @get(el.getAttribute('href'))") }}">{{ b.username }}</a>
-        <span class="status {{ b.status }}">{{ b.status }}</span>
+        {{ crate::ui::state(b.status, b.status) }}
         <span class="flex-1 max-sm:hidden"></span>
-        <a class="button quiet" href="{{ crate::ui::profile_href(b.username) }}">Profile</a>
-        <a class="button quiet" href="{{ crate::ui::browse_href(b.username, "") }}">Browse</a>
-        <form class="contents" data-indicator="_bud_{{ loop.index }}" data-on:submit="@post('/chat/buddy/remove', {contentType: 'form'})"><button class="quiet" name="username" value="{{ b.username }}" data-attr:disabled="$_bud_{{ loop.index }}" data-class:busy="$_bud_{{ loop.index }}">Remove</button></form>
+        {{ kit::Button::quiet("Profile").href(crate::ui::profile_href(b.username)) }}
+        {{ kit::Button::quiet("Browse").href(crate::ui::browse_href(b.username, "")) }}
+        {{ kit::Button::quiet("Remove").post(crate::ui::row_url("/chat/buddy/remove", "username", b.username)) }}
       </div>
       {% if !b.note.is_empty() %}<div class="basis-full text-meta text-muted wrap-anywhere">{{ b.note }}</div>{% endif %}
     </li>

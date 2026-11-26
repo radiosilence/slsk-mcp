@@ -9,6 +9,7 @@
 //! Folders are named in URLs and forms by the base64 of their raw bytes:
 //! peer paths are not always UTF-8, and a key is safe anywhere.
 
+use koan_kit_web as kit;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -16,7 +17,7 @@ use std::time::{Duration, Instant};
 use askama::Template;
 use axum::Router;
 use axum::body::Bytes;
-use axum::extract::State;
+use axum::extract::{RawQuery, State};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum_extra::extract::{Form, Query};
@@ -25,7 +26,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use slsk_engine::slsk_proto::RawStr;
 use slsk_engine::slsk_proto::peer::Directory;
 
-use super::{UiState, failed, fields, flash_ok, human, one, patch};
+use super::{UiState, failed, human, one, patch, sent};
 
 pub(super) fn routes() -> Router<UiState> {
     Router::new()
@@ -312,6 +313,7 @@ pub(super) enum Node {
 #[derive(Template)]
 #[template(path = "browse_nodes.html")]
 struct Nodes {
+    username: String,
     nodes: Vec<Node>,
     /// They are the open folder's own, whose files can be ticked.
     top: bool,
@@ -358,6 +360,7 @@ pub(super) fn tree(p: &Place, dirs: &[Directory], at: &[u8], mine: bool) -> Stri
         .collect();
     nodes.extend(files);
     Nodes {
+        username: p.username.clone(),
         nodes,
         top: at == p.at.as_slice(),
         mine,
@@ -524,7 +527,7 @@ fn browse_at(s: UiState, q: &BrowseQuery) -> Response {
         return askama_datastar::events(vec![
             here,
             patch(&render(&p, &listing, None, true, false)),
-            patch("<div id=\"flash\"></div>"),
+            kit::Flash::region().patch().into(),
         ]);
     }
     askama_datastar::stream(async_stream::stream! {
@@ -557,15 +560,19 @@ fn browse_at(s: UiState, q: &BrowseQuery) -> Response {
             }
         };
         yield patch(&render(&p, &listing, None, false, engine.is_banned(&username)));
-        yield patch("<div id=\"flash\"></div>");
+        yield kit::Flash::region().patch().into();
     })
     .into_response()
 }
 
 /// Download the ticked files of one folder as an album of their own. Sizes
 /// come from the listing the page was drawn from, not from the form.
-async fn download_files(State(s): State<UiState>, body: Bytes) -> Response {
-    let form = fields(&body);
+async fn download_files(
+    State(s): State<UiState>,
+    RawQuery(query): RawQuery,
+    body: Bytes,
+) -> Response {
+    let form = sent(query.as_deref(), &body);
     let wanted: Vec<Vec<u8>> = form
         .iter()
         .filter(|(k, _)| k == "f")
@@ -610,9 +617,35 @@ async fn download_files(State(s): State<UiState>, body: Bytes) -> Response {
         .unwrap_or_default()
         .to_string();
     match s.app.jobs.from_files(username, files, title).await {
-        Ok(job) => one(flash_ok(&format!("Downloading {}", job.title))),
+        Ok(job) => one(kit::Flash::ok(format!("Downloading {}", job.title)).to_string()),
         Err(e) => failed(&e),
     }
+}
+
+/// A folder's download: everything under it, one job per album. A folder of
+/// more than a hundred files asks first.
+pub(super) fn tree_download<'a>(
+    button: kit::Button<'a>,
+    username: &str,
+    key: &str,
+    files: &usize,
+) -> kit::Button<'a> {
+    let button = button.post(super::place_url(
+        "/browse/tree",
+        &[("username", username), ("key", key)],
+    ));
+    if *files > 100 {
+        button
+            .confirm("Download everything under this folder?", "Download")
+            .detail(format!("It is {files} files, one job per album."))
+    } else {
+        button
+    }
+}
+
+/// A file's download, as an album of its own.
+pub(super) fn file_download(username: &str, key: &str) -> String {
+    super::place_url("/browse/files", &[("username", username), ("f", key)])
 }
 
 /// The folder a file or folder is in; the top for one at the top.
@@ -694,8 +727,12 @@ const MAX_ALBUMS: usize = 200;
 
 /// Download a folder and everything under it, one job per album. Files and
 /// sizes come from the listing the page was drawn from, not from the form.
-async fn download_tree(State(s): State<UiState>, body: Bytes) -> Response {
-    let form = fields(&body);
+async fn download_tree(
+    State(s): State<UiState>,
+    RawQuery(query): RawQuery,
+    body: Bytes,
+) -> Response {
+    let form = sent(query.as_deref(), &body);
     let (Some(username), Some(at)) = (
         super::field(&form, "username"),
         super::field(&form, "key").and_then(|k| URL_SAFE_NO_PAD.decode(k).ok()),
@@ -738,5 +775,8 @@ async fn download_tree(State(s): State<UiState>, body: Bytes) -> Response {
         [one_title] => format!("Downloading {one_title}"),
         _ => format!("Downloading {count} albums"),
     };
-    one(flash_ok(&msg))
+    askama_datastar::events([
+        kit::Flash::ok(&msg).patch().into(),
+        kit::Confirm::close().into(),
+    ])
 }

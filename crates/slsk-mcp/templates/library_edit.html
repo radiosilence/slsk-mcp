@@ -1,4 +1,5 @@
-<form id="{{ slot }}-edit" data-indicator="_{{ slot }}_pv_edit" data-on:submit="@post('/library/preview/edit', {contentType: 'form'})" class="my-2 border-l-2 border-rule px-3 py-2.5">
+{% let form = kit::Form::post("/library/preview/edit").id("{}-edit"|format(slot)) %}
+<form {{ form.attrs() }} class="my-2 border-l-2 border-rule px-3 py-2.5">
   <input type="hidden" name="path" value="{{ path }}">
   <input type="hidden" name="slot" value="{{ slot }}">
   {% include "library_filter.html" %}
@@ -20,7 +21,7 @@
       </div>
     </div>
     {% else %}
-    <label class="field"><span>{{ label }}</span><input name="a-{{ field }}" value="{{ self.now(field) }}"{% if self.varies(field) %} placeholder="(differs between files)"{% endif %} autocomplete="off"></label>
+    {{ kit::Field::text("a-{}"|format(field), label).value(self.now(field)).placeholder(self.differs(field)).autocomplete("off").id("{}-a-{}"|format(slot, field)) }}
     {% endif %}
   {% endfor %}
   </div>
@@ -36,7 +37,7 @@
   {% endfor %}
   </table>
   <div class="mt-2.5 flex flex-wrap items-center gap-2">
-    <button class="primary" data-attr:disabled="$_{{ slot }}_pv_edit" data-class:busy="$_{{ slot }}_pv_edit">Preview edit</button>
-    <button type="button" class="quiet" data-on:click="document.getElementById('{{ slot }}-edit').replaceChildren()">Cancel</button>
+    {{ form.submit(kit::Button::primary("Preview edit")) }}
+    {{ kit::Button::quiet("Cancel").data("slot", slot.as_str()).datastar("on:click", "document.getElementById(el.dataset.slot + '-edit').replaceChildren()") }}
   </div>
 </form>

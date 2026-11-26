@@ -1,25 +1,5 @@
 use super::*;
 
-#[test]
-fn asset_urls_change_with_their_contents() {
-    assert_eq!(versioned("/a.css", "x"), versioned("/a.css", "x"));
-    assert_ne!(versioned("/a.css", "x"), versioned("/a.css", "y"));
-    assert!(CSS_URL.starts_with("/assets/app.css?v="));
-    assert!(DATASTAR_URL.starts_with("/assets/datastar.js?v="));
-}
-
-#[test]
-fn only_hashed_asset_urls_are_cached_for_good() {
-    let cache = |q: Option<&str>| {
-        asset(APP_CSS, "text/css", RawQuery(q.map(Into::into))).headers()[header::CACHE_CONTROL]
-            .to_str()
-            .unwrap()
-            .to_owned()
-    };
-    assert!(cache(Some("v=0123456789abcdef")).contains("immutable"));
-    assert!(!cache(None).contains("immutable"));
-}
-
 /// Datastar's `data-show` acts only once Datastar has loaded, so an element
 /// that starts hidden flashes until then; such elements carry `hidden` and
 /// `data-attr:hidden`. Nothing else may use the name either, since Datastar
@@ -91,7 +71,7 @@ fn sources_link_folders_by_their_bytes_and_skip_unrecorded_counts() {
             },
         ],
     );
-    let view = SourcesView::new("t".into(), Some(&row), Vec::new());
+    let view = SourcesView::new(Some("t".into()), Some(&row), Vec::new());
     let current = view.current.as_ref().unwrap();
     assert_eq!(
         current.folder.as_ref().unwrap().1,
@@ -1079,7 +1059,10 @@ mod profile {
         assert!(html.contains("1000 files in 90 folders"));
         assert!(html.contains("2.0 KB/s"));
         assert!(html.contains(">42<"));
-        assert!(html.contains("status away"));
+        assert!(
+            html.contains(r#"<span class="status warn">away</span>"#),
+            "{html}"
+        );
         assert!(html.contains("noise"));
         assert!(html.contains("/browse?username=ann"));
     }
@@ -1129,9 +1112,9 @@ mod profile {
     }
 }
 
+/// The committed stylesheet asks for the font beside it by the hash of the
+/// one koan-kit-web serves there, so a kit bump without `just css` fails.
 #[test]
-fn the_typeface_is_served_as_woff2() {
-    let response = font(GEIST_MONO).into_response();
-    assert_eq!(response.headers()[header::CONTENT_TYPE], "font/woff2");
-    assert!(GEIST_MONO.starts_with(b"wOF2"));
+fn the_stylesheet_names_the_font_the_kit_serves() {
+    assert!(include_str!("../../assets/app.css").contains(&kit::font::url("app.css")));
 }

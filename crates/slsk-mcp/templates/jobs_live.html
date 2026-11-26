@@ -1,5 +1,5 @@
 <div id="jobs-live">
-{% if empty %}<p class="text-meta text-muted">Nothing yet. Search for something, or ask your assistant to grab it.</p>{% endif %}
+{% if empty %}{{ kit::Empty::new("Nothing yet.").detail("Search for something, or ask your assistant to grab it.").icon(kit::icon::DOWNLOAD) }}{% endif %}
 {% if !attention.is_empty() %}
 <section class="mt-5 min-w-0">
   <h2 class="text-warn">Needs you <span class="text-ink">{{ attention.len() }}</span></h2>

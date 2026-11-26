@@ -8,21 +8,22 @@
 //! session layer, which wraps the router whole so a route added later is
 //! protected by construction.
 
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 use askama::Template;
-use askama_datastar::{ElementPatchMode, PatchSignals, Signals};
+use askama_datastar::{Asset, Csp, ElementPatchMode, PatchSignals, SecurityHeaders, Signals};
 use axum::Router;
 use axum::body::Bytes;
-use axum::extract::{Path, Query, RawQuery, Request, State};
-use axum::http::{HeaderValue, StatusCode, header};
+use axum::extract::{Path, Query, Request, State};
+use axum::http::{StatusCode, header};
 use axum::middleware::Next;
 use axum::response::sse::Event;
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use koan_kit_web as kit;
 use slsk_engine::slsk_proto::RawStr;
 use uuid::Uuid;
 
@@ -62,9 +63,6 @@ pub struct UiState {
     browsed: browse::Cache,
     profiles: profile::Cache,
 }
-
-const CSP: &str = "default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self'; img-src 'self' data:; \
-     connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'";
 
 pub fn router(app: Arc<App>) -> Router {
     let state = UiState {
@@ -132,31 +130,14 @@ pub fn router(app: Arc<App>) -> Router {
         .merge(crate::auth::routes::router(state.sessions.clone()))
         .route("/healthz", get(|| async { "ok" }))
         .route("/assets/datastar.js", get(askama_datastar::script::serve))
-        .route(
-            "/assets/live.js",
-            get(|q: RawQuery| async { asset(LIVE_JS, "text/javascript; charset=utf-8", q) }),
-        )
-        .route(
-            "/assets/app.css",
-            get(|q: RawQuery| async { asset(APP_CSS, "text/css; charset=utf-8", q) }),
-        )
-        .route(
-            "/assets/geist-mono.woff2",
-            get(|| async { font(GEIST_MONO) }),
-        )
-        .route(
-            "/assets/icon-32.png",
-            get(|| async { png(include_bytes!("../assets/icon-32.png")) }),
-        )
-        .route(
-            "/assets/icon-192.png",
-            get(|| async { png(include_bytes!("../assets/icon-192.png")) }),
-        )
-        .route(
-            "/assets/apple-touch-icon.png",
-            get(|| async { png(include_bytes!("../assets/apple-touch-icon.png")) }),
-        )
-        .layer(axum::middleware::from_fn(security_headers))
+        .route("/assets/live.js", get(LIVE_JS.serve()))
+        .route("/assets/app.css", get(APP_CSS.serve()))
+        .route("/assets/geist-mono.woff2", get(kit::font::serve))
+        // Public like the other assets: a browser asks for the icon before anyone signs in.
+        .route("/assets/icon-32.png", get(ICON_32.serve()))
+        .route("/assets/icon-192.png", get(ICON_192.serve()))
+        .route("/assets/apple-touch-icon.png", get(TOUCH_ICON.serve()))
+        .layer(SecurityHeaders::new(&Csp::new().datastar()))
         .layer(axum::middleware::from_fn(compress_events))
         .layer(tower_http::compression::CompressionLayer::new())
         .with_state(state)
@@ -215,17 +196,20 @@ async fn compress_events(request: Request, next: Next) -> Response {
     Response::from_parts(parts, axum::body::Body::from_stream(stream))
 }
 
-const APP_CSS: &str = include_str!("../assets/app.css");
-const LIVE_JS: &str = include_str!("../assets/live.js");
-/// The typeface @radiosilence/koan-kit-web sets; app.css names it by a URL relative to itself.
-const GEIST_MONO: &[u8] = include_bytes!("../assets/geist-mono.woff2");
-
-/// `path` with a hash of `body`, the asset served there, so a page from a
-/// new build fetches its own stylesheet and script rather than a cached copy
-/// of the previous build's.
-fn versioned(path: &str, body: &str) -> String {
-    format!("{path}?v={}", fingerprint(body.as_bytes()))
-}
+static APP_CSS: Asset = Asset::new(
+    include_bytes!("../assets/app.css"),
+    "text/css; charset=utf-8",
+);
+static LIVE_JS: Asset = Asset::new(
+    include_bytes!("../assets/live.js"),
+    "text/javascript; charset=utf-8",
+);
+static ICON_32: Asset = Asset::new(include_bytes!("../assets/icon-32.png"), "image/png");
+static ICON_192: Asset = Asset::new(include_bytes!("../assets/icon-192.png"), "image/png");
+static TOUCH_ICON: Asset = Asset::new(
+    include_bytes!("../assets/apple-touch-icon.png"),
+    "image/png",
+);
 
 /// A short hash of `bytes` (FNV-1a) for an address that changes with them.
 fn fingerprint(bytes: &[u8]) -> String {
@@ -233,61 +217,6 @@ fn fingerprint(bytes: &[u8]) -> String {
         (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3)
     });
     format!("{hash:016x}")
-}
-
-static CSS_URL: LazyLock<String> = LazyLock::new(|| versioned("/assets/app.css", APP_CSS));
-static DATASTAR_URL: LazyLock<String> =
-    LazyLock::new(|| askama_datastar::script::url("/assets/datastar.js"));
-static LIVE_URL: LazyLock<String> = LazyLock::new(|| versioned("/assets/live.js", LIVE_JS));
-
-/// A text asset. Requested by its hashed URL (`?v=`), it never changes, so it
-/// is kept for good; a bare URL is rechecked hourly.
-fn asset(body: &'static str, kind: &'static str, query: RawQuery) -> Response {
-    let cache = if query.0.is_some_and(|q| q.starts_with("v=")) {
-        "public, max-age=31536000, immutable"
-    } else {
-        "public, max-age=3600"
-    };
-    (
-        [(header::CONTENT_TYPE, kind), (header::CACHE_CONTROL, cache)],
-        body,
-    )
-        .into_response()
-}
-
-/// Public like the stylesheet that names it, so the sign-in page has it too. Only a new build changes it.
-fn font(bytes: &'static [u8]) -> impl IntoResponse {
-    (
-        [
-            (header::CONTENT_TYPE, "font/woff2"),
-            (header::CACHE_CONTROL, "public, max-age=86400"),
-        ],
-        bytes,
-    )
-}
-
-/// Public like the other assets: a browser asks for the icon before anyone signs in.
-fn png(bytes: &'static [u8]) -> impl IntoResponse {
-    ([(header::CONTENT_TYPE, "image/png")], bytes)
-}
-
-async fn security_headers(request: Request, next: Next) -> Response {
-    let mut response = next.run(request).await;
-    let h = response.headers_mut();
-    h.insert(
-        header::CONTENT_SECURITY_POLICY,
-        HeaderValue::from_static(CSP),
-    );
-    h.insert(
-        header::X_CONTENT_TYPE_OPTIONS,
-        HeaderValue::from_static("nosniff"),
-    );
-    h.insert(
-        header::REFERRER_POLICY,
-        HeaderValue::from_static("no-referrer"),
-    );
-    h.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
-    response
 }
 
 /// Markup this server built, as a patch of the elements with its ids.
@@ -325,25 +254,16 @@ fn signals(json: &str) -> Event {
     PatchSignals::new(json).into()
 }
 
-/// A confirmation that fades by itself; tapping it dismisses it sooner.
-fn flash_ok(msg: &str) -> String {
-    format!(
-        r#"<div id="flash" class="toast brief" role="status" data-on:click="el.className = ''">{}</div>"#,
-        escape(msg)
-    )
-}
-
-fn flash_err(msg: &str) -> String {
-    format!(
-        r#"<div id="flash" class="toast bad" role="alert" data-on:click="el.className = ''">{}</div>"#,
-        escape(msg)
-    )
-}
-
 /// A form body whose fields may repeat (checkboxes, several hidden paths),
 /// which `axum::Form` does not collect.
 fn fields(body: &[u8]) -> Vec<(String, String)> {
     url::form_urlencoded::parse(body).into_owned().collect()
+}
+
+/// What an action was sent: a button posts the page's signals, so it names
+/// its row in the address's query; a form posts its fields.
+fn sent(query: Option<&str>, body: &[u8]) -> Vec<(String, String)> {
+    fields(query.map_or(body, str::as_bytes))
 }
 
 fn field<'a>(fields: &'a [(String, String)], name: &str) -> Option<&'a str> {
@@ -377,6 +297,17 @@ fn status_label(status: &str) -> &'static str {
         "cancelled" => "cancelled",
         _ => "working",
     }
+}
+
+/// A state the server reports (a job's, a peer's, the session's) as a status in its tone.
+fn state<'a>(state: &str, word: impl Into<kit::Text<'a>>) -> kit::Status<'a> {
+    let tone = match state {
+        "connected" | "online" | "keep" | "imported" => kit::Tone::Ok,
+        "displaced" | "disconnected" | "rejected" | "failed" | "suspect" => kit::Tone::Bad,
+        "spare" | "away" | "review" | "downloading" | "importing" | "waiting" => kit::Tone::Warn,
+        _ => kit::Tone::Wait,
+    };
+    kit::Status::new(tone, word).busy(state == "connecting")
 }
 
 fn human(bytes: u64) -> String {
@@ -454,22 +385,31 @@ impl Page {
             })
             .collect()
     }
-    fn css(&self) -> &str {
-        &CSS_URL
+    fn css(&self) -> String {
+        APP_CSS.url("/assets/app.css")
     }
-    fn datastar(&self) -> &str {
-        &DATASTAR_URL
+    fn live(&self) -> String {
+        LIVE_JS.url("/assets/live.js")
     }
-    fn live(&self) -> &str {
-        &LIVE_URL
+    fn icons(&self) -> [String; 3] {
+        [
+            ICON_32.url("/assets/icon-32.png"),
+            ICON_192.url("/assets/icon-192.png"),
+            TOUCH_ICON.url("/assets/apple-touch-icon.png"),
+        ]
     }
-    fn title(&self) -> &str {
-        self.heading.as_deref().unwrap_or_else(|| {
+    /// The page's live stream, opened again whenever it ends or goes quiet.
+    fn stream(&self) -> askama_datastar::Html {
+        askama_datastar::reopen(&format!("/stream?page={}", self.tab))
+    }
+    fn title(&self) -> String {
+        let name = self.heading.as_deref().unwrap_or_else(|| {
             PAGES
                 .iter()
                 .find(|p| p.0 == self.tab)
                 .map_or("job", |p| p.2)
-        })
+        });
+        format!("{name} · slsk")
     }
 }
 
@@ -565,6 +505,12 @@ fn place_url(path: &str, params: &[(&str, &str)]) -> String {
     } else {
         format!("{path}?{query}")
     }
+}
+
+/// The address of an action on one row of a list. A button posts the page's
+/// signals, not a form, so the row it acts on travels in the query.
+fn row_url(path: &str, key: &str, value: &str) -> String {
+    place_url(path, &[(key, value)])
 }
 
 /// Where the page now is, for the address bar. Every action that moves
@@ -823,18 +769,6 @@ struct SettledJobs {
     more: bool,
 }
 
-impl SettledJobs {
-    fn sig_of(&self, id: &str) -> String {
-        busy_sig(id)
-    }
-}
-
-/// The signal that is true while a request from a job's card is in flight.
-/// Local (leading underscore), so it is never sent back.
-fn busy_sig(id: &str) -> String {
-    format!("_busy_{}", id.replace('-', ""))
-}
-
 /// One job's card, on the list or heading its own page.
 #[derive(Template)]
 #[template(path = "job_card.html")]
@@ -908,8 +842,52 @@ impl CardView {
             ),
         }
     }
-    fn sig(&self, j: &Job) -> String {
-        busy_sig(j.id.as_str())
+    /// The address of one of a job's actions.
+    fn url(&self, j: &Job, action: impl std::fmt::Display) -> String {
+        format!("/jobs/{}/{action}", j.id.as_str())
+    }
+
+    /// Progress toward `total` bytes, carrying the measurement `live.js`
+    /// moves it from until the next.
+    fn meter(
+        &self,
+        bytes: &u64,
+        total: &u64,
+        rate: &u64,
+        at: &chrono::DateTime<chrono::Utc>,
+    ) -> kit::Meter<'static> {
+        let at = if *rate > 0 { at.timestamp_millis() } else { 0 };
+        kit::Meter::new(bytes, (*total).max(1))
+            .label("download")
+            .data("bytes", bytes)
+            .data("total", total)
+            .data("rate", rate)
+            .data("at", at)
+    }
+
+    /// The files' toggle, as drawn before Datastar takes it over.
+    fn files_label(&self, j: &Job) -> String {
+        let arrow = if self.open { "▾" } else { "▸" };
+        format!("{arrow} {} files", j.files.len())
+    }
+
+    fn release_hint(&self) -> &'static str {
+        if self.discogs {
+            "MusicBrainz or Discogs release id or link"
+        } else {
+            "MusicBrainz release id or link"
+        }
+    }
+
+    /// How much of an import's current stage is done, when it counts.
+    fn stage(&self, j: &Job) -> Option<kit::Meter<'static>> {
+        let total = j.stage_total?;
+        let done = j.stage_done.unwrap_or_default();
+        Some(
+            kit::Meter::new(done, total.max(1))
+                .label(format!("{} of {} checked", human(done), human(total)))
+                .class("mt-2"),
+        )
     }
     fn label(&self, status: &str) -> &'static str {
         status_label(status)
@@ -928,14 +906,6 @@ impl CardView {
     /// `files` signal lists the open ones, so the stream draws only those.
     fn is_open(&self, j: &Job) -> String {
         format!("$files.includes('{},')", j.id.as_str())
-    }
-
-    /// The expression that opens or closes a job's files.
-    fn toggle(&self, j: &Job) -> String {
-        let id = j.id.as_str();
-        format!(
-            "$files = $files.includes('{id},') ? $files.replace('{id},', '') : $files + '{id},'"
-        )
     }
 
     fn file_progress(&self, f: &graphql::JobFile) -> String {
@@ -1264,8 +1234,8 @@ struct JobPageView {
 #[derive(Template)]
 #[template(path = "job_sources.html")]
 struct SourcesView {
-    /// The id of the element this fills.
-    target: String,
+    /// Its id, on the job's own page.
+    target: Option<String>,
     current: Option<SourceLine>,
     others: Vec<SourceLine>,
     events: Vec<crate::db::JobEvent>,
@@ -1296,7 +1266,11 @@ impl SourceLine {
 }
 
 impl SourcesView {
-    fn new(target: String, job: Option<&crate::db::Job>, events: Vec<crate::db::JobEvent>) -> Self {
+    fn new(
+        target: Option<String>,
+        job: Option<&crate::db::Job>,
+        events: Vec<crate::db::JobEvent>,
+    ) -> Self {
         use crate::db::Source;
         let current = job.map(|j| match &j.source.0 {
             Source::Soulseek {
@@ -1367,7 +1341,7 @@ async fn job_page(app: &App, id: Uuid) -> anyhow::Result<Option<(String, String)
     if job.is_none() && events.is_empty() {
         return Ok(None);
     }
-    let sources = SourcesView::new("job-sources".into(), job.as_ref(), events);
+    let sources = SourcesView::new(Some("job-sources".into()), job.as_ref(), events);
     let (title, card, import_log) = match job {
         Some(job) => {
             let view = graphql::job_view(app, job, true)
@@ -1416,15 +1390,22 @@ async fn job_sources(State(s): State<UiState>, Path(id): Path<Uuid>) -> Response
         crate::db::job(&s.app.db, id),
         crate::db::job_events(&s.app.db, id)
     );
-    let target = format!("sources-{id}");
     match (job, events) {
-        (Ok(job), Ok(events)) => one(SourcesView::new(target, job.as_ref(), events)
-            .render()
-            .unwrap_or_default()),
-        (Err(e), _) | (_, Err(e)) => one(format!(
-            r#"<div id="{target}" class="mt-1.5 text-meta text-bad">Couldn't read the history: {}</div>"#,
-            escape(&format!("{e:#}"))
-        )),
+        (Ok(job), Ok(events)) => opened(
+            &sources_disclosure(
+                &id.to_string(),
+                &job.as_ref().map_or(0, |j| j.alternates.0.len()),
+            ),
+            SourcesView::new(None, job.as_ref(), events)
+                .render()
+                .unwrap_or_default(),
+        ),
+        (Err(e), _) | (_, Err(e)) => opened(
+            &sources_disclosure(&id.to_string(), &0),
+            kit::Notice::bad(format!("Couldn't read the history: {e:#}"))
+                .class("mt-1.5")
+                .to_string(),
+        ),
     }
 }
 
@@ -1512,8 +1493,20 @@ impl UploadPeers {
     fn leaf<'a>(&self, name: &'a str) -> &'a str {
         leaf(name)
     }
-    fn pct(&self, t: &Transfer) -> u64 {
-        percent(t.bytes, t.size)
+    fn cancel(&self, t: &Transfer) -> String {
+        place_url(
+            "/uploads/cancel",
+            &[("username", &t.username), ("filename", &t.filename)],
+        )
+    }
+    /// What has gone, carrying the measurement `live.js` moves it from.
+    fn meter(&self, t: &Transfer) -> kit::Meter<'static> {
+        kit::Meter::new(t.bytes, t.size.max(1))
+            .label("upload")
+            .data("bytes", t.bytes)
+            .data("total", t.size)
+            .data("rate", t.speed)
+            .data("at", self.at)
     }
     fn size(&self, b: &u64) -> String {
         human(*b)
@@ -1684,10 +1677,11 @@ const LIFETIME: Duration = Duration::from_secs(60);
 /// only when something in them could have changed, so a page showing
 /// hundreds of rows does not redraw them while one download moves.
 ///
-/// The stream ends itself after [`LIFETIME`] and the page reopens it on an
-/// interval: a stream can die without either end noticing (a suspended
-/// phone, a replaced pod), and reopening on a timer is what bounds how long
-/// a page can sit showing stale state.
+/// The stream ends itself after [`LIFETIME`], and the page's `reopen`
+/// attributes open it again within seconds, as they do one that ends or goes
+/// quiet for any other reason: a stream can die without either end noticing
+/// (a suspended phone, a replaced pod), and ending it on a timer bounds how
+/// long a page can sit showing stale state.
 async fn stream(
     State(s): State<UiState>,
     Query(StreamQuery { page }): Query<StreamQuery>,
@@ -1936,7 +1930,7 @@ async fn download(State(s): State<UiState>, body: Bytes) -> Response {
     match s.app.jobs.from_folder(&folder, title, Vec::new()).await {
         Ok(_) => {
             let name = folder_heading(&folder.path).unwrap_or(folder.path.clone());
-            one(flash_ok(&format!("Downloading {name} from {username}")))
+            one(kit::Flash::ok(format!("Downloading {name} from {username}")).to_string())
         }
         Err(e) => failed(&e),
     }
@@ -1957,9 +1951,15 @@ async fn job_action(
                     scam.peer,
                     scam.jobs.len()
                 );
-                done_with(&s.app, &shown, true, flash_ok(&msg)).await
+                done_with(
+                    &s.app,
+                    &shown,
+                    true,
+                    Some(kit::Flash::ok(&msg).patch().into()),
+                )
+                .await
             }
-            Err(e) => one(flash_err(&e.message)),
+            Err(e) => one(kit::Flash::bad(&e.message).to_string()),
         };
     }
     let result = match action.as_str() {
@@ -1995,11 +1995,12 @@ async fn job_action(
 /// jobs in hand, and with `settled`, the jobs done with as well, since the
 /// change may have moved one into or out of them.
 async fn done(app: &App, shown: &Shown, settled: bool) -> Response {
-    done_with(app, shown, settled, String::new()).await
+    done_with(app, shown, settled, None).await
 }
 
-/// [`done`], with `extra` elements patched as well.
-async fn done_with(app: &App, shown: &Shown, settled: bool, extra: String) -> Response {
+/// [`done`], with an `extra` patch after it. Closes the page's question,
+/// for an action that asked first.
+async fn done_with(app: &App, shown: &Shown, settled: bool, extra: Option<Event>) -> Response {
     let html = match Uuid::parse_str(&shown.job) {
         Ok(id) => match job_page_html(app, id).await {
             Ok(html) => html,
@@ -2015,11 +2016,14 @@ async fn done_with(app: &App, shown: &Shown, settled: bool, extra: String) -> Re
             html
         }
     };
-    one(format!("{html}\n<div id=\"flash\"></div>\n{extra}"))
+    let mut events = vec![patch(&format!("{html}\n{}", kit::Flash::region()))];
+    events.extend(extra);
+    events.push(kit::Confirm::close().into());
+    askama_datastar::events(events)
 }
 
 fn failed(e: &anyhow::Error) -> Response {
-    one(flash_err(&format!("{e:#}")))
+    one(kit::Flash::bad(format!("{e:#}")).to_string())
 }
 
 async fn resolve(
@@ -2056,9 +2060,9 @@ async fn resolve_pasted(
     axum::Form(form): axum::Form<ReleaseForm>,
 ) -> Response {
     let Some(release) = crate::library::release_id(&form.release) else {
-        return one(flash_err(
-            "That is not a MusicBrainz or Discogs release id or link.",
-        ));
+        return one(
+            kit::Flash::bad("That is not a MusicBrainz or Discogs release id or link.").to_string(),
+        );
     };
     match s.app.jobs.import_soon(id, false, Some(release)).await {
         Ok(()) => {
@@ -2095,7 +2099,6 @@ async fn spectrogram(State(s): State<UiState>, Path((id, n)): Path<(Uuid, u32)>)
 #[derive(Template)]
 #[template(path = "job_files.html")]
 struct JobFiles {
-    id: Uuid,
     error: Option<String>,
     /// Each album the tags name, with a MusicBrainz search for it.
     albums: Vec<(String, String)>,
@@ -2165,18 +2168,13 @@ async fn job_files(State(s): State<UiState>, Path(id): Path<Uuid>) -> Response {
         albums.push((shown, format!("https://musicbrainz.org/search?{search}")));
     }
     let html = JobFiles {
-        id,
         error,
         albums,
         tracks,
     }
     .render()
     .unwrap_or_default();
-    askama_datastar::events([insert(
-        &format!("#files-{id}"),
-        ElementPatchMode::Replace,
-        &html,
-    )])
+    opened(&files_disclosure(&id.to_string()), html)
 }
 
 /// The files of a downloading job, each ticked to fetch or not.
@@ -2206,7 +2204,96 @@ async fn job_pick_html(app: &App, id: Uuid, error: Option<String>) -> String {
 }
 
 async fn job_pick(State(s): State<UiState>, Path(id): Path<Uuid>) -> Response {
-    one(job_pick_html(&s.app, id, None).await)
+    opened(
+        &pick_disclosure(&id.to_string()),
+        job_pick_html(&s.app, id, None).await,
+    )
+}
+
+/// One of a job card's disclosures, read from `url` when it opens and kept
+/// open across the stream's redraws of the card.
+struct Lazy {
+    id: String,
+    url: String,
+    summary: String,
+    placeholder: &'static str,
+    class: &'static str,
+}
+
+impl Lazy {
+    fn shell(&self) -> kit::Disclosure<'_> {
+        kit::Disclosure::new(&self.summary)
+            .id(&self.id)
+            .ignore_morph()
+            .class(self.class)
+    }
+
+    /// As the card draws it: closed, reading `url` each time it opens.
+    fn closed(&self) -> kit::Disclosure<'_> {
+        self.shell().loads(
+            &self.url,
+            askama_datastar::Html::trusted(format!(
+                r#"<p class="mt-1.5 text-meta text-muted">{}</p>"#,
+                self.placeholder
+            )),
+        )
+    }
+
+    /// The handler's answer: `body` in place of the disclosure's own, which
+    /// keeps its element and reads `url` again when next opened.
+    fn answer(&self, body: String) -> Event {
+        kit::Disclosure::fill(&self.id, askama_datastar::Html::trusted(body)).into()
+    }
+}
+
+/// A job card disclosure's answer, alone.
+fn opened(disclosure: &Lazy, body: String) -> Response {
+    askama_datastar::events([disclosure.answer(body)])
+}
+
+fn sources_disclosure(id: &str, alternates: &usize) -> Lazy {
+    let summary = match alternates {
+        0 => "sources and history".into(),
+        1 => "sources and history · 1 other copy".into(),
+        n => format!("sources and history · {n} other copies"),
+    };
+    Lazy {
+        id: format!("sources-{id}"),
+        url: format!("/jobs/{id}/sources"),
+        summary,
+        placeholder: "Reading history…",
+        class: "mt-2",
+    }
+}
+
+fn pick_disclosure(id: &str) -> Lazy {
+    Lazy {
+        id: format!("pick-{id}"),
+        url: format!("/jobs/{id}/pick"),
+        summary: "choose files".into(),
+        placeholder: "Reading files…",
+        class: "mt-2",
+    }
+}
+
+fn files_disclosure(id: &str) -> Lazy {
+    Lazy {
+        id: format!("files-{id}"),
+        url: format!("/jobs/{id}/files"),
+        summary: "files and their tags".into(),
+        placeholder: "Reading tags…",
+        class: "mt-2",
+    }
+}
+
+fn compare_disclosure(id: &str, release: &str) -> Lazy {
+    Lazy {
+        id: format!("cmp-{}", compare_id(id, release)),
+        url: format!("/jobs/{id}/compare/{release}"),
+        summary: "compare track by track".into(),
+        placeholder: "Fetching the release…",
+        class: "basis-full",
+    }
 }
 
 /// The ticked files are fetched and the rest skipped.
@@ -2233,11 +2320,12 @@ async fn pick_files(State(s): State<UiState>, Path(id): Path<Uuid>, body: Bytes)
         files: field(&fields, "files").unwrap_or_default().to_string(),
         ..Shown::default()
     };
+    let pick = job_pick_html(&s.app, id, error).await;
     done_with(
         &s.app,
         &shown,
         false,
-        job_pick_html(&s.app, id, error).await,
+        Some(pick_disclosure(&id.to_string()).answer(pick)),
     )
     .await
 }
@@ -2247,7 +2335,6 @@ async fn pick_files(State(s): State<UiState>, Path(id): Path<Uuid>, body: Bytes)
 #[derive(Template)]
 #[template(path = "job_compare.html")]
 struct JobCompare {
-    id: String,
     error: Option<String>,
     cmp: Option<sift::Comparison>,
 }
@@ -2278,43 +2365,43 @@ async fn job_compare(
         Ok(c) => (Some(c), None),
         Err(e) => (None, Some(format!("Couldn't compare: {e:#}"))),
     };
-    let id = compare_id(id, &release);
-    let html = JobCompare {
-        id: id.clone(),
-        error,
-        cmp,
-    }
-    .render()
-    .unwrap_or_default();
-    askama_datastar::events([insert(
-        &format!("#cmp-{id}"),
-        ElementPatchMode::Replace,
-        &html,
-    )])
+    let html = JobCompare { error, cmp }.render().unwrap_or_default();
+    opened(&compare_disclosure(&id.to_string(), &release), html)
 }
 
 #[derive(serde::Deserialize)]
-struct UserFileForm {
+struct UploadQuery {
     username: String,
-    filename: Option<String>,
-    #[serde(default = "page", deserialize_with = "shown_field")]
-    history: i64,
+    filename: String,
 }
 
 async fn cancel_upload(
     State(s): State<UiState>,
-    axum::Form(f): axum::Form<UserFileForm>,
+    Query(q): Query<UploadQuery>,
+    Signals(shown): Signals<Shown>,
 ) -> Response {
-    if let (Some(e), Some(name)) = (s.app.session.engine(), f.filename) {
-        e.cancel_upload(&f.username, &RawStr::from(name));
+    if let Some(e) = s.app.session.engine() {
+        e.cancel_upload(&q.username, &RawStr::from(q.filename));
     }
-    one(uploads_html(&s.app, f.history).await)
+    one(uploads_html(&s.app, shown.history).await)
 }
 
-async fn ban(State(s): State<UiState>, axum::Form(f): axum::Form<UserFileForm>) -> Response {
-    match graphql::set_ban(&s.app, &f.username, true).await {
-        Ok(_) => one(flash_ok(&format!("Banned {}", f.username))),
-        Err(e) => one(flash_err(&e.message)),
+/// A peer an action names in its address, since a button posts the page's
+/// signals rather than a form.
+#[derive(serde::Deserialize)]
+pub(super) struct PeerQuery {
+    pub(super) username: String,
+}
+
+async fn ban(State(s): State<UiState>, Query(p): Query<PeerQuery>) -> Response {
+    match graphql::set_ban(&s.app, &p.username, true).await {
+        Ok(_) => askama_datastar::events([
+            kit::Flash::ok(format!("Banned {}", p.username))
+                .patch()
+                .into(),
+            kit::Confirm::close().into(),
+        ]),
+        Err(e) => one(kit::Flash::bad(&e.message).to_string()),
     }
 }
 
@@ -2353,35 +2440,34 @@ fn peer_key(username: &str) -> String {
 
 /// A Ban button for a peer, or Unban once banned. Banning asks first: it
 /// refuses the peer everything and stops them being downloaded from.
-fn ban_button(username: &str, banned: bool) -> String {
-    let key = peer_key(username);
-    let (label, action, ask, tone) = if banned {
-        ("Unban", "/peer/unban", "", "quiet")
+fn ban_button(username: &str, banned: bool) -> kit::Button<'static> {
+    let (button, action) = if banned {
+        (kit::Button::quiet("Unban"), "/peer/unban")
     } else {
         (
-            "Ban",
+            kit::Button::quiet("Ban")
+                .bad()
+                .confirm("Ban this user?", "Ban")
+                .detail("They get nothing more from you, and nothing is downloaded from them."),
             "/peer/ban",
-            "confirm('Ban this user? They get nothing more from you, and nothing is downloaded from them.') && ",
-            "quiet bad",
         )
     };
-    format!(
-        r#"<form class="contents" data-peer-ban="{key}" data-indicator="_pb_{key}" data-on:submit="{ask}@post('{action}', {{contentType: 'form'}})"><input type="hidden" name="username" value="{user}"><button class="{tone}" data-attr:disabled="$_pb_{key}" data-class:busy="$_pb_{key}">{label}</button></form>"#,
-        user = escape(username),
-    )
+    button
+        .post(place_url(action, &[("username", username)]))
+        .data("peer-ban", peer_key(username))
 }
 
-async fn peer_ban(State(s): State<UiState>, axum::Form(f): axum::Form<UserFileForm>) -> Response {
-    set_peer_ban(&s, &f.username, true).await
+async fn peer_ban(State(s): State<UiState>, Query(p): Query<PeerQuery>) -> Response {
+    set_peer_ban(&s, &p.username, true).await
 }
 
-async fn peer_unban(State(s): State<UiState>, axum::Form(f): axum::Form<UserFileForm>) -> Response {
-    set_peer_ban(&s, &f.username, false).await
+async fn peer_unban(State(s): State<UiState>, Query(p): Query<PeerQuery>) -> Response {
+    set_peer_ban(&s, &p.username, false).await
 }
 
 async fn set_peer_ban(s: &UiState, username: &str, banned: bool) -> Response {
     if let Err(e) = graphql::set_ban(&s.app, username, banned).await {
-        return one(flash_err(&e.message));
+        return one(kit::Flash::bad(&e.message).to_string());
     }
     let msg = if banned {
         format!("Banned {username}")
@@ -2392,9 +2478,10 @@ async fn set_peer_ban(s: &UiState, username: &str, banned: bool) -> Response {
         insert(
             &format!("[data-peer-ban=\"{}\"]", peer_key(username)),
             ElementPatchMode::Replace,
-            &ban_button(username, banned),
+            &ban_button(username, banned).to_string(),
         ),
-        patch(&flash_ok(&msg)),
+        kit::Flash::ok(&msg).patch().into(),
+        kit::Confirm::close().into(),
     ])
 }
 

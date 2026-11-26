@@ -5,37 +5,34 @@
       <div class="grid min-w-0 flex-auto gap-1.5">
         <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
           <strong class="min-w-0 flex-auto wrap-anywhere">{{ username }}{% if mine %} (you){% endif %}</strong>
-          {% if let Some(st) = status %}<span class="status {{ st }}">{{ st }}</span>{% endif %}{% if banned %}<span class="status bad">banned</span>{% endif %}
+          {% if let Some(st) = status %}{{ crate::ui::state(st, st) }}{% endif %}{% if banned %}{{ kit::Status::bad("banned") }}{% endif %}
         </div>
         {% if !description.is_empty() %}<p class="whitespace-pre-wrap wrap-anywhere">{{ description }}</p>{% else if !mine && note.is_none() %}<p class="text-meta text-muted">No description.</p>{% endif %}
         {% if let Some(n) = note %}<p class="text-meta text-muted wrap-anywhere">{{ n }}</p>{% endif %}
       </div>
     </div>
     <div class="mt-2.5 flex flex-wrap items-center gap-2">
-      <a class="button quiet" href="{{ crate::ui::browse_href(username, "") }}">{% if mine %}Browse your shares{% else %}Browse shares{% endif %}</a>
+      {{ kit::Button::quiet(self.browse_label()).href(crate::ui::browse_href(username, "")) }}
       {% if !mine %}
-      <a class="button quiet" href="{{ crate::ui::chat_href("pm", username) }}">Message</a>
-      <form class="contents" data-indicator="_prof_bud" data-on:submit="@post('/chat/buddy/add', {contentType: 'form'})"><input type="hidden" name="username" value="{{ username }}"><button class="quiet" data-attr:disabled="$_prof_bud" data-class:busy="$_prof_bud">Add buddy</button></form>
-      {{ crate::ui::ban_button(username, *banned)|safe }}
-      <button type="button" class="quiet" data-indicator="_prof_refresh" data-attr:disabled="$_prof_refresh" data-class:busy="$_prof_refresh" data-on:click="@get('{{ self.refresh() }}')">Refresh</button>
+      {{ kit::Button::quiet("Message").href(crate::ui::chat_href("pm", username)) }}
+      {{ kit::Button::quiet("Add buddy").post(crate::ui::row_url("/chat/buddy/add", "username", username)) }}
+      {{ crate::ui::ban_button(username, *banned) }}
+      {{ kit::Button::quiet("Refresh").get(self.refresh()) }}
       {% endif %}
     </div>
-    {% if !stats.is_empty() %}
-    <dl class="mt-2.5 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1">
-      {% for (label, value) in stats %}<dt class="text-muted">{{ label }}</dt><dd class="wrap-anywhere">{{ value }}</dd>{% endfor %}
-    </dl>
-    {% endif %}
+    {% if !stats.is_empty() %}{{ self.pairs().class("mt-2.5") }}{% endif %}
     {% if !likes.is_empty() %}<p class="mt-2.5 text-meta wrap-anywhere"><span class="text-muted">Likes</span> {{ likes.join(", ") }}</p>{% endif %}
     {% if !hates.is_empty() %}<p class="text-meta wrap-anywhere"><span class="text-muted">Dislikes</span> {{ hates.join(", ") }}</p>{% endif %}
   </article>
   {% if mine %}
   <h3>Edit</h3>
   <p class="text-meta text-muted">Peers see this when they look you up.</p>
-  <form class="my-2.5 flex flex-col gap-2" enctype="multipart/form-data" data-indicator="_prof_save" data-on:submit="@post('/profile', {contentType: 'form'})">
-    <label class="field"><span>about you</span><textarea class="resize-y" name="description" rows="6" placeholder="About you and what you share">{{ description }}</textarea></label>
-    <label class="field"><span>picture</span><input type="file" name="picture" accept="image/jpeg,image/png"><small>A JPEG or PNG.</small></label>
-    {% if picture.is_some() %}<label class="flex items-center gap-2"><input type="checkbox" name="clear" value="1"> remove the picture</label>{% endif %}
-    <div><button class="primary" data-attr:disabled="$_prof_save" data-class:busy="$_prof_save">Save</button></div>
+  {% let edit = kit::Form::post("/profile") %}
+  <form {{ edit.attrs() }} class="my-2.5 flex flex-col gap-2" enctype="multipart/form-data">
+    {{ kit::Field::new("about you", kit::Textarea::new("description").rows(6).placeholder("About you and what you share").value(description).class("resize-y")) }}
+    {{ kit::Field::new("picture", self.picture_input()).hint("A JPEG or PNG.") }}
+    {% if picture.is_some() %}{{ kit::Check::new("clear", "remove the picture").value("1") }}{% endif %}
+    <div>{{ edit.submit(kit::Button::primary("Save")) }}</div>
   </form>
   {% endif %}
 </div>

@@ -5,9 +5,9 @@
     <div class="min-w-0 flex-1">
       <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
         <a class="min-w-0 font-semibold wrap-anywhere" href="{{ self.href(r.album.path) }}" data-album="{{ self.opening(r.album.path) }}" data-slot="{{ self.slot(r.album.path) }}">{% if let Some(a) = r.album.album %}{{ a }}{% else %}{{ self.rel(r.album.path) }}{% endif %}</a>
-        {% if r.spare().is_some() %}<span class="status spare">spare</span>{% endif %}
-        {% if r.kept() %}<span class="status keep">kept</span>{% endif %}
-        {% if let Some((_, to)) = r.refile() %}{% if to.is_some() %}<span class="status">would move</span>{% else %}<span class="status">can't file</span>{% endif %}{% endif %}
+        {% if r.spare().is_some() %}{{ crate::ui::state("spare", "spare") }}{% endif %}
+        {% if r.kept() %}{{ crate::ui::state("keep", "kept") }}{% endif %}
+        {% if let Some((_, to)) = r.refile() %}{% if to.is_some() %}{{ kit::Status::wait("would move") }}{% else %}{{ kit::Status::wait("can't file") }}{% endif %}{% endif %}
       </div>
       <div class="text-meta text-muted wrap-anywhere">{% if let Some(a) = r.album.album_artist %}{{ a }}{% endif %}{% if let Some(y) = r.album.year %} · {{ y }}{% endif %} · {% if r.album.format.is_empty() %}?{% else %}{{ r.album.format }}{% endif %} · {{ r.album.tracks }} track{% if r.album.tracks != 1 %}s{% endif %}</div>
       <div class="text-fine text-muted wrap-anywhere">{{ self.rel(r.album.path) }}</div>

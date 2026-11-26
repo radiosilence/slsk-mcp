@@ -6,9 +6,10 @@ use axum::Router;
 use axum::extract::{Path, State};
 use axum::response::Response;
 use axum::routing::{get, post};
+use koan_kit_web as kit;
 use uuid::Uuid;
 
-use super::{UiState, failed, flash_ok, one, patch, signals};
+use super::{UiState, failed, one, patch, signals};
 use crate::App;
 use crate::social::Wish;
 
@@ -35,9 +36,6 @@ struct WishlistView {
 }
 
 impl WishlistView {
-    fn sig(&self, w: &Wish) -> String {
-        format!("_wish_{}", w.id.simple())
-    }
     fn searched(&self, w: &Wish) -> String {
         match w.searched_at {
             Some(t) => format!("searched {}", super::ago(t)),
@@ -128,7 +126,7 @@ async fn add(State(s): State<UiState>, axum::Form(f): axum::Form<AddForm>) -> Re
             patch(&format!(
                 "{}\n{}",
                 html(&s.app).await,
-                flash_ok(&format!("Wished for {q}"))
+                kit::Flash::ok(format!("Wished for {q}"))
             )),
             signals(r#"{"_wishq":""}"#),
         ]),
@@ -138,7 +136,7 @@ async fn add(State(s): State<UiState>, axum::Form(f): axum::Form<AddForm>) -> Re
 
 async fn remove(State(s): State<UiState>, Path(id): Path<Uuid>) -> Response {
     match s.app.social.remove_wish(id).await {
-        Ok(()) => one(format!("{}\n<div id=\"flash\"></div>", html(&s.app).await)),
+        Ok(()) => one(format!("{}\n{}", html(&s.app).await, kit::Flash::region())),
         Err(e) => failed(&e),
     }
 }

@@ -1,21 +1,11 @@
 <div class="grid min-w-0 gap-3 *:min-w-0">
-  <form id="lib-find" class="flex flex-wrap items-center gap-2" data-indicator="_finding" data-on:submit="@post('/library/find', {contentType: 'form'})">
-    <input class="basis-full" name="q" value="{{ q }}" data-bind:_libq placeholder="burial, artist:burial, year:1990..1999" aria-label="Find albums" autocomplete="off">
-    <select class="flex-auto" name="since" aria-label="Imported when" data-bind:_libsince data-on:change="$_libsince != 'date' && el.form.requestSubmit()">
-      <option value="">imported any time</option>
-      <option value="today">imported today</option>
-      <option value="week">imported this week</option>
-      <option value="month">imported this month</option>
-      <option value="date">imported since…</option>
-    </select>
-    <input class="flex-auto" type="date" name="from" aria-label="Imported since" data-bind:_libfrom{% if !dated %} hidden{% endif %} data-attr:hidden="$_libsince != 'date'" data-on:change="el.form.requestSubmit()">
-    <select class="flex-auto" name="show" aria-label="Which albums" data-bind:_libshow data-on:change="el.form.requestSubmit()">
-      <option value="">every album</option>
-      <option value="dups">held more than once</option>
-      <option value="formats">in more than one format</option>
-      <option value="moves">not where the rules file them</option>
-    </select>
-    <button class="primary flex-auto" type="submit" data-attr:disabled="$_finding" data-class:busy="$_finding">Find</button>
+  {% let find = kit::Form::post("/library/find").id("lib-find") %}
+  <form {{ find.attrs() }} class="flex flex-wrap items-center gap-2">
+    {{ kit::Input::text("q").value(q).label("Find albums").placeholder("burial, artist:burial, year:1990..1999").autocomplete("off").bind("_libq").class("basis-full") }}
+    {{ kit::Select::new("since").label("Imported when").option("", "imported any time").option("today", "imported today").option("week", "imported this week").option("month", "imported this month").option("date", "imported since…").bind("_libsince").datastar("on:change", "$_libsince != 'date' && el.form.requestSubmit()").class("flex-auto") }}
+    {{ self.from() }}
+    {{ kit::Select::new("show").label("Which albums").option("", "every album").option("dups", "held more than once").option("formats", "in more than one format").option("moves", "not where the rules file them").bind("_libshow").datastar("on:change", "el.form.requestSubmit()").class("flex-auto") }}
+    {{ find.submit(kit::Button::primary("Find").class("flex-auto")) }}
   </form>
   {{ run|safe }}
   <div id="lib-preview"></div>

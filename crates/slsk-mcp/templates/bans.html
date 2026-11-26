@@ -1,10 +1,10 @@
 <div id="bans">
-{% match error %}{% when Some with (e) %}<p class="text-meta text-muted">{{ e }}</p>{% when None %}
+{% match error %}{% when Some with (e) %}{{ kit::Notice::bad(e) }}{% when None %}
   <p class="text-meta text-muted">A banned user gets no uploads, browsing or search results from you.</p>
-  {% if bans.is_empty() %}<p class="text-meta text-muted">Nobody is banned.</p>{% endif %}
+  {% if bans.is_empty() %}{{ kit::Empty::new("Nobody is banned.") }}{% endif %}
   <ul class="rows">
   {% for b in bans %}
-    <li class="[&.busy]:opacity-70" data-class:busy="$_unban_{{ loop.index }}"><a class="min-w-0 flex-[1_1_60%] truncate" href="{{ crate::ui::profile_href(b) }}">{{ b }}</a><form class="contents" data-indicator="_unban_{{ loop.index }}" data-on:submit="@post('/bans/remove', {contentType: 'form'})"><button name="username" value="{{ b }}" data-attr:disabled="$_unban_{{ loop.index }}" data-class:busy="$_unban_{{ loop.index }}">Unban</button></form></li>
+    <li><a class="min-w-0 flex-[1_1_60%] truncate" href="{{ crate::ui::profile_href(b) }}">{{ b }}</a>{{ kit::Button::bordered("Unban").post(crate::ui::row_url("/bans/remove", "username", b)) }}</li>
   {% endfor %}
   </ul>
 {% endmatch %}

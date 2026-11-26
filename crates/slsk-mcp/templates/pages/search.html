@@ -1,25 +1,16 @@
 <section class="min-w-0">
   {% include "finder.html" %}
-  <details class="disclosure mt-2">
-    <summary class="text-meta text-muted">search several at once</summary>
-    <form class="mt-2 grid gap-2" action="/search">
-      <textarea name="q" rows="6" placeholder="One search per line: artist album" aria-label="Searches, one per line" autocomplete="off" required></textarea>
+  {% filter kit::wrap(kit::Disclosure::new("search several at once").class("mt-2")) %}
+    {% let several = kit::Form::plain_get("/search") %}
+    <form {{ several.attrs() }} class="mt-2 grid gap-2">
+      {{ kit::Textarea::new("q").rows(6).label("Searches, one per line").placeholder("One search per line: artist album").attr("autocomplete", "off").required() }}
       <div class="flex flex-wrap items-center gap-2">
-        <label class="flex items-center gap-2 text-muted"><input type="checkbox" name="lossless" value="true"{% if lossless %} checked{% endif %}> lossless</label>
-        <button class="primary flex-auto" type="submit">Search all</button>
+        {{ kit::Check::new("lossless", "lossless").value("true").checked(lossless) }}
+        {{ several.submit(kit::Button::primary("Search all").class("flex-auto")) }}
       </div>
     </form>
-  </details>
+  {% endfilter %}
   {{ tabs|safe }}
-  {# Outside the strip, which is redrawn while searches run and would close it. #}
-  <dialog id="close-unpinned" class="sheet p-5" aria-labelledby="close-unpinned-title">
-    <p id="close-unpinned-title" class="font-semibold">Close every unpinned search?</p>
-    <p class="mt-1 text-meta text-muted">Their results are forgotten. Pinned searches stay open.</p>
-    <form method="dialog" class="mt-4 flex justify-end gap-2">
-      <button class="quiet" value="cancel" autofocus>Cancel</button>
-      <button class="bad" type="button" data-on:click="@post('/search/tabs/close-unpinned'); el.closest('dialog').close()">Close them</button>
-    </form>
-  </dialog>
   {# One request at a time draws the results: moving to another tab or showing more moves the address and reopens it, and the server answers from what the tab kept or the search still running. Datastar cancels a request only for another to the same address, so the feed aborts the last itself: a running search left behind would otherwise keep drawing over the tab moved to. #}
   <div id="search-feed" hidden{% if tab.is_some() && results.is_none() %} data-init="el.feed = new AbortController(); @get($_url, {openWhenHidden: true, requestCancellation: el.feed})"{% endif %} data-on:more="el.feed?.abort(); el.feed = new AbortController(); @get($_url, {openWhenHidden: true, requestCancellation: el.feed})"></div>
   {% if let Some(html) = results %}{{ html|safe }}

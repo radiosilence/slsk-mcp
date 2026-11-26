@@ -160,17 +160,21 @@ dependencies = [
 
 [[package]]
 name = "askama_datastar"
-version = "0.1.2"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "852e25d491015f5ec6db7498821a675e753ac29e3724ba01d6a8406400e03ca0"
+checksum = "d7bf8f99375019e687cd5c5412d27be025034875cac66955cf46b86aee6f4bdc"
 dependencies = [
  "askama",
  "axum",
  "datastar",
  "form_urlencoded",
  "futures-util",
+ "pin-project-lite",
  "serde",
  "serde_json",
+ "sha2",
+ "tower-layer",
+ "tower-service",
 ]
 
 [[package]]
@@ -1813,6 +1817,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "koan-kit-web"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2e6e4042f3481f0868f3bee3d26e33095ce62922cf09b907b93fbb0623e26dd9"
+dependencies = [
+ "askama",
+ "askama_datastar",
+ "axum",
+ "base64 0.23.1",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2239,9 +2257,9 @@ dependencies = [
 
 [[package]]
 name = "pin-project-lite"
-version = "0.2.17"
+version = "0.2.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
+checksum = "c938015719552d665fd0553b90d96cd7ff58e83e4c061ca99e6bb78865a72752"
 
 [[package]]
 name = "pkg-config"
@@ -3016,9 +3034,9 @@ dependencies = [
 
 [[package]]
 name = "sha2"
-version = "0.11.1"
+version = "0.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "47d7069beb7d6ac7b9acd1039986e73443f24234f41074da099d6f994ac9ad19"
+checksum = "5b0e5c7d67bc53f435386b2130fdc900488c5703770f6d8a4633060e34288a27"
 dependencies = [
  "cfg-if",
  "cpufeatures",
@@ -3153,6 +3171,7 @@ dependencies = [
  "futures-util",
  "http",
  "image",
+ "koan-kit-web",
  "libc",
  "parking_lot 0.13.0",
  "percent-encoding",

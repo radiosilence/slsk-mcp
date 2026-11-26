@@ -2,6 +2,7 @@
 //! and over the last week.
 
 use askama::Template;
+use koan_kit_web as kit;
 
 use crate::App;
 use crate::activity::{ShareEvent, Trends};
