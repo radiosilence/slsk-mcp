@@ -4,3 +4,4 @@
 /.npmrc.auth
 # The link `just kit` makes to koan-kit-web's source.
 /crates/slsk-mcp/styles/kit
+/.dev

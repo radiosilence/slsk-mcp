@@ -540,8 +540,15 @@ cargo test --workspace
 ```
 
 The network tests run real engines against `slsk-testserver` over loopback.
-To run the service locally: a `SEAL_KEY`, and
-`UI_INSECURE_NO_AUTH=1 UI_ADDR=127.0.0.1:8080`.
+
+`just dev` runs the service on http://127.0.0.1:8090 (`DEV_PORT` moves it)
+against the same test server, with no sign-in, so the web UI can be worked on
+without a Soulseek account. It writes a few short FLACs of noise with ffmpeg
+into a library and onto one sharing peer, `dev-sharer`, so the library has
+albums and a search for "fetch me" or "debut" finds something to download.
+watchexec rebuilds and restarts the service when anything under
+`crates/slsk-mcp` changes; a template whose classes changed still needs
+`just css`. Everything lives in `.dev/`, which can be deleted to start again.
 
 The web UI is drawn with the kōan web kit,
 [koan-kit-web](https://github.com/radiosilence/koan/tree/main/koan-kit-web), shared with koan
