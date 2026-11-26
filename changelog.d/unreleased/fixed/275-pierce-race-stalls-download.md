@@ -1,0 +1,1 @@
+- **A download no longer stalls in the remote queue after a connection race.** When a direct connection to a peer won over the one the server relays, a late reply on the relayed one was closed, and the peer's transfer offer sent on it went unread until the peer timed out.
