@@ -9,7 +9,9 @@ use axum::response::Response;
 use axum::routing::{get, post};
 use koan_kit_web as kit;
 
-use super::{UiState, failed, fields, human, one, patch, sent, signals, status_html};
+use super::{
+    Draw, Fragment, UiState, failed, fields, human, one, patch, sent, signals, status_html,
+};
 use crate::App;
 use crate::graphql::TriageCause;
 
@@ -35,7 +37,7 @@ struct BansView {
     error: Option<String>,
 }
 
-async fn bans_html(app: &App) -> String {
+async fn bans_html(app: &App) -> Fragment {
     let result = async {
         let engine = app.session.require()?;
         anyhow::Ok(crate::db::bans(&app.db, &engine.username()).await?)
@@ -48,22 +50,20 @@ async fn bans_html(app: &App) -> String {
             error: Some(format!("{e:#}")),
         },
     }
-    .render()
-    .unwrap_or_default()
+    .draw()
 }
 
 #[derive(Template)]
 #[template(path = "pages/bans.html")]
 struct BansPage {
-    list: String,
+    list: Fragment,
 }
 
-pub(super) async fn bans_page(app: &App) -> String {
+pub(super) async fn bans_page(app: &App) -> Fragment {
     BansPage {
         list: bans_html(app).await,
     }
-    .render()
-    .unwrap_or_default()
+    .draw()
 }
 
 async fn bans(State(s): State<UiState>) -> Response {
@@ -93,16 +93,15 @@ async fn set_ban(s: &UiState, user: &str, banned: bool) -> Response {
     }
 }
 
-/// The name typed on the bans page. Its Ban asks first, and the page's
-/// question posts the page's signals, so the name travels as one.
-#[derive(serde::Deserialize)]
-struct BanAsk {
-    #[serde(default)]
-    banuser: String,
-}
-
-async fn ban(State(s): State<UiState>, axum::Json(ask): axum::Json<BanAsk>) -> Response {
-    set_ban(&s, &ask.banuser, true).await
+/// The name typed on the bans page, posted by its form once the page's question is answered.
+async fn ban(State(s): State<UiState>, body: axum::body::Bytes) -> Response {
+    let form = super::fields(&body);
+    set_ban(
+        &s,
+        super::field(&form, "username").unwrap_or_default(),
+        true,
+    )
+    .await
 }
 
 async fn unban(State(s): State<UiState>, Query(p): Query<super::PeerQuery>) -> Response {
@@ -136,7 +135,7 @@ impl SettingsView {
     }
 }
 
-async fn settings_html(app: &App) -> String {
+async fn settings_html(app: &App) -> Fragment {
     let view = match app.session.engine() {
         Some(e) => {
             let (up, down) = e.limits();
@@ -165,21 +164,20 @@ async fn settings_html(app: &App) -> String {
             acoustid: app.jobs.acoustid(),
         },
     };
-    view.render().unwrap_or_default()
+    view.draw()
 }
 
 #[derive(Template)]
 #[template(path = "pages/settings.html")]
 struct SettingsPage {
-    settings: String,
+    settings: Fragment,
 }
 
-pub(super) async fn settings_page(app: &App) -> String {
+pub(super) async fn settings_page(app: &App) -> Fragment {
     SettingsPage {
         settings: settings_html(app).await,
     }
-    .render()
-    .unwrap_or_default()
+    .draw()
 }
 
 async fn settings(State(s): State<UiState>) -> Response {
@@ -324,15 +322,14 @@ pub(super) struct Days {
 #[derive(Template)]
 #[template(path = "pages/triage.html")]
 struct TriagePage {
-    triage: String,
+    triage: Fragment,
 }
 
-pub(super) async fn triage_page(app: &App, q: &Days) -> String {
+pub(super) async fn triage_page(app: &App, q: &Days) -> Fragment {
     TriagePage {
         triage: triage_html(app, q.days).await,
     }
-    .render()
-    .unwrap_or_default()
+    .draw()
 }
 
 async fn triage(State(s): State<UiState>, Query(q): Query<Days>) -> Response {
@@ -346,7 +343,7 @@ async fn triage(State(s): State<UiState>, Query(q): Query<Days>) -> Response {
 /// The newest events drawn for each cause; the count covers the rest.
 const EXAMPLES: usize = 20;
 
-async fn triage_html(app: &App, days: Option<i64>) -> String {
+async fn triage_html(app: &App, days: Option<i64>) -> Fragment {
     let days = days.unwrap_or(7).clamp(1, 365);
     let view = match crate::graphql::triage(app, days, EXAMPLES).await {
         Ok(causes) => TriageView {
@@ -360,5 +357,5 @@ async fn triage_html(app: &App, days: Option<i64>) -> String {
             error: Some(e.message),
         },
     };
-    view.render().unwrap_or_default()
+    view.draw()
 }

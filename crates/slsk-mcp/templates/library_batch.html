@@ -1,39 +1,37 @@
-<div id="lib-preview" class="panel">
+<div id="lib-preview" class="panel" data-init="el.scrollIntoView({block: 'start'})">
   <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5"><strong class="min-w-0 flex-auto wrap-anywhere">Edit tags: {{ rows.len() }} album{% if rows.len() != 1 %}s{% endif %}</strong></div>
   {% let batch = kit::Form::post("/library/preview/edit").id("lib-batch") %}
   <form {{ batch.attrs() }}>
-    <input type="hidden" name="batch" value="1">
-    {% for r in rows %}<input type="hidden" name="path" value="{{ r.album.path }}">{% endfor %}
+    {{ kit::Input::hidden("batch", "1") }}
+    {% for r in rows %}{{ kit::Input::hidden("path", r.album.path) }}{% endfor %}
     {% include "library_filter.html" %}
     <p class="my-0.5 text-meta text-muted">What is typed is set on every file of every album; a field left blank is left as each album has it, and one ticked Clear is removed. A primary release type chosen replaces each album's whole type with it and the secondary types ticked; secondary types ticked with the primary type left as is replace each album's own beside the primary type it has. The preview lists each file's changes first. Changing the album artist clears each file's list of album artists and their MusicBrainz ids; Credit artists splits it again.</p>
     <div class="my-2 grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2">
     {% for (field, label) in self.fields() %}
       {% if field == "albumtypes" %}
-      <div class="field col-span-full">
-        <label for="be-{{ field }}">{{ label }}</label>
+      {% filter kit::wrap(kit::Field::custom(label).class("col-span-full")) %}
         <div class="flex flex-wrap items-center gap-2">
-          <select id="be-{{ field }}" name="type-primary">
-            <option value="keep" selected>leave as is</option>
-          {% for p in self.primaries() %}
-            <option value="{{ p }}">{{ p }}</option>
-          {% endfor %}
-          </select>
+          {{ self.primary_select() }}
           {% include "library_types.html" %}
-          <label class="flex items-center gap-1.5 text-meta text-muted"><input type="checkbox" name="clear-{{ field }}" value="1" data-init="el.closest('.field').querySelectorAll('select, [name=type-secondary]').forEach(c => c.disabled = el.checked)" data-on:change="el.closest('.field').querySelectorAll('select, [name=type-secondary]').forEach(c => c.disabled = el.checked)"> clear</label>
+          {{ kit::Check::new("clear-{}"|format(field), "clear").value("1").datastar("on:change", "evt.target.closest('.field').querySelectorAll('select, [name=type-secondary]').forEach(c => c.disabled = evt.target.checked)") }}
         </div>
-      </div>
+      {% endfilter %}
       {% else %}
-      <div class="field">
-        <label for="be-{{ field }}">{{ label }}</label>
-        <div class="flex items-center gap-2"><input id="be-{{ field }}" class="min-w-0 flex-1" name="a-{{ field }}" placeholder="leave as is" autocomplete="off"><label class="flex items-center gap-1.5 text-meta text-muted"><input type="checkbox" name="clear-{{ field }}" value="1" data-on:change="document.getElementById('be-{{ field }}').disabled = el.checked"> clear</label></div>
-      </div>
+      {% filter kit::wrap(kit::Field::custom(label)) %}
+        <div class="flex items-center gap-2">
+          {{ kit::Input::text("a-{}"|format(field)).label(label).placeholder("leave as is").autocomplete("off").class("flex-1") }}
+          {{ kit::Check::new("clear-{}"|format(field), "clear").value("1").datastar("on:change", "evt.target.closest('.field').querySelector('input[name^=a-]').disabled = evt.target.checked") }}
+        </div>
+      {% endfilter %}
       {% endif %}
     {% endfor %}
-      <div class="field col-span-full">
-        <label for="be-rename-from">rename an artist</label>
-        <div class="flex flex-wrap items-center gap-2"><input id="be-rename-from" class="min-w-0 flex-1" name="rename-from" placeholder="the name as the files have it" autocomplete="off"><span class="text-meta text-muted" aria-hidden="true">→</span><input class="min-w-0 flex-1" name="rename-to" placeholder="the new name" aria-label="New name" autocomplete="off"></div>
-        <small>Wherever a file's artist or album artist is this name, in any case; a collaboration that includes it is left alone.</small>
-      </div>
+      {% filter kit::wrap(kit::Field::custom("rename an artist").hint("Wherever a file's artist or album artist is this name, in any case; a collaboration that includes it is left alone.").class("col-span-full")) %}
+        <div class="flex flex-wrap items-center gap-2">
+          {{ kit::Input::text("rename-from").label("Name as the files have it").placeholder("the name as the files have it").autocomplete("off").class("flex-1") }}
+          <span class="text-meta text-muted" aria-hidden="true">→</span>
+          {{ kit::Input::text("rename-to").label("New name").placeholder("the new name").autocomplete("off").class("flex-1") }}
+        </div>
+      {% endfilter %}
     </div>
     <div class="mt-2.5 flex flex-wrap items-center gap-2">
       {{ batch.submit(kit::Button::primary("Preview edit")) }}

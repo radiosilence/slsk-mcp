@@ -1,5 +1,5 @@
 <div id="thread">
-  <form id="thread-form"><input type="hidden" name="kind" value="{{ kind }}"><input type="hidden" name="name" value="{{ name }}"></form>
+  <form id="thread-form">{{ kit::Input::hidden("kind", kind) }}{{ kit::Input::hidden("name", name) }}</form>
 {% if !kind.is_empty() %}
   <article class="panel">
     <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
@@ -20,11 +20,11 @@
     {% endif %}
     {% let composer = kit::Form::post("/chat/send").id("composer") %}
     <form {{ composer.attrs() }} class="mt-2.5 flex items-end gap-2">
-      <input type="hidden" name="kind" value="{{ kind }}"><input type="hidden" name="name" value="{{ name }}">
+      {{ kit::Input::hidden("kind", kind) }}{{ kit::Input::hidden("name", name) }}
       {{ kit::Textarea::new("message").rows(2).label("Message").placeholder("Message").required().bind("_msg").class("min-w-0 flex-1 resize-y") }}
       {{ composer.submit(kit::Button::primary("Send")) }}
     </form>
-    {{ lines|safe }}
+    {{ lines }}
   </article>
 {% endif %}
 </div>

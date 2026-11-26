@@ -12,7 +12,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use askama::Template;
-use askama_datastar::{Asset, Csp, ElementPatchMode, PatchSignals, SecurityHeaders, Signals};
+use askama_datastar::{
+    Asset, Csp, ElementPatchMode, Html as Fragment, PatchSignals, SecurityHeaders, Signals,
+};
 use axum::Router;
 use axum::body::Bytes;
 use axum::extract::{Path, Query, Request, State};
@@ -220,13 +222,23 @@ fn fingerprint(bytes: &[u8]) -> String {
 }
 
 /// Markup this server built, as a patch of the elements with its ids.
+/// A view drawn as markup, which a template splices in as it is, with no `|safe`: everything in it was escaped as the
+/// view was rendered.
+trait Draw: Template + Sized {
+    fn draw(&self) -> Fragment {
+        Fragment::render(self).unwrap_or_default()
+    }
+}
+
+impl<T: Template> Draw for T {}
+
 fn patch(html: &str) -> Event {
     askama_datastar::Html::trusted(html).patch().into()
 }
 
 /// One patch as the whole answer.
-fn one(html: String) -> Response {
-    askama_datastar::events([patch(&html)])
+fn one(html: impl AsRef<str>) -> Response {
+    askama_datastar::events([patch(html.as_ref())])
 }
 
 /// Elements added at the end of the one `selector` names: rows streamed
@@ -350,9 +362,9 @@ const PAGES: &[(&str, &str, &str)] = &[
 #[derive(Template)]
 #[template(path = "page.html")]
 struct Page {
-    status: String,
-    up_count: String,
-    chat_count: String,
+    status: Fragment,
+    up_count: Fragment,
+    chat_count: Fragment,
     version: &'static str,
     /// Which page this is, as `PAGES` names it, or `job` for a job's own.
     tab: &'static str,
@@ -360,7 +372,7 @@ struct Page {
     heading: Option<String>,
     /// The page's starting signals, from the address.
     signals: String,
-    body: String,
+    body: Fragment,
     /// The server's clock as it drew the page (ms since the epoch), for
     /// `live.js` to correct a client clock that differs.
     now: i64,
@@ -398,9 +410,13 @@ impl Page {
             TOUCH_ICON.url("/assets/apple-touch-icon.png"),
         ]
     }
-    /// The page's live stream, opened again whenever it ends or goes quiet.
+    /// The page's live stream, opened again whenever it ends or goes quiet, and afresh when a signal it answers for
+    /// changes.
     fn stream(&self) -> askama_datastar::Html {
-        askama_datastar::reopen(&format!("/stream?page={}", self.tab))
+        askama_datastar::reopen_on(
+            &format!("/stream?page={}", self.tab),
+            &["jobs", "history", "tab", "files"],
+        )
     }
     fn title(&self) -> String {
         let name = self.heading.as_deref().unwrap_or_else(|| {
@@ -416,7 +432,7 @@ impl Page {
 #[derive(Template)]
 #[template(path = "pages/albums.html")]
 struct AlbumsPage {
-    jobs: String,
+    jobs: Fragment,
 }
 
 /// A browser asking for a page's address gets the whole page. The same
@@ -478,21 +494,6 @@ fn profile_href(username: &str) -> String {
 /// A conversation: `kind` is `room` or `pm`.
 fn chat_href(kind: &str, name: &str) -> String {
     place_url("/chat", &[("kind", kind), ("name", name)])
-}
-
-/// A link's click handler: a modified click (a new tab, a download) is left
-/// to the browser; a plain one runs `then` in place, unless `busy` (a signal,
-/// or empty for none) says the last is still loading.
-fn follow(busy: impl std::fmt::Display, then: impl std::fmt::Display) -> String {
-    let busy = busy.to_string();
-    let then = if busy.is_empty() {
-        then.to_string()
-    } else {
-        format!("{busy} || ({then})")
-    };
-    format!(
-        "evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || (evt.preventDefault(), {then})"
-    )
 }
 
 /// An address with its query, as the page keeps it.
@@ -584,8 +585,7 @@ async fn render_page(
         "albums" => AlbumsPage {
             jobs: jobs_html(&s.app, &Shown::default()).await,
         }
-        .render()
-        .unwrap_or_default(),
+        .draw(),
         "search" => search::page(&s.app, search_tab.as_ref(), &query(uri)).await,
         "uploads" => uploads_html(&s.app, PAGE).await,
         "wishlist" => wishlist::page(&s.app).await,
@@ -631,7 +631,7 @@ struct StatusView {
     search_free: Option<i64>,
 }
 
-async fn status_html(app: &App) -> String {
+async fn status_html(app: &App) -> Fragment {
     let view = match app.session.engine() {
         None => StatusView {
             state: "no-account",
@@ -677,7 +677,7 @@ async fn status_html(app: &App) -> String {
             }
         }
     };
-    view.render().unwrap_or_default()
+    view.draw()
 }
 
 /// Rows shown at first, and added by each "Show more", in the lists that
@@ -751,9 +751,9 @@ struct Advice {
 #[template(path = "jobs_live.html")]
 struct LiveJobs {
     /// Waiting on a decision: review, suspect, failed. Each card drawn.
-    attention: Vec<String>,
+    attention: Vec<Fragment>,
     /// Downloading, importing, or waiting on a metadata service.
-    underway: Vec<String>,
+    underway: Vec<Fragment>,
     /// Nothing in hand and nothing settled either.
     empty: bool,
 }
@@ -1050,11 +1050,13 @@ impl CardView {
         total: &u64,
         rate: &u64,
         at: &chrono::DateTime<chrono::Utc>,
-    ) -> String {
+    ) -> Fragment {
         // Stamped only while it moves: an idle card then reads the same
-        // from one redraw to the next, and is not sent again.
+        // from one redraw to the next, and is not sent again. Numbers only.
         let at = if *rate > 0 { at.timestamp_millis() } else { 0 };
-        format!(r#"data-bytes="{bytes}" data-total="{total}" data-rate="{rate}" data-at="{at}""#)
+        Fragment::trusted(format!(
+            r#"data-bytes="{bytes}" data-total="{total}" data-rate="{rate}" data-at="{at}""#
+        ))
     }
 
     fn at(&self, at: &chrono::DateTime<chrono::Utc>) -> i64 {
@@ -1155,18 +1157,18 @@ async fn settled_jobs(app: &App, shown: i64) -> SettledJobs {
 /// The newest `shown` jobs in hand, with the files drawn of those the
 /// `files` signal names. `settled` is whether any job is done with, for
 /// the line an empty list shows.
-async fn live_jobs_html(app: &App, shown: &Shown, settled: bool) -> String {
+async fn live_jobs_html(app: &App, shown: &Shown, settled: bool) -> Fragment {
     live_jobs(app, shown, settled).await.html
 }
 
 /// The jobs in hand, drawn whole and card by card, so a stream can send
 /// only the cards that changed while none comes, goes or moves section.
 struct LiveDrawn {
-    html: String,
+    html: Fragment,
     /// The sections and the order of the cards in them: when this is as
     /// last sent, the cards can be patched one by one.
     shape: String,
-    cards: Vec<(String, String)>,
+    cards: Vec<(String, Fragment)>,
 }
 
 async fn live_jobs(app: &App, shown: &Shown, settled: bool) -> LiveDrawn {
@@ -1194,7 +1196,7 @@ async fn live_jobs(app: &App, shown: &Shown, settled: bool) -> LiveDrawn {
         let open = shown.files.split(',').any(|f| f == id);
         let card = card(app, j, false, open);
         let warn = card.warn;
-        let html = card.render().unwrap_or_default();
+        let html = card.draw();
         shape.push_str(&format!("{}{id},", if warn { "!" } else { "" }));
         if warn {
             view.attention.push(html.clone());
@@ -1204,20 +1206,17 @@ async fn live_jobs(app: &App, shown: &Shown, settled: bool) -> LiveDrawn {
         cards.push((id, html));
     }
     LiveDrawn {
-        html: view.render().unwrap_or_default(),
+        html: view.draw(),
         shape,
         cards,
     }
 }
 
 /// The whole job list, as the page first draws it.
-async fn jobs_html(app: &App, shown: &Shown) -> String {
+async fn jobs_html(app: &App, shown: &Shown) -> Fragment {
     let settled = settled_jobs(app, shown.jobs).await;
     let live = live_jobs_html(app, shown, !settled.settled.is_empty()).await;
-    format!(
-        "<div id=\"jobs\">{live}{}</div>",
-        settled.render().unwrap_or_default()
-    )
+    Fragment::trusted(format!("<div id=\"jobs\">{live}{}</div>", settled.draw()))
 }
 
 /// Everything known of one job, for its own page: its card while it exists,
@@ -1332,7 +1331,7 @@ impl SourcesView {
 
 /// A job's page, with what to call it; none when there is neither a job nor
 /// any history under that id.
-async fn job_page(app: &App, id: Uuid) -> anyhow::Result<Option<(String, String)>> {
+async fn job_page(app: &App, id: Uuid) -> anyhow::Result<Option<(String, Fragment)>> {
     let (job, events) = tokio::join!(
         crate::db::job(&app.db, id),
         crate::db::job_events(&app.db, id)
@@ -1364,13 +1363,12 @@ async fn job_page(app: &App, id: Uuid) -> anyhow::Result<Option<(String, String)
         card,
         sources,
         import_log,
-    }
-    .render()?;
-    Ok(Some((title, html)))
+    };
+    Ok(Some((title, Fragment::render(&html)?)))
 }
 
 /// A job's page as the stream and its actions redraw it.
-async fn job_page_html(app: &App, id: Uuid) -> anyhow::Result<String> {
+async fn job_page_html(app: &App, id: Uuid) -> anyhow::Result<Fragment> {
     Ok(match job_page(app, id).await? {
         Some((_, html)) => html,
         None => JobPageView::gone(),
@@ -1379,8 +1377,10 @@ async fn job_page_html(app: &App, id: Uuid) -> anyhow::Result<String> {
 
 impl JobPageView {
     /// What replaces the page once the job and its history are both gone.
-    fn gone() -> String {
-        r#"<div id="job-page"><p class="text-meta text-muted">Nothing is known of this job. <a href="/">Back to albums</a></p></div>"#.into()
+    fn gone() -> Fragment {
+        Fragment::trusted(
+            r#"<div id="job-page"><p class="text-meta text-muted">Nothing is known of this job. <a href="/">Back to albums</a></p></div>"#,
+        )
     }
 }
 
@@ -1396,15 +1396,13 @@ async fn job_sources(State(s): State<UiState>, Path(id): Path<Uuid>) -> Response
                 &id.to_string(),
                 &job.as_ref().map_or(0, |j| j.alternates.0.len()),
             ),
-            SourcesView::new(None, job.as_ref(), events)
-                .render()
-                .unwrap_or_default(),
+            SourcesView::new(None, job.as_ref(), events).draw(),
         ),
         (Err(e), _) | (_, Err(e)) => opened(
             &sources_disclosure(&id.to_string(), &0),
             kit::Notice::bad(format!("Couldn't read the history: {e:#}"))
                 .class("mt-1.5")
-                .to_string(),
+                .html(),
         ),
     }
 }
@@ -1522,24 +1520,26 @@ impl UploadPeers {
 }
 
 /// The Uploads tab's badge: files being sent or waiting to be.
-fn up_count_html(app: &App) -> String {
+fn up_count_html(app: &App) -> Fragment {
     let n = app.session.engine().map_or(0, |e| e.uploads_pending());
     let text = if n > 0 { n.to_string() } else { String::new() };
-    format!(r#"<span id="up-count" class="text-ink empty:hidden">{text}</span>"#)
+    Fragment::trusted(format!(
+        r#"<span id="up-count" class="text-ink empty:hidden">{text}</span>"#
+    ))
 }
 
 /// The Uploads page: who is taking what now, then what has been sent.
-async fn uploads_html(app: &App, shown: i64) -> String {
-    format!(
+async fn uploads_html(app: &App, shown: i64) -> Fragment {
+    Fragment::trusted(format!(
         "<div id=\"uploads\">{}{}</div>",
         upload_peers_html(app),
         upload_history_html(app, shown).await
-    )
+    ))
 }
 
 /// Who is taking what from us, grouped by person: those receiving now
 /// first, then those waiting in the queue.
-fn upload_peers_html(app: &App) -> String {
+fn upload_peers_html(app: &App) -> Fragment {
     let mut peers: Vec<Peer> = Vec::new();
     let (mut sending, mut queued, mut sent, mut shared) = (0, 0, 0, 0);
     if let Some(e) = app.session.engine() {
@@ -1583,12 +1583,11 @@ fn upload_peers_html(app: &App) -> String {
         sent,
         shared,
     }
-    .render()
-    .unwrap_or_default()
+    .draw()
 }
 
 /// The newest `shown` uploads finished, and the day's and week's totals.
-async fn upload_history_html(app: &App, shown: i64) -> String {
+async fn upload_history_html(app: &App, shown: i64) -> Fragment {
     let now = chrono::Utc::now();
     let midnight = now
         .date_naive()
@@ -1612,8 +1611,7 @@ async fn upload_history_html(app: &App, shown: i64) -> String {
         today,
         week,
     }
-    .render()
-    .unwrap_or_default()
+    .draw()
 }
 
 /// The stream's request: the page it serves, as `PAGES` names it. The page's
@@ -1695,13 +1693,13 @@ async fn stream(
         let mut status = app.session.engine().map(|e| e.status());
         let ends = tokio::time::Instant::now() + LIFETIME;
         let mut run_sent = library::RunSent::seen(shown.libseen);
-        let mut sent: [String; 5] = Default::default();
+        let mut sent: [Fragment; 5] = Default::default();
         let mut settled_sent: Option<SettledJobs> = None;
         let mut history_sent: Option<Option<String>> = None;
         // The jobs list as last sent: its shape, and each card.
         let mut shape_sent = String::new();
         // Each card as last sent, and when.
-        let mut cards_sent: std::collections::HashMap<String, (String, tokio::time::Instant)> =
+        let mut cards_sent: std::collections::HashMap<String, (Fragment, tokio::time::Instant)> =
             Default::default();
         // A card held back by `CARD_EVERY`, due to be looked at again.
         let mut recheck: Option<tokio::time::Instant> = None;
@@ -1711,7 +1709,7 @@ async fn stream(
             ([true; crate::live::TOPICS], true, true, true);
         loop {
             let jobs = topics[Topic::Jobs as usize];
-            let mut parts: [Option<String>; 5] = Default::default();
+            let mut parts: [Option<Fragment>; 5] = Default::default();
             if connection || moved || minute {
                 parts[0] = Some(status_html(&app).await);
             }
@@ -1728,7 +1726,7 @@ async fn stream(
                         let settled = settled_jobs(&app, shown.jobs).await;
                         any_settled = !settled.settled.is_empty();
                         if settled_sent.as_ref() != Some(&settled) {
-                            parts[2] = Some(settled.render().unwrap_or_default());
+                            parts[2] = Some(settled.draw());
                             settled_sent = Some(settled);
                         }
                     }
@@ -1767,9 +1765,9 @@ async fn stream(
                     parts[1] = Some(match Uuid::parse_str(&shown.job) {
                         Ok(id) => job_page_html(&app, id).await.unwrap_or_else(|e| {
                             tracing::warn!(%id, error = %e, "could not show job");
-                            String::new()
+                            Fragment::new()
                         }),
-                        Err(_) => String::new(),
+                        Err(_) => Fragment::new(),
                     });
                 }
                 "uploads" => {
@@ -2008,12 +2006,12 @@ async fn done_with(app: &App, shown: &Shown, settled: bool, extra: Option<Event>
         },
         Err(_) => {
             let done_with = settled_jobs(app, shown.jobs).await;
-            let mut html = live_jobs_html(app, shown, !done_with.settled.is_empty()).await;
+            let live = live_jobs_html(app, shown, !done_with.settled.is_empty()).await;
             if settled {
-                html.push('\n');
-                html.push_str(&done_with.render().unwrap_or_default());
+                [live, done_with.draw()].into_iter().collect()
+            } else {
+                live
             }
-            html
         }
     };
     let mut events = vec![patch(&format!("{html}\n{}", kit::Flash::region()))];
@@ -2172,8 +2170,7 @@ async fn job_files(State(s): State<UiState>, Path(id): Path<Uuid>) -> Response {
         albums,
         tracks,
     }
-    .render()
-    .unwrap_or_default();
+    .draw();
     opened(&files_disclosure(&id.to_string()), html)
 }
 
@@ -2192,7 +2189,7 @@ impl JobPick {
     }
 }
 
-async fn job_pick_html(app: &App, id: Uuid, error: Option<String>) -> String {
+async fn job_pick_html(app: &App, id: Uuid, error: Option<String>) -> Fragment {
     let files = match crate::db::job(&app.db, id).await {
         Ok(Some(job)) => graphql::job_view(app, job, true)
             .await
@@ -2200,7 +2197,7 @@ async fn job_pick_html(app: &App, id: Uuid, error: Option<String>) -> String {
             .unwrap_or_default(),
         _ => Vec::new(),
     };
-    JobPick { id, error, files }.render().unwrap_or_default()
+    JobPick { id, error, files }.draw()
 }
 
 async fn job_pick(State(s): State<UiState>, Path(id): Path<Uuid>) -> Response {
@@ -2241,13 +2238,13 @@ impl Lazy {
 
     /// The handler's answer: `body` in place of the disclosure's own, which
     /// keeps its element and reads `url` again when next opened.
-    fn answer(&self, body: String) -> Event {
-        kit::Disclosure::fill(&self.id, askama_datastar::Html::trusted(body)).into()
+    fn answer(&self, body: Fragment) -> Event {
+        kit::Disclosure::fill(&self.id, body).into()
     }
 }
 
 /// A job card disclosure's answer, alone.
-fn opened(disclosure: &Lazy, body: String) -> Response {
+fn opened(disclosure: &Lazy, body: Fragment) -> Response {
     askama_datastar::events([disclosure.answer(body)])
 }
 
@@ -2365,7 +2362,7 @@ async fn job_compare(
         Ok(c) => (Some(c), None),
         Err(e) => (None, Some(format!("Couldn't compare: {e:#}"))),
     };
-    let html = JobCompare { error, cmp }.render().unwrap_or_default();
+    let html = JobCompare { error, cmp }.draw();
     opened(&compare_disclosure(&id.to_string(), &release), html)
 }
 

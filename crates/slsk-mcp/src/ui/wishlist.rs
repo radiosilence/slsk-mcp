@@ -9,7 +9,7 @@ use axum::routing::{get, post};
 use koan_kit_web as kit;
 use uuid::Uuid;
 
-use super::{UiState, failed, one, patch, signals};
+use super::{Draw, Fragment, UiState, failed, one, patch, signals};
 use crate::App;
 use crate::social::Wish;
 
@@ -52,7 +52,7 @@ impl WishlistView {
     }
 }
 
-pub(super) async fn html(app: &App) -> String {
+pub(super) async fn html(app: &App) -> Fragment {
     let view = match app.social.wishes().await {
         Ok(wishes) => {
             let mut rows = Vec::with_capacity(wishes.len());
@@ -86,21 +86,20 @@ pub(super) async fn html(app: &App) -> String {
             next: None,
         },
     };
-    view.render().unwrap_or_default()
+    view.draw()
 }
 
 #[derive(Template)]
 #[template(path = "pages/wishlist.html")]
 struct Page {
-    list: String,
+    list: Fragment,
 }
 
-pub(super) async fn page(app: &App) -> String {
+pub(super) async fn page(app: &App) -> Fragment {
     Page {
         list: html(app).await,
     }
-    .render()
-    .unwrap_or_default()
+    .draw()
 }
 
 async fn view(State(s): State<UiState>) -> Response {

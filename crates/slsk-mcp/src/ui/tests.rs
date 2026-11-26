@@ -1050,6 +1050,7 @@ mod profile {
             &server,
             Some(&info(Some(b"\x89PNG\r\n\x1a\nxx"))),
             None,
+            false,
         );
         assert!(html.contains("&#60;b&#62;dub&#60;/b&#62; techno"), "{html}");
         assert!(
@@ -1075,6 +1076,7 @@ mod profile {
             &Server::default(),
             Some(&info(Some(b"<svg/>"))),
             None,
+            false,
         );
         assert!(!html.contains("/profile/picture"), "{html}");
     }
@@ -1094,6 +1096,7 @@ mod profile {
             &server,
             None,
             Some("ann did not send their profile".into()),
+            false,
         );
         assert!(html.contains("did not send their profile"));
         assert!(html.contains(">7<"));

@@ -22,7 +22,7 @@ use slsk_engine::slsk_proto::peer::UserInfo;
 use slsk_engine::slsk_proto::server::{FromServer, ToServer, UserStats, UserStatus};
 use slsk_engine::{Engine, Event, Profile};
 
-use super::{UiState, failed, human, patch};
+use super::{Draw, Fragment, UiState, failed, human, patch};
 
 pub(super) fn routes() -> Router<UiState> {
     Router::new()
@@ -83,13 +83,12 @@ struct Page<'a> {
     signed_in: bool,
 }
 
-pub(super) fn page(s: &UiState, username: &str) -> String {
+pub(super) fn page(s: &UiState, username: &str) -> Fragment {
     Page {
         username: username.trim(),
         signed_in: s.app.session.engine().is_some(),
     }
-    .render()
-    .unwrap_or_default()
+    .draw()
 }
 
 #[derive(Template)]
@@ -107,6 +106,8 @@ struct View {
     hates: Vec<String>,
     /// Why the peer's own part is missing, or that it is on its way.
     note: Option<String>,
+    /// The note says the peer's own part is on its way.
+    asking: bool,
 }
 
 impl View {
@@ -242,13 +243,13 @@ async fn profile(State(s): State<UiState>, Query(q): Query<ProfileQuery>) -> Res
         let server = from_server(&engine, &username).await;
         if !asking.is_finished() {
             let note = format!("Asking {username} for their profile…");
-            yield patch(&peer(&username, engine.is_banned(&username), &server, None, Some(note)));
+            yield patch(&peer(&username, engine.is_banned(&username), &server, None, Some(note), true));
         }
         let html = match asking.await.map_err(|e| e.to_string()).and_then(|r| r) {
-            Ok(info) => peer(&username, engine.is_banned(&username), &server, Some(&info), None),
+            Ok(info) => peer(&username, engine.is_banned(&username), &server, Some(&info), None, false),
             Err(e) => {
                 let note = format!("{username} did not send their profile: {e}");
-                peer(&username, engine.is_banned(&username), &server, None, Some(note))
+                peer(&username, engine.is_banned(&username), &server, None, Some(note), false)
             }
         };
         yield patch(&html);
@@ -262,7 +263,8 @@ pub(super) fn peer(
     server: &Server,
     info: Option<&UserInfo>,
     note: Option<String>,
-) -> String {
+    asking: bool,
+) -> Fragment {
     let mut stats = Vec::new();
     if let Some(st) = &server.stats {
         stats.push(("Shares", shared(st)));
@@ -298,14 +300,14 @@ pub(super) fn peer(
         likes,
         hates,
         note,
+        asking,
     }
-    .render()
-    .unwrap_or_default()
+    .draw()
 }
 
 /// This account's profile, as peers see it, with what it has shared and
 /// fetched. The totals are kept in the database, so they span restarts.
-async fn own(s: &UiState, engine: &Engine) -> String {
+async fn own(s: &UiState, engine: &Engine) -> Fragment {
     let me = engine.username();
     let profile = engine.profile();
     let db = &s.app.db;
@@ -356,9 +358,9 @@ async fn own(s: &UiState, engine: &Engine) -> String {
         likes,
         hates,
         note: None,
+        asking: false,
     }
-    .render()
-    .unwrap_or_default()
+    .draw()
 }
 
 /// Save this account's description and picture. The picture is kept as it

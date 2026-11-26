@@ -14,7 +14,7 @@ use axum::response::Response;
 use axum::routing::{get, post};
 use koan_kit_web as kit;
 
-use super::{UiState, failed, fields, one, patch, sent, signals};
+use super::{Draw, Fragment, UiState, failed, fields, one, patch, sent, signals};
 use crate::App;
 use crate::social::RoomLine;
 
@@ -31,10 +31,12 @@ pub(super) fn routes() -> Router<UiState> {
 }
 
 /// The Chat tab's badge: private messages not yet read.
-pub(super) async fn count_html(app: &App) -> String {
+pub(super) async fn count_html(app: &App) -> Fragment {
     let n = app.social.unread().await.unwrap_or(0);
     let text = if n > 0 { n.to_string() } else { String::new() };
-    format!(r#"<span id="chat-count" class="text-ink empty:hidden">{text}</span>"#)
+    Fragment::trusted(format!(
+        r#"<span id="chat-count" class="text-ink empty:hidden">{text}</span>"#
+    ))
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -105,7 +107,7 @@ impl SideView {
     }
 }
 
-async fn side_html(app: &App) -> String {
+async fn side_html(app: &App) -> Fragment {
     let result = async {
         let mut conversations: Vec<Conversation> = app
             .social
@@ -163,7 +165,7 @@ async fn side_html(app: &App) -> String {
             error: Some(format!("{e:#}")),
         },
     };
-    view.render().unwrap_or_default()
+    view.draw()
 }
 
 #[derive(Template)]
@@ -181,7 +183,7 @@ struct RoomListView {
 const ROOMS: usize = 100;
 
 /// The most populated public rooms whose names hold `filter`.
-fn room_list_html(app: &App, filter: &str) -> String {
+fn room_list_html(app: &App, filter: &str) -> Fragment {
     let all = app.social.room_list();
     let listed = !all.is_empty();
     let filter = filter.trim().to_lowercase();
@@ -196,8 +198,7 @@ fn room_list_html(app: &App, filter: &str) -> String {
         hidden,
         listed,
     }
-    .render()
-    .unwrap_or_default()
+    .draw()
 }
 
 #[derive(serde::Deserialize, Default)]
@@ -236,7 +237,7 @@ impl LinesView {
 const LINES: usize = 200;
 
 /// Newest first, so the latest is under the composer without scrolling.
-async fn lines_html(app: &App, t: &Thread) -> String {
+async fn lines_html(app: &App, t: &Thread) -> Fragment {
     let view = match t.kind {
         Kind::Room => match app.social.rooms(LINES).into_iter().find(|r| r.0 == t.name) {
             Some((_, _, lines)) => LinesView {
@@ -289,7 +290,7 @@ async fn lines_html(app: &App, t: &Thread) -> String {
             }
         }
     };
-    view.render().unwrap_or_default()
+    view.draw()
 }
 
 #[derive(Template)]
@@ -298,16 +299,16 @@ struct ThreadView {
     kind: &'static str,
     name: String,
     members: Vec<String>,
-    lines: String,
+    lines: Fragment,
 }
 
-async fn thread_html(app: &App, t: Option<&Thread>) -> String {
+async fn thread_html(app: &App, t: Option<&Thread>) -> Fragment {
     let view = match t {
         None => ThreadView {
             kind: "",
             name: String::new(),
             members: Vec::new(),
-            lines: String::new(),
+            lines: Fragment::new(),
         },
         Some(t) => ThreadView {
             kind: match t.kind {
@@ -328,29 +329,28 @@ async fn thread_html(app: &App, t: Option<&Thread>) -> String {
             lines: lines_html(app, t).await,
         },
     };
-    view.render().unwrap_or_default()
+    view.draw()
 }
 
 #[derive(Template)]
 #[template(path = "pages/chat.html")]
 struct Page {
-    thread: String,
-    side: String,
-    rooms: String,
+    thread: Fragment,
+    side: Fragment,
+    rooms: Fragment,
 }
 
 /// The conversation the address names, if any, and the lists. The thread
 /// is drawn first: drawing a private conversation marks it read, which the
 /// lists then reflect.
-pub(super) async fn page(app: &App, q: &Poll) -> String {
+pub(super) async fn page(app: &App, q: &Poll) -> Fragment {
     let thread = thread_html(app, q.thread().as_ref()).await;
     Page {
         thread,
         side: side_html(app).await,
         rooms: room_list_html(app, ""),
     }
-    .render()
-    .unwrap_or_default()
+    .draw()
 }
 
 /// A conversation as the address names it, and whether this is the open
@@ -379,8 +379,8 @@ async fn view(State(s): State<UiState>, Query(q): Query<Poll>) -> Response {
     // the open thread; otherwise the thread is drawn whole, as when the
     // address names it.
     let mut html = match &thread {
-        Some(t) if q.poll => lines_html(&s.app, t).await + "\n",
-        Some(t) => thread_html(&s.app, Some(t)).await + "\n",
+        Some(t) if q.poll => format!("{}\n", lines_html(&s.app, t).await),
+        Some(t) => format!("{}\n", thread_html(&s.app, Some(t)).await),
         None => String::new(),
     };
     html.push_str(&side_html(&s.app).await);
@@ -392,7 +392,11 @@ async fn view(State(s): State<UiState>, Query(q): Query<Poll>) -> Response {
     html.push('\n');
     html.push_str(&count_html(&s.app).await);
     match thread.filter(|_| !q.poll) {
-        Some(t) => askama_datastar::events(vec![patch(&html), super::place(&t.url())]),
+        Some(t) => askama_datastar::events(vec![
+            patch(&html),
+            signals(r#"{"_msg":""}"#),
+            super::place(&t.url()),
+        ]),
         None => one(html),
     }
 }

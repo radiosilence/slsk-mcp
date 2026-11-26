@@ -1,7 +1,8 @@
 {# A page of the list's rows, then the button that fetches the page after; the handler splits them at the marker. #}
 {% for r in rows %}
   <li id="row-{{ self.slot(r.album.path) }}" class="flex-wrap items-start">
-    <input class="mx-0.5 mt-1 flex-none" type="checkbox" name="path" value="{{ r.album.path }}" aria-label="Select {{ self.rel(r.album.path) }}"{% if r.spare().is_some() %} data-spare{% endif %}{% if all %} checked{% endif %}>
+    {% let select = kit::Check::new("path", "Select {}"|format(self.rel(r.album.path))).value(r.album.path).checked(all).bare().class("mx-0.5 mt-1 flex-none") %}
+    {% if r.spare().is_some() %}{{ select.data("spare", "1") }}{% else %}{{ select }}{% endif %}
     <div class="min-w-0 flex-1">
       <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
         <a class="min-w-0 font-semibold wrap-anywhere" href="{{ self.href(r.album.path) }}" data-album="{{ self.opening(r.album.path) }}" data-slot="{{ self.slot(r.album.path) }}">{% if let Some(a) = r.album.album %}{{ a }}{% else %}{{ self.rel(r.album.path) }}{% endif %}</a>
@@ -20,6 +21,6 @@
 {% endfor %}
 <!-- more -->
 <div id="lib-more">{% if let Some((offset, left)) = next %}
-  <input type="hidden" name="offset" value="{{ offset }}">
-  <button class="quiet mt-2" formaction="/library/more" data-attr:disabled="$_lib_busy" data-class:busy="$_lib_busy && $_lib_via == '/library/more'">Show more ({{ left }} more)</button>
+  {{ kit::Input::hidden("offset", offset) }}
+  {{ kit::Button::quiet("Show more ({} more)"|format(left)).class("mt-2").post("/library/more").sends("lib-sel").busy_key("lib") }}
 {% endif %}</div>

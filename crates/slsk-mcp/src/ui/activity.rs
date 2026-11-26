@@ -1,6 +1,7 @@
 //! The Activity page: what other users do with our shares, as it happens
 //! and over the last week.
 
+use super::{Draw, Fragment};
 use askama::Template;
 use koan_kit_web as kit;
 
@@ -56,16 +57,15 @@ impl TrendsView {
     }
 }
 
-pub(super) fn feed_html(app: &App) -> String {
+pub(super) fn feed_html(app: &App) -> Fragment {
     FeedView {
         events: app.activity.feed(100),
         hour: app.activity.this_hour(),
     }
-    .render()
-    .unwrap_or_default()
+    .draw()
 }
 
-pub(super) async fn trends_html(app: &App) -> String {
+pub(super) async fn trends_html(app: &App) -> Fragment {
     let view = match app.activity.trends(DAYS).await {
         Ok(t) => TrendsView {
             trends: Some(t),
@@ -76,21 +76,20 @@ pub(super) async fn trends_html(app: &App) -> String {
             error: Some(format!("{e:#}")),
         },
     };
-    view.render().unwrap_or_default()
+    view.draw()
 }
 
 #[derive(Template)]
 #[template(path = "pages/activity.html")]
 struct Page {
-    feed: String,
-    trends: String,
+    feed: Fragment,
+    trends: Fragment,
 }
 
-pub(super) async fn page(app: &App) -> String {
+pub(super) async fn page(app: &App) -> Fragment {
     Page {
         feed: feed_html(app),
         trends: trends_html(app).await,
     }
-    .render()
-    .unwrap_or_default()
+    .draw()
 }
