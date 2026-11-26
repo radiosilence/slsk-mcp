@@ -86,9 +86,9 @@ mod library {
 
     #[test]
     fn an_address_that_does_not_parse_is_the_default_view() {
-        let f: Filter = crate::web::query(&"/library?q=a&q=b".parse().unwrap());
+        let f: Filter = askama_datastar::View::<Filter>::of("/library?q=a&q=b").0;
         assert_eq!(f, Filter::default());
-        let f: Filter = crate::web::query(&"/library?q=+a+&datastar=%7B%7D".parse().unwrap());
+        let f: Filter = askama_datastar::View::<Filter>::of("/library?q=+a+&datastar=%7B%7D").0;
         assert_eq!(f.q, "a");
     }
 
@@ -262,10 +262,10 @@ mod library {
 
     #[test]
     fn the_address_lists_every_open_album() {
-        let uri: http::Uri = "/library?q=x&album=%2Fm%2FA&album=&album=%2Fm%2FB%20%26%20C"
-            .parse()
-            .unwrap();
-        assert_eq!(open_albums(&uri), ["/m/A", "/m/B & C"]);
+        let open = askama_datastar::View::<Open>::of(
+            "/library?q=x&album=%2Fm%2FA&album=&album=%2Fm%2FB%20%26%20C",
+        );
+        assert_eq!(open.0.albums(), ["/m/A", "/m/B & C"]);
         // An album's slot is named after its path, and only a plain name is
         // taken from a form, since it is spliced into selectors.
         let slot = slot_of("/m/A");

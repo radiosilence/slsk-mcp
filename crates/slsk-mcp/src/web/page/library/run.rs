@@ -13,10 +13,10 @@ use axum::response::{IntoResponse, Response};
 use koan_kit_web as kit;
 
 use super::plan::{Action, ArtChoice};
-use super::{ArtStash, Closed, key, rel, slot_in, stashed};
+use super::{ArtStash, key, rel, slot_in, stashed};
 use crate::library::{AlbumEdit, TagEdits, by_path};
 use crate::live::{Topic, Watched};
-use crate::web::{Draw, UiState, failed, field, fields, signals};
+use crate::web::{UiState, failed, field, fields, signals};
 
 /// The library's runs: the one going or the last, the slot each takes in
 /// turn, and the lock held while one joins the queue.
@@ -252,7 +252,7 @@ pub(in crate::web) async fn apply(
     askama_datastar::stream(async_stream::stream! {
         // What it was applied from goes back to how it reads, every form on
         // it closed.
-        let closed = |part| Event::from(Closed { slot: &from, part }.draw().patch());
+        let closed = |part| Event::from(askama_datastar::clear(&format!("#{from}-{part}")));
         yield closed("preview");
         if from != "lib" {
             yield closed("edit");
