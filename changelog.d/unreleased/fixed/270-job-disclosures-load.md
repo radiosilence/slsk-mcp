@@ -1,0 +1,1 @@
+- **A job's sources and its file choice load again.** Opening "sources and history" or "choose files" on a job card left the placeholder in place, as did saving the choice.
