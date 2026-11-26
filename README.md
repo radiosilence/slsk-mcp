@@ -557,7 +557,13 @@ markup for buttons, forms, fields, statuses, meters, notices, sheets and the
 page's head, with their accessibility and Datastar wiring, so the templates do
 not repeat it: a button that posts is busy for exactly as long as its own
 request runs, and a question before a change is asked in the page's one
-`kit::Confirm`, whose action's handler closes it. Layout is Tailwind v4
+`kit::Confirm`, whose action's handler closes it. A form with several
+actions gives each its own button that sends the form's fields to its own URL,
+so Enter and `required` keep working and only the pressed button spins; links
+that move within a page load in place, with the address and history following;
+controls in a row or toolbar take the kit's compact size rather than restyling.
+A fragment the Rust code renders is an `askama_datastar::Html`, so templates
+splice it without `|safe`. Layout is Tailwind v4
 utilities in the templates and in the HTML the Rust code writes.
 `crates/slsk-mcp/styles/` holds only what is slsk-mcp's own. The kit removes
 Tailwind's palette, radii, shadows and type sizes, so such a class compiles to
