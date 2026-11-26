@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.28.1
+
+### Changed
+
+- Fix download form styling and use combi/compact fields where sensible.
+
+### Fixed
+
+- **A download no longer stalls in the remote queue after a connection race.** When a direct connection to a peer won over the one the server relays, a late reply on the relayed one was closed, and the peer's transfer offer sent on it went unread until the peer timed out.
+
+### Internal
+
+- **`just dev`.** Runs the service locally against the in-repo test server with dummy albums in the library and on one sharing peer, rebuilding on change, so the web UI can be worked on without a Soulseek account.
+
 ## 0.28.0
 
 ### Added
