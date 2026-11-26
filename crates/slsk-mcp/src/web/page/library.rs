@@ -21,6 +21,7 @@ use koan_kit_web as kit;
 use super::{Body, Page, Tab, View};
 use crate::art::{AlbumArt, Image};
 use crate::library::{AlbumMove, LibraryAlbum, Overview, by_path};
+use crate::web::stream::Shown;
 use crate::web::{Draw, UiState, failed, field, fields, insert, place};
 
 pub(in crate::web) mod plan;
@@ -426,7 +427,8 @@ impl Page for Library {
         // The slot of the album whose art form is open, if any.
         .signal("_artform", "")
         // The page has no list yet: the stream draws it.
-        .signal("libseen", 0))
+        .signal("libseen", 0)
+        .signal("librows", 0))
     }
 }
 
@@ -443,7 +445,16 @@ pub(in crate::web) struct List {
 }
 
 impl List {
-    pub(in crate::web) async fn of(s: &UiState, filter: &Filter) -> Self {
+    /// The albums the list draws, by path.
+    pub(in crate::web) fn paths(&self) -> impl Iterator<Item = &str> {
+        self.rows
+            .iter()
+            .flat_map(|r| &r.rows)
+            .map(|r| r.album.path.as_str())
+    }
+
+    /// The list with its first `held` rows, a page at least.
+    pub(in crate::web) async fn of(s: &UiState, filter: &Filter, held: usize) -> Self {
         let listed = if filter.since == "date" && filter.since_secs(chrono::Local::now()).is_none()
         {
             Err(anyhow::anyhow!("Pick the date to list imports since."))
@@ -455,7 +466,7 @@ impl List {
                 filter: filter.clone(),
                 total: rows.len(),
                 spares: rows.iter().filter(|r| r.spare().is_some()).count(),
-                rows: Some(Rows::page(s, filter, rows, 0, false)),
+                rows: Some(Rows::page(s, filter, rows, 0, held.max(SHOWN), false)),
                 error: None,
             },
             Err(e) => Self {
@@ -492,9 +503,16 @@ struct More {
 
 impl Rows {
     /// The page of `rows` starting at `from`.
-    fn page(s: &UiState, filter: &Filter, rows: Vec<Row>, from: usize, all: bool) -> Self {
+    fn page(
+        s: &UiState,
+        filter: &Filter,
+        rows: Vec<Row>,
+        from: usize,
+        take: usize,
+        all: bool,
+    ) -> Self {
         let total = rows.len();
-        let rows: Vec<Row> = rows.into_iter().skip(from).take(SHOWN).collect();
+        let rows: Vec<Row> = rows.into_iter().skip(from).take(take).collect();
         let end = from + rows.len();
         Self {
             root: s.app.library.root().to_string_lossy().into_owned(),
@@ -545,10 +563,20 @@ pub(in crate::web) async fn more(State(s): State<UiState>, body: Bytes) -> Respo
         Ok(rows) => rows,
         Err(e) => return failed(&e),
     };
-    let page = Rows::page(&s, &filter, rows, from, field(&form, "all").is_some());
+    let page = Rows::page(
+        &s,
+        &filter,
+        rows,
+        from,
+        SHOWN,
+        field(&form, "all").is_some(),
+    );
+    let held = from + page.rows.len();
     askama_datastar::events([
         insert("#lib-rows", ElementPatchMode::Append, &page.draw()),
         page.more.draw().patch().into(),
+        // So the stream redraws as many rows as the page now holds.
+        crate::web::signals(serde_json::json!({ "librows": held })),
     ])
 }
 
@@ -558,9 +586,9 @@ pub(in crate::web) async fn more(State(s): State<UiState>, body: Bytes) -> Respo
 pub(in crate::web) async fn album(
     State(s): State<UiState>,
     Query(AlbumQuery { filter: _, path }): Query<AlbumQuery>,
-    Signals(showing): Signals<Showing>,
+    Signals(shown): Signals<Shown>,
 ) -> Response {
-    let uri: http::Uri = showing.url.parse().unwrap_or_default();
+    let uri = shown.uri();
     let filter: Filter = crate::web::query(&uri);
     let mut open = open_albums(&uri);
     let slot = slot_of(&path);
@@ -579,13 +607,6 @@ pub(in crate::web) async fn album(
         yield art_html(&s, &path).await.patch().into();
     })
     .into_response()
-}
-
-/// The page's own address, as Datastar sends it with every request.
-#[derive(serde::Deserialize, Default)]
-pub(in crate::web) struct Showing {
-    #[serde(default)]
-    url: String,
 }
 
 /// A region the server filled (a preview, an edit form) closed.

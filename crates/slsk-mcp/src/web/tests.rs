@@ -971,7 +971,6 @@ mod browse {
 }
 
 mod profile {
-    use std::sync::Arc;
 
     use slsk_engine::slsk_proto::peer::UserInfo;
     use slsk_engine::slsk_proto::server::{UserStats, UserStatus};
@@ -1073,17 +1072,6 @@ mod profile {
         assert!(html.contains("did not send their profile"));
         assert!(html.contains(">7<"));
         assert!(!html.contains("No description."));
-    }
-
-    #[test]
-    fn only_the_latest_answers_are_kept() {
-        let cache = Cache::default();
-        cache.put("first", Arc::new(info(None)));
-        for n in 0..KEEP {
-            cache.put(&format!("u{n}"), Arc::new(info(None)));
-        }
-        assert!(cache.get("first").is_none());
-        assert!(cache.get(&format!("u{}", KEEP - 1)).is_some());
     }
 }
 

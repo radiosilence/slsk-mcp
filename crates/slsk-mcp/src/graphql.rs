@@ -1293,6 +1293,18 @@ pub(crate) fn listen(
     })
 }
 
+/// The answers to a search of `query` already under way, to follow it
+/// without sending another: `None` when no search of those words is
+/// listening.
+pub(crate) fn listening(query: &str) -> Option<tokio::sync::watch::Receiver<Heard>> {
+    let key = query.trim().to_lowercase();
+    SEARCHES
+        .lock()
+        .get(&key)
+        .map(|(_, _, heard)| heard.clone())
+        .filter(|heard| !heard.borrow().done && heard.has_changed().is_ok())
+}
+
 /// Registers the search before it is paced, under the same lock as the
 /// look-up, and paces and listens in a task of its own: two callers of the
 /// same words, or a caller that goes away while the search waits its turn,

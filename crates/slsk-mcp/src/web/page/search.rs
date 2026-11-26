@@ -6,7 +6,7 @@
 //! the kept results after. Results older than the network's ten-minute reuse
 //! are marked stale and can be searched again.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
@@ -27,6 +27,7 @@ use crate::App;
 use crate::db::{self, SearchTab};
 use crate::folders::{Filter, Folder};
 use crate::graphql;
+use crate::web::stream::Shown;
 use crate::web::{Draw, UiState, failed, field, fields, human, place_url};
 
 /// Folders shown at first, and added by each "Show more". A generic query is
@@ -92,7 +93,7 @@ impl Page for Search {
     async fn body(s: &UiState, View(view): View<SearchQuery>) -> anyhow::Result<Body> {
         // A search typed or pasted opens its tabs, and the page moves to the first.
         if !view.q.trim().is_empty() {
-            let first = open(&s.app, &view.q, !view.lossless.is_empty()).await?;
+            let first = open(s, &view.q, !view.lossless.is_empty()).await?;
             return Ok(Body::redirect(
                 first.map_or("/search".to_string(), |id| format!("/search?tab={id}")),
             ));
@@ -102,15 +103,23 @@ impl Page for Search {
             None => None,
         };
         let results = match (&tab, s.app.session.engine()) {
-            (Some(t), _) if t.searched_at.is_some() => {
-                Some(Results::kept(&s.app, t, view.shown()).await.draw())
+            (Some(t), Some(engine)) if t.searched_at.is_some() => {
+                let results = Results::kept(s, t, view.shown()).await;
+                // Kept results can be hours old: who is online is asked anew.
+                for user in results.users() {
+                    s.peers.ask_status(engine, user);
+                }
+                Some(results.draw())
+            }
+            (Some(t), None) if t.searched_at.is_some() => {
+                Some(Results::kept(s, t, view.shown()).await.draw())
             }
             // A search lost to a restart starts again here; one running is
             // joined, and the stream draws it as peers answer.
             (Some(t), Some(engine)) => {
-                run(s.app.clone(), t.id, t.query.clone(), t.lossless);
+                run(s, t.id, t.query.clone(), t.lossless);
                 let heard = graphql::listen(engine, &t.query, LISTEN).borrow().clone();
-                Some(Results::heard(engine, t, &heard, view.shown()).draw())
+                Some(Results::heard(s, engine, t, &heard, view.shown()).draw())
             }
             _ => None,
         };
@@ -128,7 +137,8 @@ impl Page for Search {
 /// Open a tab for each line of `text`, or bring back the one already open for
 /// those words and filter, searching it again if it is stale or failed.
 /// Returns the first.
-async fn open(app: &Arc<App>, text: &str, lossless: bool) -> anyhow::Result<Option<Uuid>> {
+async fn open(s: &UiState, text: &str, lossless: bool) -> anyhow::Result<Option<Uuid>> {
+    let app = &s.app;
     let mut first = None;
     let mut seen = HashSet::new();
     for words in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
@@ -139,13 +149,13 @@ async fn open(app: &Arc<App>, text: &str, lossless: bool) -> anyhow::Result<Opti
             Some(tab) => {
                 if tab.error.is_some() || stale(&tab) {
                     db::rerun_search_tab(&app.db, tab.id).await?;
-                    run(app.clone(), tab.id, tab.query, lossless);
+                    run(s, tab.id, tab.query, lossless);
                 }
                 tab.id
             }
             None => {
                 let id = db::open_search_tab(&app.db, words, lossless).await?;
-                run(app.clone(), id, words.to_string(), lossless);
+                run(s, id, words.to_string(), lossless);
                 id
             }
         };
@@ -169,13 +179,15 @@ fn ago(at: chrono::DateTime<chrono::Utc>) -> String {
     }
 }
 
-/// Search for the tab in the background and keep what it finds. A tab
-/// already searching is left to the search it has.
-pub(in crate::web) fn run(app: Arc<App>, id: Uuid, query: String, lossless: bool) {
+/// Search for the tab in the background and keep what it finds, then ask
+/// whether the peers behind the best of it are online. A tab already
+/// searching is left to the search it has.
+pub(in crate::web) fn run(s: &UiState, id: Uuid, query: String, lossless: bool) {
     static RUNNING: LazyLock<parking_lot::Mutex<HashSet<Uuid>>> = LazyLock::new(Default::default);
     if !RUNNING.lock().insert(id) {
         return;
     }
+    let (app, peers) = (s.app.clone(), s.peers.clone());
     tokio::spawn(async move {
         let heard = match app.session.engine().cloned() {
             Some(engine) => graphql::responses(&engine, &query, LISTEN)
@@ -192,6 +204,16 @@ pub(in crate::web) fn run(app: Arc<App>, id: Uuid, query: String, lossless: bool
             }
             Err(e) => (0, 0, Vec::new(), Some(e)),
         };
+        if let Some(engine) = app.session.engine() {
+            let users: HashSet<&str> = folders
+                .iter()
+                .take(FOUND)
+                .map(|f| f.username.as_str())
+                .collect();
+            for user in users {
+                peers.ask_status(engine, user);
+            }
+        }
         if let Err(e) = db::finish_search_tab(&app.db, id, responses, found, folders, error).await {
             tracing::warn!(%id, error = %e, "could not keep a search's results");
         }
@@ -293,11 +315,15 @@ pub(in crate::web) struct Results {
     /// How long ago the search finished.
     age: Option<String>,
     stale: bool,
+    /// Whether the peers behind the folders are online, as far as the
+    /// server has said.
+    statuses: HashMap<String, &'static str>,
 }
 
 impl Results {
     /// A finished tab's results, from what it kept.
-    pub(in crate::web) async fn kept(app: &App, tab: &SearchTab, shown: usize) -> Self {
+    pub(in crate::web) async fn kept(s: &UiState, tab: &SearchTab, shown: usize) -> Self {
+        let app = &s.app;
         let mut folders = db::search_tab_folders(&app.db, tab.id)
             .await
             .inspect_err(
@@ -321,11 +347,14 @@ impl Results {
             responses: tab.responses as usize,
             found: tab.found as usize,
             error: tab.error.clone(),
+            statuses: HashMap::new(),
         }
+        .with_statuses(s)
     }
 
     /// A running search's results, as far as peers have answered.
     pub(in crate::web) fn heard(
+        s: &UiState,
         engine: &slsk_engine::Engine,
         tab: &SearchTab,
         heard: &graphql::Heard,
@@ -349,7 +378,31 @@ impl Results {
             error: heard.error.as_ref().map(|e| e.to_string()),
             age: heard.done.then(|| ago(chrono::Utc::now())),
             stale: false,
+            statuses: HashMap::new(),
         }
+        .with_statuses(s)
+    }
+
+    /// Who is online among the peers behind the folders, as answered so far.
+    fn with_statuses(mut self, s: &UiState) -> Self {
+        self.statuses = self
+            .users()
+            .filter_map(|u| Some((u.to_string(), s.peers.status.answer(u)?.ok()?)))
+            .collect();
+        self
+    }
+
+    /// The peers behind the folders shown.
+    pub(in crate::web) fn users(&self) -> impl Iterator<Item = &str> {
+        self.folders
+            .iter()
+            .map(|f| f.username.as_str())
+            .collect::<HashSet<_>>()
+            .into_iter()
+    }
+
+    fn status(&self, f: &Folder) -> Option<&'static str> {
+        self.statuses.get(&f.username).copied()
     }
 
     fn kept_most(&self) -> usize {
@@ -406,7 +459,7 @@ fn next(tab: Uuid, shown: usize) -> String {
 }
 
 /// Stable across regroups, so an open preview stays with its folder.
-pub(in crate::web) fn folder_id(f: &Folder) -> u64 {
+fn folder_id(f: &Folder) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::hash::DefaultHasher::new();
     (&f.username, f.remote_path.as_bytes()).hash(&mut h);
@@ -438,31 +491,18 @@ pub(in crate::web) async fn pin(State(s): State<UiState>, Path(id): Path<Uuid>) 
     }
 }
 
-/// The page's own tab, as it posts it: the address it shows.
-#[derive(serde::Deserialize, Default)]
-pub(in crate::web) struct Showing {
-    #[serde(default)]
-    url: String,
-}
-
-impl Showing {
-    fn tab(&self) -> Option<Uuid> {
-        crate::web::query::<SearchQuery>(&self.url.parse().unwrap_or_default()).tab()
-    }
-}
-
 /// Closing the tab the page shows moves to the one after it, or else the
 /// one before.
 pub(in crate::web) async fn close(
     State(s): State<UiState>,
     Path(id): Path<Uuid>,
-    askama_datastar::Signals(showing): askama_datastar::Signals<Showing>,
+    askama_datastar::Signals(shown): askama_datastar::Signals<Shown>,
 ) -> Response {
     let tabs = db::search_tabs(&s.app.db).await.unwrap_or_default();
     if let Err(e) = db::close_search_tabs(&s.app.db, Some(id)).await {
         return failed(&e.into());
     }
-    if showing.tab() == Some(id)
+    if shown.view::<SearchQuery>().tab() == Some(id)
         && let Some(i) = tabs.iter().position(|t| t.id == id)
     {
         let neighbour = tabs
@@ -476,13 +516,13 @@ pub(in crate::web) async fn close(
 /// Asked first, in the page's question, which closes once it is done.
 pub(in crate::web) async fn close_unpinned(
     State(s): State<UiState>,
-    askama_datastar::Signals(showing): askama_datastar::Signals<Showing>,
+    askama_datastar::Signals(shown): askama_datastar::Signals<Shown>,
 ) -> Response {
     if let Err(e) = db::close_search_tabs(&s.app.db, None).await {
         return failed(&e.into());
     }
     let open = db::search_tabs(&s.app.db).await.unwrap_or_default();
-    match showing.tab() {
+    match shown.view::<SearchQuery>().tab() {
         Some(id) if !open.iter().any(|t| t.id == id) => go(&match open.first() {
             Some(t) => format!("/search?tab={}", t.id),
             None => "/search".to_string(),
@@ -501,7 +541,7 @@ pub(in crate::web) async fn again(State(s): State<UiState>, Path(id): Path<Uuid>
         return failed(&e.into());
     }
     graphql::forget_answers(&tab.query);
-    run(s.app.clone(), id, tab.query, tab.lossless);
+    run(&s, id, tab.query, tab.lossless);
     go(&format!("/search?tab={id}"))
 }
 

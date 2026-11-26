@@ -48,7 +48,7 @@ impl Layout {
     /// The page's live stream, opened again whenever it ends or goes quiet, and afresh when a signal it answers for
     /// changes.
     fn stream(&self) -> Html {
-        askama_datastar::reopen_on(self.stream, &["url", "jobs", "history", "files"])
+        askama_datastar::reopen_on(self.stream, &["url", "jobs", "history", "files", "librows"])
     }
 }
 
@@ -88,10 +88,15 @@ pub(super) struct Nav {
 
 impl Nav {
     pub(super) async fn of(app: &App, tab: Tab) -> Self {
+        Self::new(app, tab, app.social.unread().await.unwrap_or(0))
+    }
+
+    /// The nav with `unread` private messages, as last read.
+    pub(super) fn new(app: &App, tab: Tab, unread: i64) -> Self {
         Self {
             tab,
             uploads: app.session.engine().map_or(0, |e| e.uploads_pending()),
-            unread: app.social.unread().await.unwrap_or(0),
+            unread,
         }
     }
     fn tabs(&self) -> &'static [Tab] {

@@ -24,15 +24,4 @@
     {% if !likes.is_empty() %}<p class="mt-2.5 text-meta wrap-anywhere"><span class="text-muted">Likes</span> {{ likes.join(", ") }}</p>{% endif %}
     {% if !hates.is_empty() %}<p class="text-meta wrap-anywhere"><span class="text-muted">Dislikes</span> {{ hates.join(", ") }}</p>{% endif %}
   </article>
-  {% if mine %}
-  <h3>Edit</h3>
-  <p class="text-meta text-muted">Peers see this when they look you up.</p>
-  {% let edit = kit::Form::post("/profile") %}
-  <form {{ edit.attrs() }} class="my-2.5 flex flex-col gap-2" enctype="multipart/form-data">
-    {{ kit::Field::new("about you", kit::Textarea::new("description").rows(6).placeholder("About you and what you share").value(description).class("resize-y")) }}
-    {{ kit::Field::new("picture", self.picture_input()).hint("A JPEG or PNG.") }}
-    {% if picture.is_some() %}{{ kit::Check::new("clear", "remove the picture").value("1") }}{% endif %}
-    <div>{{ edit.submit(kit::Button::primary("Save")) }}</div>
-  </form>
-  {% endif %}
 </div>

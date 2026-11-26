@@ -28,7 +28,7 @@ impl Live for Chat {
     }
 
     async fn draw(&mut self, s: &UiState, c: &Changed) -> Vec<Event> {
-        if !(c.topic(Topic::Social) || c.minute) {
+        if !(c.topic(Topic::Social) || c.topic(Topic::Chat) || c.minute) {
             return Vec::new();
         }
         let mut events = Vec::new();

@@ -107,7 +107,7 @@ impl Live for Wishlist {
     const TAB: Tab = Tab::Wishlist;
     async fn open(s: &UiState, shown: Shown) -> Self { … }       // from the page's signals
     async fn draw(&mut self, s: &UiState, c: &Changed) -> Vec<Event> { … }
-    async fn wake(&mut self) { … }  // optional: a change of its own (a peer's answer)
+    async fn wake(&mut self) { … }  // optional: a change of its own (a running search's answers)
 }
 ```
 
@@ -125,10 +125,26 @@ replaced when the address moves. Streams end themselves after a minute, which
 bounds how long a page can sit on a connection that died without either end
 noticing.
 
-Slow answers are streams too: a peer's shares or profile, a running search's
-results and who is online behind them, the library list. The page draws what
-it has at once (a cached listing, a note that the peer is being asked) and the
-stream draws the rest as it arrives.
+Because streams open so often, two rules keep an opening cheap.
+
+**A stream draws only what changed after the page did.** A page records the
+`live` topics' counts as they stood before its body was drawn (the `seen`
+signal), and its stream's first pass draws only the topics that moved since;
+after each pass the stream sets `seen` to the counts it has drawn up to, so
+the stream that replaces it carries on from there. Nothing the body drew, or
+the last stream sent, is sent again.
+
+**Work a page asks for is owned by the server, never by a stream.** A
+question to a peer or the server (a share list, a profile, whether a user is
+online) is asked through `peer::Peers`, an `asked::Asked` per kind of
+question: asked once however many pages want it at the same moment, and its
+answer remembered for a while, a refusal included, so neither reopening nor
+moving within a page asks again. The page body asks; when the answer lands,
+`Asked` announces the `Peers` topic and the streams showing it draw it. A
+stream never starts work: it follows a running search (`graphql::listening`)
+but never sends one, and a search's own run asks who is online behind what it
+found. Refresh is the one way to ask again: it forgets the answer and loads
+the address afresh.
 
 ### Actions
 

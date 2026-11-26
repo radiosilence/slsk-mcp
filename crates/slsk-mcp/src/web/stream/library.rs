@@ -18,6 +18,8 @@ pub(in crate::web) struct Library {
     open: Vec<String>,
     /// The last run whose changes the page has drawn; 0 before it has a list.
     seen: u64,
+    /// The rows the page holds.
+    held: usize,
     /// The run the panel last showed, whether it was going, and its albums done.
     panel: Option<(u64, bool, usize)>,
     head: Last,
@@ -33,6 +35,7 @@ impl Live for Library {
             filter: crate::web::query(&uri),
             open: open_albums(&uri),
             seen: shown.libseen,
+            held: shown.librows,
             panel: None,
             head: Last::default(),
             whole: Last::default(),
@@ -46,12 +49,20 @@ impl Live for Library {
         }
         let ended = s.library.run.read().seen();
         if self.seen == 0 || ended > self.seen {
-            events.push(List::of(s, &self.filter).await.draw().patch().into());
+            let list = List::of(s, &self.filter, self.held).await;
+            // The albums open among the rows drawn: an album open in a row
+            // the list no longer holds has nowhere to go.
+            let open: Vec<String> = list
+                .paths()
+                .filter(|p| self.open.iter().any(|o| o == p))
+                .map(str::to_string)
+                .collect();
+            events.push(list.draw().patch().into());
             // A list drawn afresh has nothing ticked.
             events.push(signals(
                 serde_json::json!({ "_sel": 0, "_spares": 0, "libseen": ended }),
             ));
-            for path in &self.open {
+            for path in &open {
                 events.push(album_html(s, &self.filter, path).await.patch().into());
                 events.push(art_html(s, path).await.patch().into());
             }

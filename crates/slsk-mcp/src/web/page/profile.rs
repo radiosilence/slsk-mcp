@@ -9,8 +9,7 @@
 //! the database and set on the engine, which hands it to any peer asking.
 
 use koan_kit_web as kit;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use askama::Template;
 use askama_datastar::Html;
@@ -26,37 +25,6 @@ use crate::web::{Draw, UiState, failed, human};
 
 /// The largest picture accepted for upload, before it is scaled down.
 pub(in crate::web) const MAX_UPLOAD: usize = 16 << 20;
-pub(in crate::web) const KEEP: usize = 16;
-const FRESH: Duration = Duration::from_secs(600);
-
-/// Peers' answers, newest last.
-#[derive(Clone, Default)]
-pub(in crate::web) struct Cache(Arc<parking_lot::Mutex<Vec<Answer>>>);
-
-type Answer = (String, Instant, Arc<UserInfo>);
-
-impl Cache {
-    pub(in crate::web) fn get(&self, username: &str) -> Option<Arc<UserInfo>> {
-        self.0
-            .lock()
-            .iter()
-            .find(|(u, at, _)| u == username && at.elapsed() < FRESH)
-            .map(|(_, _, i)| i.clone())
-    }
-
-    fn forget(&self, username: &str) {
-        self.0.lock().retain(|(u, ..)| u != username);
-    }
-
-    pub(in crate::web) fn put(&self, username: &str, info: Arc<UserInfo>) {
-        let mut c = self.0.lock();
-        c.retain(|(u, at, _)| u != username && at.elapsed() < FRESH);
-        if c.len() >= KEEP {
-            c.remove(0);
-        }
-        c.push((username.to_string(), Instant::now(), info));
-    }
-}
 
 #[derive(serde::Deserialize, Default)]
 pub(in crate::web) struct ProfileQuery {
@@ -73,6 +41,15 @@ pub(in crate::web) struct ProfilePage;
 struct Lookup<'a> {
     username: &'a str,
     card: Option<Html>,
+    /// This account's description and whether it has a picture, for the
+    /// form that edits them.
+    edit: Option<(String, bool)>,
+}
+
+impl Lookup<'_> {
+    fn picture_input(&self) -> kit::Input<'static> {
+        kit::Input::new(kit::InputKind::File, "picture").attr("accept", "image/jpeg,image/png")
+    }
 }
 
 impl Page for ProfilePage {
@@ -86,43 +63,70 @@ impl Page for ProfilePage {
             return Ok(Body::of(&Lookup {
                 username,
                 card: None,
+                edit: None,
             }));
         };
-        // Asked to look again: the answer kept is forgotten, and the page
-        // moves to its address without asking, so a reload does not ask again.
+        let user = Some(username)
+            .filter(|u| !u.is_empty())
+            .map_or_else(|| engine.username(), str::to_string);
+        let mine = user == engine.username();
+        // Asked to look again: the answers kept are forgotten, and the page
+        // moves to its address, so a reload does not ask again.
         if q.fresh.is_some() {
-            s.profiles.forget(username);
+            s.peers.info.forget(&user);
+            s.peers.server.forget(&user);
             return Ok(Body::redirect(crate::web::profile_href(username)));
         }
-        // The server's part follows from the page's stream: it can take seconds.
-        let card = if username.is_empty() || username == engine.username() {
-            own(s, &engine, Server::default()).await
-        } else {
-            let server = Server::default();
-            match s.profiles.get(username) {
-                Some(info) => peer(
-                    username,
-                    engine.is_banned(username),
-                    &server,
-                    Some(&info),
-                    None,
-                    false,
-                ),
-                None => peer(
-                    username,
-                    engine.is_banned(username),
-                    &server,
-                    None,
-                    Some(format!("Asking {username} for their profile…")),
-                    true,
-                ),
-            }
-        };
+        // What the server says, and for a peer what they say, take seconds:
+        // they are asked here and the stream draws them as they arrive.
+        s.peers.ask_server(&engine, &user);
+        if !mine {
+            s.peers.ask_info(&engine, &user);
+        }
+        let edit = mine.then(|| {
+            let profile = engine.profile();
+            (profile.description, profile.picture.is_some())
+        });
         Ok(Body::of(&Lookup {
             username,
-            card: Some(card.draw()),
+            card: Some(card(s, &engine, &user).await.draw()),
+            edit,
         })
         .heading(Some(username.to_string()).filter(|u| !u.is_empty())))
+    }
+}
+
+/// `username`'s profile as it stands: this account's own, or a peer's from
+/// what they and the server have answered so far.
+pub(in crate::web) async fn card(s: &UiState, engine: &Engine, username: &str) -> Card {
+    let server = s
+        .peers
+        .server
+        .answer(username)
+        .and_then(Result::ok)
+        .unwrap_or_default();
+    if username == engine.username() {
+        return own(s, engine, server).await;
+    }
+    let banned = engine.is_banned(username);
+    match s.peers.info.answer(username) {
+        Some(Ok(info)) => peer(username, banned, &server, Some(&info), None, false),
+        Some(Err(e)) => peer(
+            username,
+            banned,
+            &server,
+            None,
+            Some(format!("{username} did not send their profile: {e}")),
+            false,
+        ),
+        None => peer(
+            username,
+            banned,
+            &server,
+            None,
+            Some(format!("Asking {username} for their profile…")),
+            true,
+        ),
     }
 }
 
@@ -151,10 +155,6 @@ impl Card {
             .iter()
             .map(|(label, value)| (*label, value))
             .collect()
-    }
-
-    fn picture_input(&self) -> kit::Input<'static> {
-        kit::Input::new(kit::InputKind::File, "picture").attr("accept", "image/jpeg,image/png")
     }
 
     fn browse_label(&self) -> &'static str {
@@ -400,7 +400,7 @@ pub(in crate::web) async fn save(State(s): State<UiState>, mut multipart: Multip
     }
     engine.set_profile(profile);
     askama_datastar::events([
-        own(&s, &engine, from_server(&engine, &engine.username()).await)
+        card(&s, &engine, &engine.username())
             .await
             .draw()
             .patch()
@@ -418,8 +418,10 @@ pub(in crate::web) async fn picture(
     let bytes = match s.app.session.engine() {
         Some(e) if e.username() == q.username => e.profile().picture.map(|p| p.to_vec()),
         _ => s
-            .profiles
-            .get(&q.username)
+            .peers
+            .info
+            .answer(&q.username)
+            .and_then(Result::ok)
             .and_then(|i| i.picture.as_ref().map(|p| p.to_vec())),
     };
     match bytes {

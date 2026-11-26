@@ -102,6 +102,12 @@ pub(super) struct Shown {
     /// The last library run whose changes the Library page has drawn; 0 for
     /// a page that has not drawn its list yet.
     pub(super) libseen: u64,
+    /// The library list's rows the page holds, beyond the first page.
+    pub(super) librows: usize,
+    /// The live topics' counts the page has drawn up to: as they stood when
+    /// its body was drawn, then as each pass of its stream left them. None
+    /// from a page that does not say, which is drawn whole.
+    pub(super) seen: Option<crate::live::Counts>,
 }
 
 impl Default for Shown {
@@ -112,6 +118,8 @@ impl Default for Shown {
             history: super::PAGE,
             files: String::new(),
             libseen: 0,
+            librows: 0,
+            seen: None,
         }
     }
 }
@@ -145,6 +153,23 @@ impl Changed {
             moved: true,
             connection: true,
             minute: true,
+        }
+    }
+
+    fn nothing() -> Self {
+        Self {
+            topics: [false; TOPICS],
+            moved: false,
+            connection: false,
+            minute: false,
+        }
+    }
+
+    /// What changed in the topics between counts `then` and `now`.
+    fn since(then: &crate::live::Counts, now: &crate::live::Counts) -> Self {
+        Self {
+            topics: std::array::from_fn(|i| now[i] != then[i]),
+            ..Self::nothing()
         }
     }
 
@@ -194,6 +219,8 @@ struct Header {
     tab: Tab,
     status: Last,
     nav: Last,
+    /// Private messages not yet read, read again only when messages change.
+    unread: Option<i64>,
 }
 
 impl Header {
@@ -202,8 +229,12 @@ impl Header {
         if c.connection || c.moved || c.minute {
             events.extend(self.status.send(Status::of(&s.app).draw()));
         }
+        if self.unread.is_none() || c.topic(Topic::Social) || c.minute {
+            self.unread = Some(s.app.social.unread().await.unwrap_or(0));
+        }
         if c.moved || c.minute || c.topic(Topic::Social) {
-            events.extend(self.nav.send(Nav::of(&s.app, self.tab).await.draw()));
+            let nav = Nav::new(&s.app, self.tab, self.unread.unwrap_or(0));
+            events.extend(self.nav.send(nav.draw()));
         }
         events
     }
@@ -215,14 +246,23 @@ pub(super) async fn serve<L: Live>(
     Signals(shown): Signals<Shown>,
 ) -> impl IntoResponse {
     let events = async_stream::stream! {
+        let drawn = shown.seen;
         let mut page = L::open(&s, shown).await;
-        let mut header = Header { tab: L::TAB, status: Last::default(), nav: Last::default() };
+        let mut header = Header { tab: L::TAB, status: Last::default(), nav: Last::default(), unread: None };
         let mut changes = crate::live::subscribe();
         let mut transfers = slsk_engine::changes();
         let mut status = s.app.session.engine().map(|e| e.status());
         let ends = tokio::time::Instant::now() + LIFETIME;
         let mut seen = *changes.borrow_and_update();
-        let mut changed = Changed::everything();
+        // The first pass draws what changed after the page did: nothing the
+        // page's body or its last stream already sent.
+        // Said on the first pass whatever else is sent, so the page hears
+        // from a stream as soon as it opens.
+        let mut reported = None;
+        let mut changed = match &drawn {
+            Some(then) => Changed::since(then, &seen),
+            None => Changed::everything(),
+        };
         loop {
             for e in header.draw(&s, &changed).await {
                 yield e;
@@ -230,10 +270,16 @@ pub(super) async fn serve<L: Live>(
             for e in page.draw(&s, &changed).await {
                 yield e;
             }
+            // The page now has everything up to these counts, so a stream
+            // opened after this one carries on from them.
+            if reported != Some(seen) {
+                yield super::signals(serde_json::json!({ "seen": seen.to_vec() }));
+                reported = Some(seen);
+            }
             tokio::time::sleep(THROTTLE).await;
             let next_minute = tokio::time::Instant::now()
                 + Duration::from_secs(60 - (chrono::Utc::now().timestamp() % 60) as u64);
-            changed = Changed { topics: [false; TOPICS], moved: false, connection: false, minute: false };
+            changed = Changed::nothing();
             tokio::select! {
                 r = changes.changed() => if r.is_err() { break },
                 r = transfers.changed() => match r {

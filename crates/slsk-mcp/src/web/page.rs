@@ -175,41 +175,63 @@ impl<T: serde::de::DeserializeOwned + Default + Send, S: Sync> FromRequestParts<
     }
 }
 
-/// The events that show `body` in place, as an in-place load answers: its
-/// body morphed into `main`, the title, any flash cleared, and its signals
-/// with the address it now shows. An action that takes the page somewhere
-/// answers with these too.
-pub(super) fn shown<P: Page>(body: Body, url: &str) -> Vec<Event> {
-    if let Some(to) = body.redirect {
-        return vec![kit::Confirm::go(&to).into()];
-    }
-    let mut signals = serde_json::Value::Object(body.signals);
+/// Page `P`'s body, and the live topics' counts as they stood before it was
+/// drawn: the page's stream draws what changed after them, and nothing the
+/// body already drew.
+async fn draw<P: Page>(s: &UiState, args: P::Args) -> anyhow::Result<(Body, crate::live::Counts)> {
+    let seen = *crate::live::subscribe().borrow();
+    Ok((P::body(s, args).await?, seen))
+}
+
+/// The signals a page starts with: its own, the address it shows, and the
+/// counts its stream carries on from.
+fn signals(body: &mut Body, url: &str, seen: crate::live::Counts) -> serde_json::Value {
+    let mut signals = serde_json::Value::Object(std::mem::take(&mut body.signals));
     if let Some(all) = signals.as_object_mut() {
         all.insert("url".into(), url.into());
+        all.insert("seen".into(), seen.to_vec().into());
     }
-    vec![
+    signals
+}
+
+/// Page `P` shown in place, as a link or form that loads in place is
+/// answered: its body morphed into `main`, the title, any flash cleared, and
+/// its signals. An action that takes the page somewhere answers with these
+/// too.
+pub(super) async fn shown<P: Page>(
+    s: &UiState,
+    args: P::Args,
+    url: &str,
+) -> anyhow::Result<Vec<Event>> {
+    let (mut body, seen) = draw::<P>(s, args).await?;
+    if let Some(to) = body.redirect {
+        return Ok(vec![kit::Confirm::go(&to).into()]);
+    }
+    let signals = signals(&mut body, url, seen);
+    Ok(vec![
         super::patch(&Html::from_iter([
             Main { body: body.html }.draw(),
             Title::of(P::TAB, body.heading.as_deref()).draw(),
             kit::Flash::region().html(),
         ])),
         super::signals(signals),
-    ]
+    ])
 }
 
-/// The page's address as the person sees it: the request's, less the
-/// signals Datastar adds to a GET it sends.
+/// The page's address as the person asked for it, less the signals
+/// Datastar adds to a GET it sends. Every other pair stays, empty ones
+/// included, so the page and the address bar spell it alike.
 fn address(uri: &Uri) -> String {
-    let query: Vec<(String, String)> =
-        url::form_urlencoded::parse(uri.query().unwrap_or_default().as_bytes())
-            .into_owned()
-            .filter(|(k, _)| k != "datastar")
-            .collect();
-    let params: Vec<(&str, &str)> = query
-        .iter()
-        .map(|(k, v)| (k.as_str(), v.as_str()))
-        .collect();
-    super::place_url(uri.path(), &params)
+    let mut query = url::form_urlencoded::Serializer::new(String::new());
+    for (k, v) in url::form_urlencoded::parse(uri.query().unwrap_or_default().as_bytes()) {
+        if k != "datastar" {
+            query.append_pair(&k, &v);
+        }
+    }
+    match query.finish() {
+        q if q.is_empty() => uri.path().to_string(),
+        q => format!("{}?{q}", uri.path()),
+    }
 }
 
 /// Draw page `P`: whole for a browser, or in place for the page itself.
@@ -219,35 +241,38 @@ pub(super) async fn serve<P: Page>(
     uri: Uri,
     args: P::Args,
 ) -> Response {
-    let in_place = askama_datastar::is_datastar(&headers);
-    let body = match P::body(&s, args).await {
-        Ok(b) => b,
-        Err(e) if in_place => return super::failed(&e),
+    let url = &address(&uri);
+    if askama_datastar::is_datastar(&headers) {
+        return match shown::<P>(&s, args, url).await {
+            Ok(events) => askama_datastar::events(events),
+            Err(e) => super::failed(&e),
+        };
+    }
+    let (mut body, seen) = match draw::<P>(&s, args).await {
+        Ok(drawn) => drawn,
         Err(e) => return crate::error::AppError::from(e).into_response(),
     };
-    let url = &address(&uri);
-    if in_place {
-        return askama_datastar::events(shown::<P>(body, url));
-    }
     if let Some(to) = body.redirect {
         return Redirect::to(&to).into_response();
     }
     // Every page has the signals its stream reads, so every stream reads the same names.
-    let mut signals = serde_json::json!({
-        "url": url,
+    let mut all = serde_json::json!({
         "files": "",
         "jobs": super::PAGE,
         "history": super::PAGE,
+        "librows": 0,
     });
-    if let Some(all) = signals.as_object_mut() {
-        all.extend(body.signals);
+    if let (Some(all), serde_json::Value::Object(own)) =
+        (all.as_object_mut(), signals(&mut body, url, seen))
+    {
+        all.extend(own);
     }
     let layout = Layout {
         title: Title::of(P::TAB, body.heading.as_deref()).draw(),
         status: Status::of(&s.app).draw(),
         nav: Nav::of(&s.app, P::TAB).await.draw(),
         stream: P::STREAM,
-        signals: signals.to_string(),
+        signals: all.to_string(),
         main: Main { body: body.html }.draw(),
         now: chrono::Utc::now().timestamp_millis(),
     };
@@ -265,6 +290,8 @@ mod tests {
             .parse()
             .unwrap();
         assert_eq!(super::address(&uri), "/search?tab=t1&shown=200");
+        let typed = "/library?q=foo%20bar&since=".parse().unwrap();
+        assert_eq!(super::address(&typed), "/library?q=foo+bar&since=");
         assert_eq!(super::address(&"/".parse().unwrap()), "/");
     }
 }

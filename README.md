@@ -542,7 +542,8 @@ cargo test --workspace
 
 The network tests run real engines against `slsk-testserver` over loopback.
 
-`just dev` runs the service on http://127.0.0.1:8090 (`DEV_PORT` moves it)
+`just dev` runs the service on http://127.0.0.1:8090 (`DEV_PORT` moves it, and
+`DEV_NETWORK` its Soulseek network, so two checkouts can run side by side)
 against the same test server, with no sign-in, so the web UI can be worked on
 without a Soulseek account. It writes a few short FLACs of noise with ffmpeg
 into a library and onto one sharing peer, `dev-sharer`, so the library has

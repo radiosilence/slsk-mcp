@@ -48,7 +48,7 @@ impl Live for Downloads {
     async fn draw(&mut self, s: &UiState, c: &Changed) -> Vec<Event> {
         let mut events = Vec::new();
         let jobs = c.topic(Topic::Jobs);
-        if jobs || c.minute || self.settled.is_none() {
+        if jobs || c.minute {
             let settled = Settled::newest(&s.app, self.shown.jobs).await;
             if self.settled.as_ref() != Some(&settled) {
                 events.push(settled.draw().patch().into());
@@ -58,7 +58,15 @@ impl Live for Downloads {
         if !(jobs || c.moved || c.minute || self.recheck.is_some()) {
             return events;
         }
-        let any_settled = self.settled.as_ref().is_some_and(|s| !s.jobs.is_empty());
+        // The page drew the jobs done with; read them only to know whether
+        // an empty list says "Nothing yet".
+        let settled = match &self.settled {
+            Some(settled) => settled,
+            None => self
+                .settled
+                .insert(Settled::newest(&s.app, self.shown.jobs).await),
+        };
+        let any_settled = !settled.jobs.is_empty();
         let live = Jobs::of(&s.app, self.shown.jobs, &self.shown.files, any_settled).await;
         let now = Instant::now();
         self.recheck = None;

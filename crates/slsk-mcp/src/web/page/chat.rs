@@ -368,8 +368,8 @@ async fn opened(s: &UiState, t: Option<&Thread>, extra: Option<kit::Flash<'_>>) 
         Some(t) => (t.url(), t.query()),
         None => ("/chat".to_string(), ChatQuery::default()),
     };
-    let mut events = match Chat::body(s, View(q)).await {
-        Ok(body) => shown::<Chat>(body, &url),
+    let mut events = match shown::<Chat>(s, View(q), &url).await {
+        Ok(events) => events,
         Err(e) => return failed(&e),
     };
     events.extend(extra.map(|f| f.patch().into()));

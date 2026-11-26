@@ -29,30 +29,20 @@ use crate::web::{Draw, UiState, failed, field, human, sent};
 
 pub(in crate::web) type Listing = Arc<Vec<Directory>>;
 
-/// Peers' listings, and this client's own apart from them: its own is
-/// browsed but never downloaded from, so it neither takes a peer's slot nor
-/// answers a download.
+/// This client's own listing, read from its share index. It is browsed
+/// but never downloaded from, so it neither takes a peer's slot nor answers
+/// a download.
 #[derive(Clone, Default)]
-pub(in crate::web) struct Cache {
-    peers: Arc<parking_lot::Mutex<Vec<(String, Instant, Listing)>>>,
-    own: Arc<parking_lot::Mutex<Option<(Instant, Listing)>>>,
-}
+pub(in crate::web) struct Own(Arc<parking_lot::Mutex<Option<(Instant, Listing)>>>);
 
-const KEEP: usize = 4;
-const FRESH: Duration = Duration::from_secs(600);
 /// Imports change the library often, so its own listing is read again
-/// sooner; between reads each step through it is a lookup, not a copy of
-/// the share index.
+/// sooner than a peer's; between reads each step through it is a lookup,
+/// not a copy of the share index.
 const OWN_FRESH: Duration = Duration::from_secs(60);
 
-impl Cache {
-    /// Forget a peer's listing, so the next look asks them again.
-    fn forget(&self, username: &str) {
-        self.peers.lock().retain(|(u, ..)| u != username);
-    }
-
-    pub(in crate::web) fn own(&self, engine: &slsk_engine::Engine, fresh: bool) -> Listing {
-        let mut c = self.own.lock();
+impl Own {
+    pub(in crate::web) fn listing(&self, engine: &slsk_engine::Engine, fresh: bool) -> Listing {
+        let mut c = self.0.lock();
         match &*c {
             Some((at, l)) if !fresh && at.elapsed() < OWN_FRESH => l.clone(),
             _ => {
@@ -60,23 +50,6 @@ impl Cache {
                 *c = Some((Instant::now(), l.clone()));
                 l
             }
-        }
-    }
-
-    pub(in crate::web) fn get(&self, username: &str) -> Option<Listing> {
-        let mut c = self.peers.lock();
-        c.retain(|(_, at, _)| at.elapsed() < FRESH);
-        c.iter()
-            .find(|(u, ..)| u == username)
-            .map(|(.., l)| l.clone())
-    }
-
-    pub(in crate::web) fn put(&self, username: &str, listing: Listing) {
-        let mut c = self.peers.lock();
-        c.retain(|(u, ..)| u != username);
-        c.push((username.to_string(), Instant::now(), listing));
-        if c.len() > KEEP {
-            c.remove(0);
         }
     }
 }
@@ -456,7 +429,30 @@ impl Shares {
         }
     }
 
-    pub(in crate::web) fn note(username: &str, note: String, asking: bool) -> Self {
+    /// The shares at `p` as they stand: this account's own, a peer's answer
+    /// or refusal, or a note that the peer is being asked.
+    pub(in crate::web) fn of(s: &UiState, engine: &slsk_engine::Engine, p: &Place) -> Self {
+        if engine.username() == p.username {
+            return Self::tree(p, &s.own.listing(engine, false), None, true, false);
+        }
+        match s.peers.shares.answer(&p.username) {
+            Some(Ok((listing, info))) => {
+                Self::tree(p, &listing, info, false, engine.is_banned(&p.username))
+            }
+            Some(Err(e)) => Self::note(
+                &p.username,
+                format!("{} did not send their shares: {e}", p.username),
+                false,
+            ),
+            None => Self::note(
+                &p.username,
+                format!("Asking {} for their shares…", p.username),
+                true,
+            ),
+        }
+    }
+
+    fn note(username: &str, note: String, asking: bool) -> Self {
         Self {
             username: username.to_string(),
             mine: false,
@@ -527,27 +523,19 @@ impl Page for Browse {
         };
         let mine = engine.username() == p.username;
         // Asked to look again: the listing is forgotten, and the page moves to
-        // its address without asking, so a reload does not ask again.
+        // its address, so a reload does not ask again.
         if q.fresh.is_some() {
             if mine {
-                s.browsed.own(engine, true);
+                s.own.listing(engine, true);
             } else {
-                s.browsed.forget(&p.username);
+                s.peers.shares.forget(&p.username);
             }
             return Ok(Body::redirect(p.href()));
         }
-        let shares = if mine {
-            Shares::tree(&p, &s.browsed.own(engine, false), None, true, false)
-        } else {
-            match s.browsed.get(&p.username) {
-                Some(l) => Shares::tree(&p, &l, None, false, engine.is_banned(&p.username)),
-                None => Shares::note(
-                    &p.username,
-                    format!("Asking {} for their shares…", p.username),
-                    true,
-                ),
-            }
-        };
+        if !mine {
+            s.peers.ask_shares(engine, &p.username);
+        }
+        let shares = Shares::of(s, engine, &p);
         Ok(Body::of(&BrowsePage {
             username,
             me,
@@ -578,7 +566,7 @@ pub(in crate::web) async fn download_files(
     let (Some(username), Some(at)) = (field(&form, "username"), at) else {
         return failed(&anyhow::anyhow!("no folder given"));
     };
-    let Some(listing) = s.browsed.get(username) else {
+    let Some(Ok((listing, _))) = s.peers.shares.answer(username) else {
         return failed(&anyhow::anyhow!(
             "That listing has expired; browse the folder again."
         ));
@@ -733,7 +721,7 @@ pub(in crate::web) async fn download_tree(
     ) else {
         return failed(&anyhow::anyhow!("no folder given"));
     };
-    let Some(listing) = s.browsed.get(username) else {
+    let Some(Ok((listing, _))) = s.peers.shares.answer(username) else {
         return failed(&anyhow::anyhow!(
             "That listing has expired; browse the folder again."
         ));

@@ -1,48 +1,28 @@
-//! The Search page live: the tab strip as searches open, finish and close;
-//! the tab shown, redrawn as peers answer while its search runs; and whether
-//! the peers behind its results are online, asked of the server once they are
-//! drawn, since kept results can be hours old.
-
-use std::collections::HashMap;
-use std::time::Duration;
+//! The Search page live: the tab strip as searches open, finish and close,
+//! and the tab shown, redrawn as peers answer while its search runs, when it
+//! finishes, and as the server says who is online. The stream follows a
+//! search already running and never starts one: the page and its actions
+//! do (see [`crate::web::page::search::run`]).
 
 use axum::response::sse::Event;
-use slsk_engine::Event as EngineEvent;
-use slsk_engine::slsk_proto::server::{FromServer, ToServer, UserStatus};
-use tokio::sync::{broadcast, watch};
+use tokio::sync::watch;
 
 use super::{Changed, Last, Live, Shown};
 use crate::db::SearchTab;
 use crate::graphql::Heard;
 use crate::live::Topic;
 use crate::web::page::Tab;
-use crate::web::page::search::{LISTEN, Results, SearchQuery, Tabs, folder_id};
+use crate::web::page::search::{Results, SearchQuery, Tabs};
 use crate::web::{Draw, UiState};
-
-/// How long the server is given to say who is online.
-const STATUS_WAIT: Duration = Duration::from_secs(5);
 
 pub(in crate::web) struct Search {
     view: SearchQuery,
-    tab: Option<SearchTab>,
     strip: Last,
     results: Last,
     /// The running search shown, while it runs.
     heard: Option<watch::Receiver<Heard>>,
     /// Peers have answered since the results were last drawn.
     answered: bool,
-    /// Whether the peers behind the results have been asked about.
-    asked: bool,
-    /// The peers asked about and the folders of each, until they answer.
-    asking: Option<Asking>,
-    /// Answers in hand, to send with the next draw.
-    statuses: Vec<(u64, &'static str)>,
-}
-
-struct Asking {
-    events: broadcast::Receiver<EngineEvent>,
-    folders: HashMap<String, Vec<u64>>,
-    until: tokio::time::Instant,
 }
 
 impl Live for Search {
@@ -50,25 +30,16 @@ impl Live for Search {
 
     async fn open(s: &UiState, shown: Shown) -> Self {
         let view: SearchQuery = shown.view();
-        let tab = match view.tab() {
-            Some(id) => crate::db::search_tab(&s.app.db, id).await.ok().flatten(),
-            None => None,
-        };
-        let heard = tab
-            .as_ref()
+        let heard = tab(s, &view)
+            .await
             .filter(|t| t.searched_at.is_none())
-            .zip(s.app.session.engine())
-            .map(|(t, e)| crate::graphql::listen(e, &t.query, LISTEN));
+            .and_then(|t| crate::graphql::listening(&t.query));
         Self {
             view,
-            tab,
             strip: Last::default(),
             results: Last::default(),
             heard,
             answered: false,
-            asked: false,
-            asking: None,
-            statuses: Vec::new(),
         }
     }
 
@@ -78,107 +49,50 @@ impl Live for Search {
             let tabs = Tabs::of(&s.app, self.view.tab()).await;
             events.extend(self.strip.send(tabs.draw()));
         }
-        if let (Some(heard), Some(tab), Some(engine), true) = (
-            self.heard.as_mut(),
-            &self.tab,
-            s.app.session.engine(),
-            std::mem::take(&mut self.answered),
-        ) {
-            let now = heard.borrow_and_update().clone();
-            let results = Results::heard(engine, tab, &now, self.view.shown());
-            events.extend(self.results.send(results.draw()));
-            // Done, or its search went away: drawn as it ended, and not waited on again.
-            if now.done || heard.has_changed().is_err() {
-                self.heard = None;
-                self.ask(s, &results);
-            }
-        } else if !self.asked
-            && let Some(tab) = self.tab.as_ref().filter(|t| t.searched_at.is_some())
-        {
-            // The page drew the kept results; only who is online is left.
-            let results = Results::kept(&s.app, tab, self.view.shown()).await;
-            self.ask(s, &results);
+        let answered = std::mem::take(&mut self.answered);
+        // The tab finishing, or the server saying who is online, redraws
+        // what it kept; peers answering redraws what is heard so far.
+        if !(answered || c.topic(Topic::Search) || c.topic(Topic::Peers)) {
+            return events;
         }
-        events.extend(self.statuses.drain(..).map(|(id, word)| {
-            crate::web::state(word, word)
-                .id(format!("peer-{id}"))
-                .html()
-                .patch()
-                .into()
-        }));
+        let Some(tab) = tab(s, &self.view).await else {
+            return events;
+        };
+        let results = match (
+            &tab.searched_at,
+            self.heard.as_mut(),
+            s.app.session.engine(),
+        ) {
+            (Some(_), ..) => {
+                self.heard = None;
+                Results::kept(s, &tab, self.view.shown()).await
+            }
+            (None, Some(heard), Some(engine)) if answered || c.topic(Topic::Peers) => {
+                let now = heard.borrow_and_update().clone();
+                Results::heard(s, engine, &tab, &now, self.view.shown())
+            }
+            _ => return events,
+        };
+        events.extend(self.results.send(results.draw()));
         events
     }
 
     async fn wake(&mut self) {
-        if let Some(heard) = self.heard.as_mut() {
-            let _ = heard.changed().await;
-            self.answered = true;
-            return;
-        }
-        let Some(asking) = self.asking.as_mut() else {
+        let Some(heard) = self.heard.as_mut() else {
             return std::future::pending().await;
         };
-        loop {
-            let msg = match tokio::time::timeout_at(asking.until, asking.events.recv()).await {
-                Ok(Ok(EngineEvent::Server(msg))) => msg,
-                Ok(Ok(_) | Err(broadcast::error::RecvError::Lagged(_))) => continue,
-                Ok(Err(_)) | Err(_) => {
-                    self.asking = None;
-                    return;
-                }
-            };
-            let FromServer::UserStatus {
-                username, status, ..
-            } = &*msg
-            else {
-                continue;
-            };
-            let Some(ids) = asking.folders.remove(username) else {
-                continue;
-            };
-            let word = match status {
-                UserStatus::Online => "online",
-                UserStatus::Away => "away",
-                UserStatus::Offline => "offline",
-            };
-            self.statuses.extend(ids.into_iter().map(|id| (id, word)));
-            if asking.folders.is_empty() {
-                self.asking = None;
-            }
-            return;
+        // A search that went away is drawn as it ended, from what it kept.
+        if heard.changed().await.is_err() {
+            self.heard = None;
         }
+        self.answered = true;
     }
 }
 
-impl Search {
-    /// Ask the server whether each peer behind `results` is online.
-    fn ask(&mut self, s: &UiState, results: &Results) {
-        self.asked = true;
-        let Some(engine) = s.app.session.engine() else {
-            return;
-        };
-        let mut folders: HashMap<String, Vec<u64>> = HashMap::new();
-        for f in &results.folders {
-            folders
-                .entry(f.username.clone())
-                .or_default()
-                .push(folder_id(f));
-        }
-        let events = engine.events();
-        for username in folders.keys() {
-            if engine
-                .send(ToServer::GetUserStatus {
-                    username: username.clone(),
-                })
-                .is_err()
-            {
-                return;
-            }
-        }
-        self.asking = (!folders.is_empty()).then(|| Asking {
-            events,
-            folders,
-            until: tokio::time::Instant::now() + STATUS_WAIT,
-        });
-    }
+/// The tab the address names, as it now stands.
+async fn tab(s: &UiState, view: &SearchQuery) -> Option<SearchTab> {
+    crate::db::search_tab(&s.app.db, view.tab()?)
+        .await
+        .ok()
+        .flatten()
 }

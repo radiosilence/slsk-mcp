@@ -29,6 +29,7 @@ use crate::App;
 use crate::auth::session::Sessions;
 use crate::config::Config;
 
+mod asked;
 #[cfg(all(test, unix))]
 mod cost;
 #[cfg(test)]
@@ -51,8 +52,10 @@ pub struct UiState {
     library: page::library::Runs,
     /// Album art previewed and not yet applied.
     art: page::library::ArtStash,
-    browsed: page::browse::Cache,
-    profiles: page::profile::Cache,
+    /// This account's own share listing, read from the index.
+    own: page::browse::Own,
+    /// What is asked of peers and the server about them.
+    peers: peer::Peers,
 }
 
 /// Every route the UI answers, in one place: the pages, each page's live
@@ -74,8 +77,8 @@ impl UiState {
             http: reqwest::Client::new(),
             library: page::library::Runs::new(),
             art: Default::default(),
-            browsed: Default::default(),
-            profiles: Default::default(),
+            own: Default::default(),
+            peers: Default::default(),
         }
     }
 }
