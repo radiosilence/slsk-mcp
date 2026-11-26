@@ -471,7 +471,7 @@ async fn join(State(s): State<UiState>, RawQuery(query): RawQuery, body: Bytes) 
             opened(
                 &s.app,
                 &t,
-                Some(kit::Flash::ok(&format!("Joining {room}")).to_string()),
+                Some(kit::Flash::ok(format!("Joining {room}")).to_string()),
             )
             .await
         }
@@ -490,7 +490,7 @@ async fn leave(State(s): State<UiState>, RawQuery(query): RawQuery, body: Bytes)
                 "{}\n{}\n{}",
                 thread_html(&s.app, None).await,
                 side_html(&s.app).await,
-                kit::Flash::ok(&format!("Left {room}")).to_string()
+                kit::Flash::ok(format!("Left {room}"))
             )),
             super::place("/chat"),
         ]),
@@ -509,7 +509,7 @@ async fn add_buddy(State(s): State<UiState>, RawQuery(query): RawQuery, body: By
             patch(&format!(
                 "{}\n{}",
                 side_html(&s.app).await,
-                kit::Flash::ok(&format!("Added {user} as a buddy")).to_string()
+                kit::Flash::ok(format!("Added {user} as a buddy"))
             )),
             signals(r#"{"_buddy":"","_buddynote":""}"#),
         ]),

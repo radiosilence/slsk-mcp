@@ -244,7 +244,6 @@ async fn rescan(State(s): State<UiState>) -> Response {
                 "{}\n{}",
                 status_html(&s.app).await,
                 kit::Flash::ok("Rescanning shares; the count above updates when it finishes")
-                    .to_string()
             ))
         }
         Err(e) => failed(&e),

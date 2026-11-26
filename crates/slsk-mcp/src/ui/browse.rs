@@ -617,7 +617,7 @@ async fn download_files(
         .unwrap_or_default()
         .to_string();
     match s.app.jobs.from_files(username, files, title).await {
-        Ok(job) => one(kit::Flash::ok(&format!("Downloading {}", job.title)).to_string()),
+        Ok(job) => one(kit::Flash::ok(format!("Downloading {}", job.title)).to_string()),
         Err(e) => failed(&e),
     }
 }

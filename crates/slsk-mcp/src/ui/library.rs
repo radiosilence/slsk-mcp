@@ -750,7 +750,7 @@ async fn album_html(s: &UiState, filter: &Filter, path: &str) -> String {
         .unwrap_or_default(),
         Err(e) => format!(
             r#"<div id="{slot}" class="basis-full empty:hidden">{}</div>"#,
-            kit::Notice::bad(&format!("{e:#}")).class("mt-2 wrap-anywhere")
+            kit::Notice::bad(format!("{e:#}")).class("mt-2 wrap-anywhere")
         ),
     }
 }
@@ -772,7 +772,7 @@ async fn art_html(s: &UiState, path: &str) -> String {
         .unwrap_or_default(),
         Err(e) => format!(
             r#"<div id="{slot}-artinfo" class="my-2.5">{}</div>"#,
-            kit::Notice::bad(&format!("{e:#}")).class("wrap-anywhere")
+            kit::Notice::bad(format!("{e:#}")).class("wrap-anywhere")
         ),
     }
 }
@@ -1842,7 +1842,7 @@ async fn previewed(s: UiState, action: Action, form: Vec<(String, String)>) -> R
             match s.app.library.known_artists().await {
                 Ok(k) => k.splitting_on(&split),
                 Err(e) => {
-                    yield kit::Flash::bad(&format!("{e:#}")).patch().into();
+                    yield kit::Flash::bad(format!("{e:#}")).patch().into();
                     return;
                 }
             }

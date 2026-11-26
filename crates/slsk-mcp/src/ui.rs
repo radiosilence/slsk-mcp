@@ -1449,7 +1449,7 @@ async fn job_sources(State(s): State<UiState>, Path(id): Path<Uuid>) -> Response
             &target,
             &format!(
                 r#"<div id="{target}" class="mt-1.5">{}</div>"#,
-                kit::Notice::bad(&format!("Couldn't read the history: {e:#}"))
+                kit::Notice::bad(format!("Couldn't read the history: {e:#}"))
             ),
         ),
     }
@@ -1975,7 +1975,7 @@ async fn download(State(s): State<UiState>, body: Bytes) -> Response {
     match s.app.jobs.from_folder(&folder, title, Vec::new()).await {
         Ok(_) => {
             let name = folder_heading(&folder.path).unwrap_or(folder.path.clone());
-            one(kit::Flash::ok(&format!("Downloading {name} from {username}")).to_string())
+            one(kit::Flash::ok(format!("Downloading {name} from {username}")).to_string())
         }
         Err(e) => failed(&e),
     }
@@ -2068,7 +2068,7 @@ async fn done_with(app: &App, shown: &Shown, settled: bool, extra: Option<Event>
 }
 
 fn failed(e: &anyhow::Error) -> Response {
-    one(kit::Flash::bad(&format!("{e:#}")).to_string())
+    one(kit::Flash::bad(format!("{e:#}")).to_string())
 }
 
 async fn resolve(
@@ -2377,7 +2377,7 @@ pub(super) struct PeerQuery {
 async fn ban(State(s): State<UiState>, Query(p): Query<PeerQuery>) -> Response {
     match graphql::set_ban(&s.app, &p.username, true).await {
         Ok(_) => askama_datastar::events([
-            kit::Flash::ok(&format!("Banned {}", p.username))
+            kit::Flash::ok(format!("Banned {}", p.username))
                 .patch()
                 .into(),
             kit::Confirm::close().into(),

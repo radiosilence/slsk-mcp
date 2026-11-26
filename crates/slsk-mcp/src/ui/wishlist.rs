@@ -126,7 +126,7 @@ async fn add(State(s): State<UiState>, axum::Form(f): axum::Form<AddForm>) -> Re
             patch(&format!(
                 "{}\n{}",
                 html(&s.app).await,
-                kit::Flash::ok(&format!("Wished for {q}")).to_string()
+                kit::Flash::ok(format!("Wished for {q}"))
             )),
             signals(r#"{"_wishq":""}"#),
         ]),
