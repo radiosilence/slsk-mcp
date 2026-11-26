@@ -1078,7 +1078,10 @@ mod profile {
         assert!(html.contains("1000 files in 90 folders"));
         assert!(html.contains("2.0 KB/s"));
         assert!(html.contains(">42<"));
-        assert!(html.contains("status away"));
+        assert!(
+            html.contains(r#"<span class="status warn">away</span>"#),
+            "{html}"
+        );
         assert!(html.contains("noise"));
         assert!(html.contains("/browse?username=ann"));
     }
