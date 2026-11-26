@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.28.0
+
+### Added
+
+- **Rename an artist across albums.** The batch edit form renames an artist wherever a selected file's artist or album artist is that name, in any case, leaving collaborations that include it alone and keeping its MusicBrainz credits.
+
+### Changed
+
+- **The pages are drawn with koan-kit-web's components.** Buttons, forms, fields, statuses, meters, notices and the page's head come from the kōan web kit's crate, so slsk-mcp writes the same markup, accessibility and Datastar wiring as the other kōan web UIs. Every question before a change is asked in the page's one sheet rather than the browser's own dialog, and a button that posts is busy only while its own request runs.
+- Put lossless on new line
+
+### Fixed
+
+- **Library lists catch up when a run ends.** Every page showing the library, including one reloaded while the action ran and other tabs, redraws the rows each run changed, with albums open among them kept open, instead of showing those albums as they were before it. A queued edit now follows albums an earlier action moved, as long as their files kept their names.
+- **A job's sources and its file choice load again.** Opening "sources and history" or "choose files" on a job card left the placeholder in place, as did saving the choice.
+
 ## 0.27.0
 
 ### Fixed
