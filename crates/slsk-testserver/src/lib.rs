@@ -39,7 +39,12 @@ pub struct TestServer {
 
 impl TestServer {
     pub async fn start() -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        Self::start_on("127.0.0.1:0").await
+    }
+
+    /// On a given address, for a server other processes connect to.
+    pub async fn start_on(addr: &str) -> Self {
+        let listener = TcpListener::bind(addr).await.expect("bind");
         let addr = listener.local_addr().unwrap();
         let state = Arc::new(Mutex::new(State::default()));
         let task = tokio::spawn(async move {

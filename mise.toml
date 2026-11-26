@@ -5,6 +5,8 @@ just = "1.59.0"
 "aqua:rhysd/actionlint" = "1.7.12"
 "aqua:koalaman/shellcheck" = "0.11.0"
 lefthook = "2.2.2"
+# Rebuilds and restarts the service as its sources change (`just dev`).
+"aqua:watchexec/watchexec" = "2.8.0"
 node = "24"
 # Compiles crates/slsk-mcp/styles/ into the committed assets/app.css (`just css`).
 "github:tailwindlabs/tailwindcss" = "4.3.3"

@@ -1,0 +1,1 @@
+- **`just dev`.** Runs the service locally against the in-repo test server with dummy albums in the library and on one sharing peer, rebuilding on change, so the web UI can be worked on without a Soulseek account.

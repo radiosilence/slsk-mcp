@@ -60,6 +60,11 @@ versions:
 css: kit-check
     tailwindcss --optimize --input crates/slsk-mcp/styles/app.css --output crates/slsk-mcp/assets/app.css
 
+# Run the service on http://127.0.0.1:8090 (or $DEV_PORT) against a Soulseek network on this machine, with dummy albums in the
+# library and on one sharing peer, rebuilding as crates/slsk-mcp changes. State lives in .dev/; delete it to start afresh.
+dev:
+    scripts/dev.sh
+
 # Format
 fmt:
     cargo fmt --all
