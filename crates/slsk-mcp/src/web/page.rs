@@ -13,7 +13,6 @@ use axum::extract::{FromRequestParts, OriginalUri, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::sse::Event;
 use axum::response::{IntoResponse, Redirect, Response};
-use koan_kit_web as kit;
 
 use super::layout::{Layout, Main, Nav, Status, Title};
 pub(super) use askama_datastar::View;
