@@ -340,6 +340,14 @@ trait Draw: Template + Sized {
             Html::new()
         })
     }
+
+    /// The view as the kit's markup, for a slot of the kit's that takes it.
+    fn markup(&self) -> koan_kit_web::Markup {
+        koan_kit_web::Markup::render(self).unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "could not render a view");
+            koan_kit_web::Markup::default()
+        })
+    }
 }
 
 impl<T: Template> Draw for T {}

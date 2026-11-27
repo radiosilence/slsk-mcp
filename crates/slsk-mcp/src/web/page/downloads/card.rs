@@ -2,7 +2,6 @@
 //! the disclosures on it that read their content when opened.
 
 use askama::Template;
-use askama_datastar::Html;
 use axum::response::Response;
 use axum::response::sse::Event;
 use koan_kit_web as kit;
@@ -460,12 +459,12 @@ impl Lazy {
 
     /// The handler's answer: `body` in place of the disclosure's own, which
     /// keeps its element and reads `url` again when next opened.
-    pub(super) fn fill(&self, body: Html) -> Event {
+    pub(super) fn fill(&self, body: kit::Markup) -> Event {
         kit::Disclosure::fill(&self.id, body).into()
     }
 
     /// [`Lazy::fill`] as the whole answer.
-    pub(super) fn answer(&self, body: Html) -> Response {
+    pub(super) fn answer(&self, body: kit::Markup) -> Response {
         askama_datastar::events([self.fill(body)])
     }
 }
