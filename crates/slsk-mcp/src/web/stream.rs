@@ -64,11 +64,39 @@ pub(super) trait Live: Sized + Send + 'static {
     }
 }
 
-/// The counts a pass brings the page up to, when they are to be sent: not
-/// after a pass that failed, so the next stream draws again what it missed,
-/// and not when the page holds them already.
-fn handover(now: &Seen, failed: bool, holds: Option<&Seen>) -> Option<Seen> {
-    (!failed && holds != Some(now)).then(|| now.clone())
+/// The counts a stream has handed its page, and what it hands after each
+/// pass.
+#[derive(Default)]
+struct Handover {
+    /// The counts last sent.
+    sent: Option<Seen>,
+}
+
+/// What a stream does after a pass.
+#[derive(Debug, PartialEq, Eq)]
+enum After {
+    /// Hands the page these counts: it now has everything up to them.
+    Send(Seen),
+    /// Carries on, the page holding the counts already.
+    Carry,
+    /// Ends, the pass having failed to read what it draws. Its counts are
+    /// withheld, and so are any a later pass would bring, since that pass
+    /// would not draw again what this one missed; the page opens another
+    /// stream, which draws from the counts the page still holds.
+    End,
+}
+
+impl Handover {
+    fn after(&mut self, now: &Seen, failed: bool) -> After {
+        if failed {
+            return After::End;
+        }
+        if self.sent.as_ref() == Some(now) {
+            return After::Carry;
+        }
+        self.sent = Some(now.clone());
+        After::Send(now.clone())
+    }
 }
 
 /// A page with nothing live of its own: the status line and nav alone.
@@ -329,7 +357,7 @@ pub(super) async fn serve<L: Live>(
         let mut changes = std::pin::pin!(paced(changes, Pace::default()));
         // Said on the first pass whatever else is sent, so the page hears from
         // a stream as soon as it opens.
-        let mut reported = None;
+        let mut handover = Handover::default();
         while let Some(changed) = changes.next().await {
             for e in header.draw(&s, &changed).await {
                 yield e;
@@ -339,9 +367,10 @@ pub(super) async fn serve<L: Live>(
             }
             // The page now has everything up to these counts, so a stream
             // opened after this one carries on from them.
-            if let Some(seen) = handover(&changed.seen, page.failed(), reported.as_ref()) {
-                yield super::signals(serde_json::json!({ "seen": seen }));
-                reported = Some(seen);
+            match handover.after(&changed.seen, page.failed()) {
+                After::Send(seen) => yield super::signals(serde_json::json!({ "seen": seen })),
+                After::Carry => {}
+                After::End => break,
             }
         }
     };
@@ -354,14 +383,27 @@ mod tests {
 
     #[test]
     fn the_counts_move_on_only_after_a_pass_that_drew() {
-        let then = Seen::of([2; TOPICS]);
-        let now = Seen::of([3; TOPICS]);
-        assert_eq!(handover(&now, false, Some(&then)), Some(now.clone()));
-        // A pass that could not read what it draws: the next stream draws it.
-        assert_eq!(handover(&now, true, Some(&then)), None);
-        // Already held.
-        assert_eq!(handover(&now, false, Some(&now)), None);
+        let (then, now) = (Seen::of([2; TOPICS]), Seen::of([3; TOPICS]));
+        let mut handover = Handover::default();
         // Said on the first pass, so the page hears from a stream at once.
-        assert_eq!(handover(&now, false, None), Some(now));
+        assert_eq!(handover.after(&then, false), After::Send(then.clone()));
+        // Held already.
+        assert_eq!(handover.after(&then, false), After::Carry);
+        assert_eq!(handover.after(&now, false), After::Send(now));
+    }
+
+    #[test]
+    fn a_failed_pass_ends_the_stream_before_a_later_one_hands_over() {
+        let mut jobs = [2; TOPICS];
+        let mut handover = Handover::default();
+        assert_eq!(
+            handover.after(&Seen::of(jobs), false),
+            After::Send(Seen::of(jobs))
+        );
+        // A pass for the jobs cannot read them: the stream ends there, so no
+        // pass for another topic can hand over counts that include the jobs
+        // it never drew.
+        jobs[Topic::Jobs as usize] += 1;
+        assert_eq!(handover.after(&Seen::of(jobs), true), After::End);
     }
 }
