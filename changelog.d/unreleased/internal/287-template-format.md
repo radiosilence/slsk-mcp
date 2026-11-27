@@ -1,0 +1,1 @@
+- **The templates are formatted, and CI keeps them so.** askama-analyzer's formatter lays out the Rust inside tags and indents the HTML; `just fmt` runs it, and `just check`, the pre-push hook and CI's formatting job fail on an unformatted template.

@@ -10,3 +10,5 @@ lefthook = "2.2.2"
 node = "24"
 # Compiles crates/slsk-mcp/styles/ into the committed assets/app.css (`just css`).
 "github:tailwindlabs/tailwindcss" = "4.3.3"
+# Formats and checks the askama templates (`just fmt`, `just check`), as the editor does.
+"github:radiosilence/askama-analyzer" = "0.4.0"
