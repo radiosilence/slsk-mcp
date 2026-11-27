@@ -24,6 +24,8 @@ pub(in crate::web) struct Search {
     results: Last,
     /// The running search shown, while it runs.
     heard: Option<watch::Receiver<Heard>>,
+    /// The last pass could not read the tabs.
+    failed: bool,
 }
 
 impl Live for Search {
@@ -33,6 +35,8 @@ impl Live for Search {
         let view: SearchQuery = shown.view();
         let heard = tab(s, &view)
             .await
+            .ok()
+            .flatten()
             .filter(|t| t.searched_at.is_none())
             .and_then(|t| crate::graphql::listening(&t.query));
         Self {
@@ -40,13 +44,16 @@ impl Live for Search {
             strip: last(),
             results: last(),
             heard,
+            failed: false,
         }
     }
 
     async fn draw(&mut self, s: &UiState, c: &Changed) -> Vec<Event> {
         let mut events = Vec::new();
+        self.failed = false;
         if c.topic(Topic::Search) || c.minute {
             let tabs = Tabs::of(&s.app, self.view.tab()).await;
+            self.failed |= tabs.failed;
             events.extend(self.strip.send(&tabs.draw()));
         }
         let answered = c.woke;
@@ -55,8 +62,14 @@ impl Live for Search {
         if !(answered || c.topic(Topic::Search) || c.topic(Topic::Peers)) {
             return events;
         }
-        let Some(tab) = tab(s, &self.view).await else {
-            return events;
+        let tab = match tab(s, &self.view).await {
+            Ok(Some(tab)) => tab,
+            Ok(None) => return events,
+            Err(e) => {
+                tracing::warn!(error = %e, "could not read the search tab");
+                self.failed = true;
+                return events;
+            }
         };
         let results = match (
             &tab.searched_at,
@@ -78,6 +91,10 @@ impl Live for Search {
     }
 
     /// Each time peers answer the running search, until it stops listening.
+    fn failed(&self) -> bool {
+        self.failed
+    }
+
     fn wakes(&self) -> Option<BoxStream<'static, ()>> {
         let heard = self.heard.clone()?;
         Some(
@@ -90,10 +107,10 @@ impl Live for Search {
     }
 }
 
-/// The tab the address names, as it now stands.
-async fn tab(s: &UiState, view: &SearchQuery) -> Option<SearchTab> {
-    crate::db::search_tab(&s.app.db, view.tab()?)
-        .await
-        .ok()
-        .flatten()
+/// The tab the address names, as it now stands; none when it names none.
+async fn tab(s: &UiState, view: &SearchQuery) -> anyhow::Result<Option<SearchTab>> {
+    let Some(id) = view.tab() else {
+        return Ok(None);
+    };
+    Ok(crate::db::search_tab(&s.app.db, id).await?)
 }

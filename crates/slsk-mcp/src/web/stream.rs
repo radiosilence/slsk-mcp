@@ -28,7 +28,7 @@ use tokio::sync::watch;
 use super::layout::{Nav, Status};
 use super::page::Tab;
 use super::{Draw, UiState};
-use crate::live::{TOPICS, Topic};
+use crate::live::{Seen, TOPICS, Topic};
 
 pub(super) mod activity;
 pub(super) mod browse;
@@ -56,6 +56,19 @@ pub(super) trait Live: Sized + Send + 'static {
     fn wakes(&self) -> Option<BoxStream<'static, ()>> {
         None
     }
+    /// Whether the last [`draw`](Self::draw) failed to read what it draws
+    /// (the database did not answer), so the page is behind the counts that
+    /// pass was for.
+    fn failed(&self) -> bool {
+        false
+    }
+}
+
+/// The counts a pass brings the page up to, when they are to be sent: not
+/// after a pass that failed, so the next stream draws again what it missed,
+/// and not when the page holds them already.
+fn handover(now: &Seen, failed: bool, holds: Option<&Seen>) -> Option<Seen> {
+    (!failed && holds != Some(now)).then(|| now.clone())
 }
 
 /// A page with nothing live of its own: the status line and nav alone.
@@ -103,7 +116,7 @@ pub(super) struct Shown {
     /// The live topics' counts the page has drawn up to: as they stood when
     /// its body was drawn, then as each pass of its stream left them. None
     /// from a page that does not say, which is drawn whole.
-    pub(super) seen: Option<crate::live::Counts>,
+    pub(super) seen: Option<Seen>,
 }
 
 impl Default for Shown {
@@ -144,7 +157,7 @@ pub(super) struct Changed {
     /// A change of the stream's own ([`Live::wakes`]).
     pub(super) woke: bool,
     /// The topics' counts this redraw brings the page up to.
-    seen: crate::live::Counts,
+    seen: Seen,
 }
 
 impl Changed {
@@ -220,25 +233,22 @@ struct Sources {
 }
 
 impl Sources {
-    fn new(
-        s: &UiState,
-        drawn: Option<crate::live::Counts>,
-        wakes: Option<BoxStream<'static, ()>>,
-    ) -> Self {
+    fn new(s: &UiState, drawn: Option<Seen>, wakes: Option<BoxStream<'static, ()>>) -> Self {
         let mut changes = crate::live::subscribe();
         let seen = *changes.borrow_and_update();
-        // A page that says what it drew gets only what moved since; one that
-        // does not is drawn whole.
+        // A page that says what it drew in this boot gets only what moved
+        // since; one that does not, or drew it before a restart, is drawn
+        // whole.
         let first = Changed {
-            topics: match drawn {
-                Some(then) => std::array::from_fn(|i| seen[i] != then[i]),
+            topics: match &drawn {
+                Some(then) => then.moved(&Seen::of(seen)),
                 None => [true; TOPICS],
             },
             moved: drawn.is_none(),
             connection: drawn.is_none(),
             minute: drawn.is_none(),
             woke: false,
-            seen,
+            seen: Seen::of(seen),
         };
         Self {
             changes,
@@ -297,7 +307,7 @@ impl Sources {
             connection,
             minute,
             woke,
-            seen: now,
+            seen: Seen::of(now),
         })
     }
 }
@@ -307,7 +317,7 @@ pub(super) async fn serve<L: Live>(
     State(s): State<UiState>,
     Signals(shown): Signals<Shown>,
 ) -> impl IntoResponse {
-    let drawn = shown.seen;
+    let drawn = shown.seen.clone();
     let mut page = L::open(&s, shown).await;
     let sources = Sources::new(&s, drawn, page.wakes());
     let changes = futures_util::stream::unfold(sources, |mut sources| async move {
@@ -329,11 +339,29 @@ pub(super) async fn serve<L: Live>(
             }
             // The page now has everything up to these counts, so a stream
             // opened after this one carries on from them.
-            if reported != Some(changed.seen) {
-                yield super::signals(serde_json::json!({ "seen": changed.seen.to_vec() }));
-                reported = Some(changed.seen);
+            if let Some(seen) = handover(&changed.seen, page.failed(), reported.as_ref()) {
+                yield super::signals(serde_json::json!({ "seen": seen }));
+                reported = Some(seen);
             }
         }
     };
     askama_datastar::stream(events)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_counts_move_on_only_after_a_pass_that_drew() {
+        let then = Seen::of([2; TOPICS]);
+        let now = Seen::of([3; TOPICS]);
+        assert_eq!(handover(&now, false, Some(&then)), Some(now.clone()));
+        // A pass that could not read what it draws: the next stream draws it.
+        assert_eq!(handover(&now, true, Some(&then)), None);
+        // Already held.
+        assert_eq!(handover(&now, false, Some(&now)), None);
+        // Said on the first pass, so the page hears from a stream at once.
+        assert_eq!(handover(&now, false, None), Some(now));
+    }
 }

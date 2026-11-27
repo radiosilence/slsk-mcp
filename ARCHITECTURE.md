@@ -138,11 +138,15 @@ message.
 Because streams open so often, two rules keep an opening cheap.
 
 **A stream draws only what changed after the page did.** A page records the
-`live` topics' counts as they stood before its body was drawn (the `seen`
-signal), and its stream's first pass draws only the topics that moved since;
-after each pass the stream sets `seen` to the counts it has drawn up to, so
-the stream that replaces it carries on from there. Nothing the body drew, or
-the last stream sent, is sent again.
+`live` topics' counts as they stood before its body was drawn, with the boot
+they were counted in (the `seen` signal, `live::Seen`), and its stream's
+first pass draws only the topics that moved since. The counts restart with
+the process, so a `seen` from another boot matches nothing and the page is
+drawn whole. After a pass the stream sets `seen` to the counts it has drawn up
+to, so the stream that replaces it carries on from there; a pass that could
+not read what it draws (`Live::failed`: the database did not answer) leaves
+`seen` where it was, so the next stream draws it again. Nothing the body drew,
+or the last stream sent, is sent again.
 
 **Work a page asks for is owned by the server, never by a stream.** A
 question to a peer or the server (a share list, a profile, whether a user is

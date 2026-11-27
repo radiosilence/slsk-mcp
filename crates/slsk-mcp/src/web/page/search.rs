@@ -239,15 +239,21 @@ fn best(responses: &[Arc<SearchResponse>], query: &str, lossless: bool) -> Vec<F
 pub(in crate::web) struct Tabs {
     tabs: Vec<SearchTab>,
     active: Option<Uuid>,
+    /// The database did not answer, so these are not the tabs as they stand.
+    pub(in crate::web) failed: bool,
 }
 
 impl Tabs {
     pub(in crate::web) async fn of(app: &App, active: Option<Uuid>) -> Self {
-        let tabs = db::search_tabs(&app.db)
+        let read = db::search_tabs(&app.db)
             .await
-            .inspect_err(|e| tracing::warn!(error = %e, "could not list search tabs"))
-            .unwrap_or_default();
-        Self { tabs, active }
+            .inspect_err(|e| tracing::warn!(error = %e, "could not list search tabs"));
+        let failed = read.is_err();
+        Self {
+            tabs: read.unwrap_or_default(),
+            active,
+            failed,
+        }
     }
     fn is_active(&self, t: &SearchTab) -> bool {
         self.active == Some(t.id)
