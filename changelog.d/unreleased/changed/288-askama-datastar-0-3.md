@@ -1,0 +1,1 @@
+- **askama_datastar 0.3 and koan-kit-web 0.7.** In-place navigation, stream pacing, region diffs and the escaping test use the crate's helpers rather than copies of their own.

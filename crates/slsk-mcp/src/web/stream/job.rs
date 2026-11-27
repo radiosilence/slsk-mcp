@@ -4,11 +4,12 @@
 use axum::response::sse::Event;
 use uuid::Uuid;
 
-use super::{Changed, Last, Live, Shown};
+use super::{Changed, Live, Shown, last};
 use crate::live::Topic;
 use crate::web::page::Tab;
 use crate::web::page::downloads::job::{JobPage, of_path};
 use crate::web::{Draw, UiState};
+use askama_datastar::Last;
 
 pub(in crate::web) struct Job {
     id: Option<Uuid>,
@@ -20,8 +21,8 @@ impl Live for Job {
 
     async fn open(_: &UiState, shown: Shown) -> Self {
         Self {
-            id: of_path(shown.uri().path()),
-            page: Last::default(),
+            id: of_path(shown.path()),
+            page: last(),
         }
     }
 
@@ -33,7 +34,7 @@ impl Live for Job {
             return Vec::new();
         }
         match JobPage::of(&s.app, id).await {
-            Ok((page, _)) => self.page.send(page.draw()).into_iter().collect(),
+            Ok((page, _)) => self.page.send(&page.draw()).into_iter().collect(),
             Err(e) => {
                 tracing::warn!(%id, error = %e, "could not show job");
                 Vec::new()

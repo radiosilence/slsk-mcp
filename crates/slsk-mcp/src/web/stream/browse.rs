@@ -4,11 +4,12 @@
 
 use axum::response::sse::Event;
 
-use super::{Changed, Last, Live, Shown};
+use super::{Changed, Live, Shown, last};
 use crate::live::Topic;
 use crate::web::page::Tab;
 use crate::web::page::browse::{BrowseQuery, Place, Shares};
 use crate::web::{Draw, UiState};
+use askama_datastar::Last;
 
 pub(in crate::web) struct Browse {
     place: Option<Place>,
@@ -24,7 +25,7 @@ impl Live for Browse {
         Self {
             place: Place::from_query(&shown.view::<BrowseQuery>()).ok(),
             drawn: None,
-            shares: Last::default(),
+            shares: last(),
         }
     }
 
@@ -38,7 +39,7 @@ impl Live for Browse {
         }
         self.drawn = answered;
         self.shares
-            .send(Shares::of(s, engine, p).draw())
+            .send(&Shares::of(s, engine, p).draw())
             .into_iter()
             .collect()
     }

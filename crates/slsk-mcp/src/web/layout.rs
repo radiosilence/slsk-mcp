@@ -35,6 +35,11 @@ impl Layout {
     fn css(&self) -> String {
         APP_CSS.url("/assets/app.css")
     }
+    /// The address bar following `$url`, the address a page loaded in place
+    /// shows.
+    fn history(&self) -> Html {
+        askama_datastar::history("url")
+    }
     fn live(&self) -> String {
         LIVE_JS.url("/assets/live.js")
     }

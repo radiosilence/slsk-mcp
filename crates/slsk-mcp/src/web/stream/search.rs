@@ -5,15 +5,18 @@
 //! do (see [`crate::web::page::search::run`]).
 
 use axum::response::sse::Event;
+use futures_util::StreamExt as _;
+use futures_util::stream::BoxStream;
 use tokio::sync::watch;
 
-use super::{Changed, Last, Live, Shown};
+use super::{Changed, Live, Shown, last};
 use crate::db::SearchTab;
 use crate::graphql::Heard;
 use crate::live::Topic;
 use crate::web::page::Tab;
 use crate::web::page::search::{Results, SearchQuery, Tabs};
 use crate::web::{Draw, UiState};
+use askama_datastar::Last;
 
 pub(in crate::web) struct Search {
     view: SearchQuery,
@@ -21,8 +24,6 @@ pub(in crate::web) struct Search {
     results: Last,
     /// The running search shown, while it runs.
     heard: Option<watch::Receiver<Heard>>,
-    /// Peers have answered since the results were last drawn.
-    answered: bool,
 }
 
 impl Live for Search {
@@ -36,10 +37,9 @@ impl Live for Search {
             .and_then(|t| crate::graphql::listening(&t.query));
         Self {
             view,
-            strip: Last::default(),
-            results: Last::default(),
+            strip: last(),
+            results: last(),
             heard,
-            answered: false,
         }
     }
 
@@ -47,9 +47,9 @@ impl Live for Search {
         let mut events = Vec::new();
         if c.topic(Topic::Search) || c.minute {
             let tabs = Tabs::of(&s.app, self.view.tab()).await;
-            events.extend(self.strip.send(tabs.draw()));
+            events.extend(self.strip.send(&tabs.draw()));
         }
-        let answered = std::mem::take(&mut self.answered);
+        let answered = c.woke;
         // The tab finishing, or the server saying who is online, redraws
         // what it kept; peers answering redraws what is heard so far.
         if !(answered || c.topic(Topic::Search) || c.topic(Topic::Peers)) {
@@ -73,19 +73,20 @@ impl Live for Search {
             }
             _ => return events,
         };
-        events.extend(self.results.send(results.draw()));
+        events.extend(self.results.send(&results.draw()));
         events
     }
 
-    async fn wake(&mut self) {
-        let Some(heard) = self.heard.as_mut() else {
-            return std::future::pending().await;
-        };
-        // A search that went away is drawn as it ended, from what it kept.
-        if heard.changed().await.is_err() {
-            self.heard = None;
-        }
-        self.answered = true;
+    /// Each time peers answer the running search, until it stops listening.
+    fn wakes(&self) -> Option<BoxStream<'static, ()>> {
+        let heard = self.heard.clone()?;
+        Some(
+            futures_util::stream::unfold(heard, |mut heard| async move {
+                heard.changed().await.ok()?;
+                Some(((), heard))
+            })
+            .boxed(),
+        )
     }
 }
 

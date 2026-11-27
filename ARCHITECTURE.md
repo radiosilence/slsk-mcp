@@ -84,8 +84,9 @@ impl Page for Wishlist {
 }
 ```
 
-`Args` is any axum extractor: `View<Q>` reads the address's query leniently
-(an address that does not parse is the default view, not an error), and
+`Args` is any axum extractor: `askama_datastar::View<Q>` reads the address's
+query leniently (an address that does not parse is the default view, not an
+error), and
 `Path<Uuid>` names a job. `Body` carries the rendered body and what the layout
 needs: a heading for the title, a status, the page's own signals, or a
 redirect when the address now shows another page.
@@ -93,10 +94,13 @@ redirect when the address now shows another page.
 `page::serve::<P>` draws any page two ways. A browser asking for the address
 gets the layout around the body. The page itself asking, through a link or
 form that loads in place (`kit::Link::in_place`, `kit::Form::get`), gets the
-body morphed into `main`, the title, and the address as `$url`; the address
-bar follows. An action that takes the page elsewhere answers the same way,
-through `page::shown`. So a reload, a shared link, back and forward all draw
-exactly what the address names.
+body morphed into `main`, the title, and the address as `$url`
+(`askama_datastar::address`, the request's address less Datastar's own
+`datastar` parameter, spelled as the person wrote it). The layout's
+`askama_datastar::history("url")` keeps the address bar on `$url`. An action
+that takes the page elsewhere answers the same way, through `page::shown`, or
+with `askama_datastar::go` when it must load another page whole. So a reload,
+a shared link, back and forward all draw exactly what the address names.
 
 ### Streams
 
@@ -107,23 +111,29 @@ impl Live for Wishlist {
     const TAB: Tab = Tab::Wishlist;
     async fn open(s: &UiState, shown: Shown) -> Self { … }       // from the page's signals
     async fn draw(&mut self, s: &UiState, c: &Changed) -> Vec<Event> { … }
-    async fn wake(&mut self) { … }  // optional: a change of its own (a running search's answers)
+    fn wakes(&self) -> Option<BoxStream<'static, ()>> { … }  // optional: changes of its own
 }
 ```
 
-`stream::serve::<L>` runs it: it opens the stream from the page's signals,
-draws the status line and nav beside it, and then waits on what changes them
-(the `live` topics, transfers, the connection, the minute turning, or the
-stream's own `wake`), redrawing at most every 250 ms. `Changed` says what
-moved, so each stream draws only the regions that could have changed, and
-`stream::Last` sends a region only when it differs from what was last sent.
+`stream::serve::<L>` runs it: it opens the stream from the page's signals and
+turns what changes the page (the `live` topics, transfers, the connection,
+the minute turning, and the stream's own `wakes`, such as a running search's
+answers) into a stream of `Changed`, which `askama_datastar::paced` spaces at
+most one every 250 ms and ends after a minute. Each `Changed` draws the status
+line and nav, then the page's regions; it says what moved, so each stream
+draws only the regions that could have changed, and `askama_datastar::Last`
+(through `stream::last`, which compares markup without the busy signals the
+kit names afresh on each render) sends a region only when it differs from
+what was last sent.
 
 A page opens its stream through `askama_datastar::reopen_on`, which opens it
 again when it ends or goes quiet, and afresh when `$url` changes. A stream
 therefore never tracks navigation: it draws the page its address names, and is
-replaced when the address moves. Streams end themselves after a minute, which
-bounds how long a page can sit on a connection that died without either end
-noticing.
+replaced when the address moves. Ending after a minute bounds how long a page
+can sit on a connection that died without either end noticing. Every signal
+`reopen_on` names (`url`, `jobs`, `history`, `files`, `librows`) is declared on
+every page: an undeclared one stops the stream reopening without a console
+message.
 
 Because streams open so often, two rules keep an opening cheap.
 
@@ -159,9 +169,9 @@ An action changes something and answers with as little as it can:
 - When the action moves the page (opening a conversation, leaving a room), it
   answers with the page it leads to (`page::shown`).
 - A region the server filled that the person closes (a preview, an edit form)
-  is closed by an action that sends the region again empty, from the template
-  that declares its closed state (`library/closed.html`). Datastar morphs by
-  the elements a patch carries, so a patch with none changes nothing.
+  is closed by an action answering `askama_datastar::clear("#region")`, which
+  empties it in place. The region's empty markup is declared once, in the
+  template that places it (`library/closed.html`).
 
 Form bodies whose fields repeat are read with `web::fields`; a button's row is
 named in its URL's query, since a button posts the page's signals rather than
@@ -221,7 +231,11 @@ radiosilence/koan#2365.
 `web::escaping` builds the real service against the in-process test server
 (`web::fixture`), fills every field a person or peer controls with
 markup-shaped text, and requests every page (whole and in place), every
-stream and every disclosure region through the router. Each answer must carry
-the text escaped exactly once, and none may carry escaped markup of the
-templates' own: that is a fragment spliced in as text, which shows a page of
-raw HTML. A new page, stream or field a person controls belongs in it.
+stream and every disclosure region through the router with
+`askama_datastar::escaping::get`. `escaping::Guard`, told the hostile texts,
+the templates directory and the element names the kit writes, finds what is
+wrong with each answer: markup of the templates' own escaped (a fragment
+spliced in as text, which shows a page of raw HTML), the text escaped twice,
+or the text left as markup. Where a page shows the text, the test checks it
+is there as `escaping::escaped` writes it. The seeding and the addresses are
+slsk's own; a new page, stream or field a person controls belongs in it.

@@ -139,11 +139,16 @@ pub(in crate::web) struct Filter {
 
 /// The albums open in detail, by path, as the address lists them: each
 /// opens in its own row, so several can be worked on at once.
-pub(in crate::web) fn open_albums(uri: &http::Uri) -> Vec<String> {
-    url::form_urlencoded::parse(uri.query().unwrap_or_default().as_bytes())
-        .filter(|(k, v)| k == "album" && !v.is_empty())
-        .map(|(_, v)| v.into_owned())
-        .collect()
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+pub(in crate::web) struct Open {
+    album: Vec<String>,
+}
+
+impl Open {
+    pub(in crate::web) fn albums(self) -> Vec<String> {
+        self.album.into_iter().filter(|a| !a.is_empty()).collect()
+    }
 }
 
 /// The element an album's detail opens into, in its row; everything the
@@ -588,14 +593,13 @@ pub(in crate::web) async fn album(
     Query(AlbumQuery { filter: _, path }): Query<AlbumQuery>,
     Signals(shown): Signals<Shown>,
 ) -> Response {
-    let uri = shown.uri();
-    let filter: Filter = crate::web::query(&uri);
-    let mut open = open_albums(&uri);
+    let filter: Filter = shown.view();
+    let mut open = shown.view::<Open>().albums();
     let slot = slot_of(&path);
     if open.contains(&path) {
         open.retain(|p| *p != path);
         return askama_datastar::events([
-            Slot { slot }.draw().patch().into(),
+            askama_datastar::clear(&format!("#{slot}")).into(),
             place(&filter.url_with(&open)),
         ]);
     }
@@ -622,23 +626,7 @@ pub(in crate::web) async fn dismiss(Query(q): Query<DismissQuery>) -> Response {
         _ => return http::StatusCode::BAD_REQUEST.into_response(),
     };
     let slot = slot_in(&[("slot".to_string(), q.slot)]);
-    askama_datastar::events([Closed { slot: &slot, part }.draw().patch().into()])
-}
-
-/// An album's place in its row, closed.
-#[derive(Template)]
-#[template(path = "library/slot.html")]
-struct Slot {
-    slot: String,
-}
-
-/// A region the server fills in an album's place (or above the list, for
-/// the slot `lib`), closed: a re-tag, an edit form or a preview.
-#[derive(Template)]
-#[template(path = "library/closed.html")]
-pub(in crate::web) struct Closed<'a> {
-    pub(in crate::web) slot: &'a str,
-    pub(in crate::web) part: &'a str,
+    askama_datastar::events([askama_datastar::clear(&format!("#{slot}-{part}")).into()])
 }
 
 #[derive(Template)]
