@@ -1,6 +1,10 @@
-<div class="compact flex flex-wrap items-center gap-x-3 gap-y-1" role="group" aria-label="Secondary release types">
-{% for (t, on) in self.type_choices() %}
-  {% let choice = kit::Check::new("type-secondary", t).value(t).checked(on) %}
-  {% if self.is_primary(t) %}{{ choice.data("primary", "1") }}{% else %}{{ choice }}{% endif %}
-{% endfor %}
+<div
+  class="compact flex flex-wrap items-center gap-x-3 gap-y-1"
+  role="group"
+  aria-label="Secondary release types"
+>
+  {% for (t, on) in self.type_choices() %}
+    {% let choice = kit::Check::new("type-secondary", t).value(t).checked(on) %}
+    {% if self.is_primary(t) %}{{ choice.data("primary", "1") }}{% else %}{{ choice }}{% endif %}
+  {% endfor %}
 </div>

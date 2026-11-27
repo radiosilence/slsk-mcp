@@ -14,10 +14,11 @@
     <div class="mt-2.5 flex flex-wrap items-center gap-2">
       {{ kit::Button::quiet(self.browse_label()).href(crate::web::browse_href(username, "")) }}
       {% if !mine %}
-      {{ kit::Button::quiet("Message").href(crate::web::chat_href("pm", username)) }}
-      {{ kit::Button::quiet("Add buddy").post(crate::web::row_url("/chat/buddy/add", "username", username)) }}
-      {{ crate::web::peer::ban_button(username, *banned) }}
-      {{ kit::Button::quiet("Refresh").href(self.refresh()).in_place() }}
+        {{ kit::Button::quiet("Message").href(crate::web::chat_href("pm", username)) }}
+        {{ kit::Button::quiet("Add buddy")
+            .post(crate::web::row_url("/chat/buddy/add", "username", username)) }}
+        {{ crate::web::peer::ban_button(username, *banned) }}
+        {{ kit::Button::quiet("Refresh").href(self.refresh()).in_place() }}
       {% endif %}
     </div>
     {% if !stats.is_empty() %}{{ self.pairs().class("mt-2.5") }}{% endif %}

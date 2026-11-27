@@ -1,19 +1,19 @@
 <div id="wishlist">
-{% match error %}{% when Some with (e) %}{{ kit::Notice::bad(e).class("wrap-anywhere") }}{% when None %}
-  {% if rows.is_empty() %}{{ kit::Empty::new("No wishes.").detail("Add one for something nobody is sharing yet.") }}{% endif %}
-  <ul class="rows">
-  {% for r in rows %}
-    <li>
-      <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5 basis-full">
-        <strong class="min-w-0 flex-[1_1_60%] wrap-anywhere">{{ r.wish.query }}</strong>
-        {{ kit::Button::quiet("Remove").post("/wishlist/{}/remove"|format(r.wish.id)) }}
-      </div>
-      <div class="text-meta text-muted wrap-anywhere">
-        {% if r.wish.lossless %}lossless · {% endif %}{% if r.wish.grab %}grabs when found{% else %}search only{% endif %} · {{ self.searched(r.wish) }}{% match self.next_for(r.wish) %}{% when Some with (at) %} · searched next, in <span data-until="{{ at }}"></span>{% when None %}{% endmatch %}
-        {% match r.job %}{% when Some with (j) %} · became <a href="/jobs/{{ r.wish.job_id.unwrap_or_default() }}">{{ j.0 }}</a> ({{ self.label(j.1) }}){% when None %}{% endmatch %}
-      </div>
-    </li>
-  {% endfor %}
-  </ul>
-{% endmatch %}
+  {% match error %}{% when Some with (e) %}{{ kit::Notice::bad(e).class("wrap-anywhere") }}{% when None %}
+      {% if rows.is_empty() %}{{ kit::Empty::new("No wishes.").detail("Add one for something nobody is sharing yet.") }}{% endif %}
+      <ul class="rows">
+        {% for r in rows %}
+          <li>
+            <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5 basis-full">
+              <strong class="min-w-0 flex-[1_1_60%] wrap-anywhere">{{ r.wish.query }}</strong>
+              {{ kit::Button::quiet("Remove").post("/wishlist/{}/remove"|format(r.wish.id)) }}
+            </div>
+            <div class="text-meta text-muted wrap-anywhere">
+              {% if r.wish.lossless %}lossless · {% endif %}{% if r.wish.grab %}grabs when found{% else %}search only{% endif %} · {{ self.searched(r.wish) }}{% match self.next_for(r.wish) %}{% when Some with (at) %} · searched next, in <span data-until="{{ at }}"></span>{% when None %}{% endmatch %}
+              {% match r.job %}{% when Some with (j) %} · became <a href="/jobs/{{ r.wish.job_id.unwrap_or_default() }}">{{ j.0 }}</a> ({{ self.label(j.1) }}){% when None %}{% endmatch %}
+            </div>
+          </li>
+        {% endfor %}
+      </ul>
+  {% endmatch %}
 </div>

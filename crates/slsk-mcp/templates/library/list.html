@@ -1,29 +1,70 @@
 <div id="library">
-{% if let Some(e) = error %}{{ kit::Notice::bad(e).class("wrap-anywhere") }}{% else %}
-{% if total == 0 %}{{ kit::Empty::new("No albums match.") }}{% else %}
-{#- Every action submits the form's fields to its own URL, the albums ticked in it, as one busy group. -#}
-<form id="lib-sel" data-signals="{_sel: 0, _spares: 0}"
-  data-on:change="evt.target.name == 'all' ? el.querySelectorAll('input[name=path]').forEach(c => c.checked = evt.target.checked) : (evt.target.checked || (el.querySelector('input[name=all]').checked = false)); $_sel = el.querySelector('input[name=all]').checked ? {{ total }} : el.querySelectorAll('input[name=path]:checked').length; $_spares = el.querySelector('input[name=all]').checked ? {{ spares }} : el.querySelectorAll('input[name=path][data-spare]:checked').length">
-  {% include "library/filter.html" %}
-  <div class="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-rule pt-1 pb-2">
-    {{ kit::Check::new("all", "select all {}"|format(total)).value("1") }}
-    <span class="text-meta text-muted">{{ total }} album{% if total != 1 %}s{% endif %}, newest import first</span>
-  </div>
-  <ul id="lib-rows" class="rows">
-{% if let Some(r) = rows %}{{ r.draw() }}{% endif %}
-  </ul>
-  {% if let Some(r) = rows %}{{ r.more.draw() }}{% endif %}
-  <div class="compact sticky bottom-0 z-1 mt-2 flex flex-wrap items-center gap-2 border border-rule bg-bg px-3 py-2.5 pb-[max(10px,env(safe-area-inset-bottom))]" hidden data-attr:hidden="!($_sel > 0)">
-    <span class="mr-auto text-ink" data-text="$_sel + ' selected'"></span>
-    {{ kit::Button::bordered("Re-file").post("/library/preview/refile").sends("lib-sel").busy_key("lib") }}
-    {{ kit::Combo::new(kit::Input::text("split").placeholder("split on").label("Separator to split artist credits on").autocomplete("off").attr("title", "Split each credit on this, as typed, for artists the library holds nothing else by").datastar("on:keydown", "evt.key == 'Enter' && (evt.preventDefault(), el.nextElementSibling.click())"), kit::Button::bordered("Credit artists").post("/library/preview/credit").sends("lib-sel").busy_key("lib")) }}
-    {{ kit::Button::bordered("Enrich").post("/library/preview/enrich").sends("lib-sel").busy_key("lib") }}
-    {{ kit::Button::bordered("Re-tag").post("/library/preview/reimport").sends("lib-sel").busy_key("lib") }}
-    {{ kit::Button::bordered("Edit tags").post("/library/edit").sends("lib-sel").busy_key("lib") }}
-    {{ kit::Button::bordered("Remove art").post("/library/preview/remove-art").sends("lib-sel").busy_key("lib") }}
-    {{ kit::Button::bordered("Bin spares").post("/library/preview/bin").sends("lib-sel").busy_key("lib").attr("hidden", "").datastar("attr:hidden", "!($_spares > 0)") }}
-  </div>
-</form>
-{% endif %}
-{% endif %}
+  {% if let Some(e) = error %}{{ kit::Notice::bad(e).class("wrap-anywhere") }}{% else %}
+    {% if total == 0 %}{{ kit::Empty::new("No albums match.") }}{% else %}
+      {#- Every action submits the form's fields to its own URL, the albums ticked in it, as one busy group. -#}
+      <form id="lib-sel" data-signals="{_sel: 0, _spares: 0}"
+        data-on:change="evt.target.name == 'all' ? el.querySelectorAll('input[name=path]').forEach(c => c.checked = evt.target.checked) : (evt.target.checked || (el.querySelector('input[name=all]').checked = false)); $_sel = el.querySelector('input[name=all]').checked ? {{ total }} : el.querySelectorAll('input[name=path]:checked').length; $_spares = el.querySelector('input[name=all]').checked ? {{ spares }} : el.querySelectorAll('input[name=path][data-spare]:checked').length">
+        {% include "library/filter.html" %}
+        <div class="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-rule pt-1 pb-2">
+          {{ kit::Check::new("all", "select all {}"|format(total)).value("1") }}
+          <span class="text-meta text-muted">{{ total }} album{% if total != 1 %}s{% endif %}, newest import first</span>
+        </div>
+        <ul id="lib-rows" class="rows">
+          {% if let Some(r) = rows %}{{ r.draw() }}{% endif %}
+        </ul>
+        {% if let Some(r) = rows %}{{ r.more.draw() }}{% endif %}
+        <div
+          class="compact sticky bottom-0 z-1 mt-2 flex flex-wrap items-center gap-2 border border-rule bg-bg px-3 py-2.5 pb-[max(10px,env(safe-area-inset-bottom))]"
+          hidden
+          data-attr:hidden="!($_sel > 0)"
+        >
+          <span class="mr-auto text-ink" data-text="$_sel + ' selected'"></span>
+          {{ kit::Button::bordered("Re-file")
+              .post("/library/preview/refile")
+              .sends("lib-sel")
+              .busy_key("lib") }}
+          {{ kit::Combo::new(
+              kit::Input::text("split")
+                  .placeholder("split on")
+                  .label("Separator to split artist credits on")
+                  .autocomplete("off")
+                  .attr(
+                      "title",
+                      "Split each credit on this, as typed, for artists the library holds nothing else by",
+                  )
+                  .datastar(
+                      "on:keydown",
+                      "evt.key == 'Enter' && (evt.preventDefault(), el.nextElementSibling.click())",
+                  ),
+              kit::Button::bordered("Credit artists")
+                  .post("/library/preview/credit")
+                  .sends("lib-sel")
+                  .busy_key("lib"),
+          ) }}
+          {{ kit::Button::bordered("Enrich")
+              .post("/library/preview/enrich")
+              .sends("lib-sel")
+              .busy_key("lib") }}
+          {{ kit::Button::bordered("Re-tag")
+              .post("/library/preview/reimport")
+              .sends("lib-sel")
+              .busy_key("lib") }}
+          {{ kit::Button::bordered("Edit tags")
+              .post("/library/edit")
+              .sends("lib-sel")
+              .busy_key("lib") }}
+          {{ kit::Button::bordered("Remove art")
+              .post("/library/preview/remove-art")
+              .sends("lib-sel")
+              .busy_key("lib") }}
+          {{ kit::Button::bordered("Bin spares")
+              .post("/library/preview/bin")
+              .sends("lib-sel")
+              .busy_key("lib")
+              .attr("hidden", "")
+              .datastar("attr:hidden", "!($_spares > 0)") }}
+        </div>
+      </form>
+    {% endif %}
+  {% endif %}
 </div>

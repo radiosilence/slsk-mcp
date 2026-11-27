@@ -1,7 +1,7 @@
 <ul id="rooms" class="rows">
-{% if !listed %}<li class="text-meta text-muted">The server has not sent its room list yet.</li>{% else if rooms.is_empty() %}<li class="text-meta text-muted">No room by that name; join it to make it.</li>{% endif %}
-{% for r in rooms %}
-  <li><span class="min-w-0 flex-[1_1_60%] truncate">{{ r.0 }}</span><span class="text-meta text-muted wrap-anywhere">{{ r.1 }}</span>{{ kit::Button::bordered("Join").post(crate::web::row_url("/chat/join", "room", r.0)) }}</li>
-{% endfor %}
-{% if hidden > 0 %}<li class="text-meta text-muted">{{ hidden }} more; type a name to narrow the list.</li>{% endif %}
+  {% if !listed %}<li class="text-meta text-muted">The server has not sent its room list yet.</li>{% else if rooms.is_empty() %}<li class="text-meta text-muted">No room by that name; join it to make it.</li>{% endif %}
+  {% for r in rooms %}
+    <li><span class="min-w-0 flex-[1_1_60%] truncate">{{ r.0 }}</span><span class="text-meta text-muted wrap-anywhere">{{ r.1 }}</span>{{ kit::Button::bordered("Join").post(crate::web::row_url("/chat/join", "room", r.0)) }}</li>
+  {% endfor %}
+  {% if hidden > 0 %}<li class="text-meta text-muted">{{ hidden }} more; type a name to narrow the list.</li>{% endif %}
 </ul>

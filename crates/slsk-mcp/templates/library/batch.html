@@ -7,29 +7,51 @@
     {% include "library/filter.html" %}
     <p class="my-0.5 text-meta text-muted">What is typed is set on every file of every album; a field left blank is left as each album has it, and one ticked Clear is removed. A primary release type chosen replaces each album's whole type with it and the secondary types ticked; secondary types ticked with the primary type left as is replace each album's own beside the primary type it has. The preview lists each file's changes first. Changing the album artist clears each file's list of album artists and their MusicBrainz ids; Credit artists splits it again.</p>
     <div class="my-2 grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2">
-    {% for (field, label) in self.fields() %}
-      {% if field == "albumtypes" %}
-      {% filter kit::wrap(kit::Field::custom(label).class("col-span-full")) %}
+      {% for (field, label) in self.fields() %}
+        {% if field == "albumtypes" %}
+          {% filter kit::wrap(kit::Field::custom(label).class("col-span-full")) %}
         <div class="flex flex-wrap items-center gap-2">
           {{ self.primary_select() }}
           {% include "library/types.html" %}
-          {{ kit::Check::new("clear-{}"|format(field), "clear").value("1").datastar("on:change", "evt.target.closest('.field').querySelectorAll('select, [name=type-secondary]').forEach(c => c.disabled = evt.target.checked)") }}
+          {{ kit::Check::new("clear-{}"|format(field), "clear")
+              .value("1")
+              .datastar(
+                  "on:change",
+                  "evt.target.closest('.field').querySelectorAll('select, [name=type-secondary]').forEach(c => c.disabled = evt.target.checked)",
+              ) }}
         </div>
       {% endfilter %}
-      {% else %}
-      {% filter kit::wrap(kit::Field::custom(label)) %}
+        {% else %}
+          {% filter kit::wrap(kit::Field::custom(label)) %}
         <div class="flex items-center gap-2">
-          {{ kit::Input::text("a-{}"|format(field)).label(label).placeholder("leave as is").autocomplete("off").class("flex-1") }}
-          {{ kit::Check::new("clear-{}"|format(field), "clear").value("1").datastar("on:change", "evt.target.closest('.field').querySelector('input[name^=a-]').disabled = evt.target.checked") }}
+          {{ kit::Input::text("a-{}"|format(field))
+              .label(label)
+              .placeholder("leave as is")
+              .autocomplete("off")
+              .class("flex-1") }}
+          {{ kit::Check::new("clear-{}"|format(field), "clear")
+              .value("1")
+              .datastar(
+                  "on:change",
+                  "evt.target.closest('.field').querySelector('input[name^=a-]').disabled = evt.target.checked",
+              ) }}
         </div>
       {% endfilter %}
-      {% endif %}
-    {% endfor %}
+        {% endif %}
+      {% endfor %}
       {% filter kit::wrap(kit::Field::custom("rename an artist").hint("Wherever a file's artist or album artist is this name, in any case; a collaboration that includes it is left alone.").class("col-span-full")) %}
         <div class="flex flex-wrap items-center gap-2">
-          {{ kit::Input::text("rename-from").label("Name as the files have it").placeholder("the name as the files have it").autocomplete("off").class("flex-1") }}
+          {{ kit::Input::text("rename-from")
+              .label("Name as the files have it")
+              .placeholder("the name as the files have it")
+              .autocomplete("off")
+              .class("flex-1") }}
           <span class="text-meta text-muted" aria-hidden="true">→</span>
-          {{ kit::Input::text("rename-to").label("New name").placeholder("the new name").autocomplete("off").class("flex-1") }}
+          {{ kit::Input::text("rename-to")
+              .label("New name")
+              .placeholder("the new name")
+              .autocomplete("off")
+              .class("flex-1") }}
         </div>
       {% endfilter %}
     </div>

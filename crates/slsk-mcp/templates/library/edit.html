@@ -5,30 +5,56 @@
   {% include "library/filter.html" %}
   <p class="text-meta text-muted">Change what needs changing; the preview lists each field as it is and as it would be. A field the files disagree on is left alone unless typed. The release type is MusicBrainz's: one primary type, and any of the secondary types beside it. Changing an artist clears that file's list of artists and their MusicBrainz ids; Credit artists splits it again.</p>
   <div class="my-2 grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2">
-  {% for (field, label) in self.fields() %}
-    {% if *field == "albumtypes" %}
-    {% filter kit::wrap(kit::Field::custom(label).class("col-span-full")) %}
+    {% for (field, label) in self.fields() %}
+      {% if *field == "albumtypes" %}
+        {% filter kit::wrap(kit::Field::custom(label).class("col-span-full")) %}
       <div class="flex flex-wrap items-center gap-2">
         {{ self.primary_select() }}
         {% include "library/types.html" %}
       </div>
     {% endfilter %}
-    {% else %}
-    {{ kit::Field::text("a-{}"|format(field), label).value(self.now(field)).placeholder(self.differs(field)).autocomplete("off").id("{}-a-{}"|format(slot, field)) }}
-    {% endif %}
-  {% endfor %}
+      {% else %}
+        {{ kit::Field::text("a-{}"|format(field), label)
+            .value(self.now(field))
+            .placeholder(self.differs(field))
+            .autocomplete("off")
+            .id("{}-a-{}"|format(slot, field)) }}
+      {% endif %}
+    {% endfor %}
   </div>
   <table class="dense compact my-2">
     <tr><th class="w-[4.5em]">disc</th><th class="w-[4.5em]">track</th><th>title</th><th>artist</th></tr>
-  {% for t in tracks %}
-    {% let i = loop.index0 %}
-    <tr>
-      <td>{{ kit::Input::hidden("t{}-file"|format(i), self.file(t)) }}{{ kit::Input::text("t{}-disc"|format(i)).value(self.value(t, "disc")).attr("inputmode", "numeric").label("Disc").class("w-full") }}</td>
-      <td>{{ kit::Input::text("t{}-track"|format(i)).value(self.value(t, "track")).attr("inputmode", "numeric").label("Track").class("w-full") }}</td>
-      <td>{{ kit::Input::text("t{}-title"|format(i)).value(self.value(t, "title")).label("Title").class("w-full") }}</td>
-      <td>{{ kit::Input::text("t{}-artist"|format(i)).value(self.value(t, "artist")).label("Artist").class("w-full") }}</td>
-    </tr>
-  {% endfor %}
+    {% for t in tracks %}
+      {% let i = loop.index0 %}
+      <tr>
+        <td>{{ kit::Input::hidden("t{}-file"|format(i), self.file(t)) }}{{
+            kit::Input::text("t{}-disc"|format(i))
+                .value(self.value(t, "disc"))
+                .attr("inputmode", "numeric")
+                .label("Disc")
+                .class("w-full")
+        }}</td>
+        <td>{{
+            kit::Input::text("t{}-track"|format(i))
+                .value(self.value(t, "track"))
+                .attr("inputmode", "numeric")
+                .label("Track")
+                .class("w-full")
+        }}</td>
+        <td>{{
+            kit::Input::text("t{}-title"|format(i))
+                .value(self.value(t, "title"))
+                .label("Title")
+                .class("w-full")
+        }}</td>
+        <td>{{
+            kit::Input::text("t{}-artist"|format(i))
+                .value(self.value(t, "artist"))
+                .label("Artist")
+                .class("w-full")
+        }}</td>
+      </tr>
+    {% endfor %}
   </table>
   <div class="mt-2.5 flex flex-wrap items-center gap-2">
     {{ form.submit(kit::Button::primary("Preview edit")) }}
