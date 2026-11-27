@@ -7,7 +7,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -95,6 +95,9 @@ pub(crate) struct Download {
     driving: Mutex<bool>,
     /// Held while a file connection writes the `.part`.
     receiving: tokio::sync::Mutex<()>,
+    /// The peer offered a size other than the one the `.part` was written
+    /// against, so the partial is from another version of the file.
+    resized: AtomicBool,
 }
 
 impl Download {
@@ -266,6 +269,7 @@ pub(crate) fn add(
         token: Mutex::new(None),
         driving: Mutex::new(false),
         receiving: tokio::sync::Mutex::new(()),
+        resized: AtomicBool::new(false),
     });
     if let Ok(meta) = std::fs::metadata(d.part()) {
         d.bytes.store(meta.len(), Ordering::Relaxed);
@@ -418,19 +422,11 @@ pub(crate) fn on_transfer_request(
     ) {
         return false;
     }
-    // The size is what `receive` writes up to, so a peer does not get to
-    // choose it: an offer that disagrees with what was queued, or that is
-    // larger than any album track, fails the download.
+    // A sharer's index lags its files: retagging one or embedding its cover
+    // changes the size without a rescan, so the offer is the file as it is now
+    // and is taken over the size queued, up to the cap. A changed size means
+    // any partial is from the old file and is discarded before the receive.
     let queued = d.size.load(Ordering::Relaxed);
-    if size > 0 && queued > 0 && size != queued {
-        fail(
-            inner,
-            &d,
-            from,
-            format!("the peer offered {size} bytes, not the {queued} queued"),
-        );
-        return false;
-    }
     let size = if size > 0 { size } else { queued };
     if size > MAX_FILE_BYTES {
         fail(
@@ -446,6 +442,9 @@ pub(crate) fn on_transfer_request(
     let mut current = d.token.lock();
     if !d.transition(from, DownloadState::Starting) {
         return false;
+    }
+    if size != queued {
+        d.resized.store(true, Ordering::Relaxed);
     }
     d.size.store(size, Ordering::Relaxed);
     d.place.store(0, Ordering::Relaxed);
@@ -508,6 +507,21 @@ pub(crate) async fn on_file_connection(inner: Arc<Inner>, username: String, mut 
         tracing::debug!(%username, file = %d.filename, "the previous receive is still running");
         return;
     };
+    if d.resized.swap(false, Ordering::Relaxed) {
+        match tokio::fs::remove_file(d.part()).await {
+            Ok(()) => d.bytes.store(0, Ordering::Relaxed),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                attempt_failed(
+                    &inner,
+                    &d,
+                    DownloadState::Starting,
+                    format!("could not discard the partial of an older copy: {e}"),
+                );
+                return;
+            }
+        }
+    }
     // A partial file larger than the offer is not from this file, and no
     // attempt can succeed while it is there.
     let part = tokio::fs::metadata(d.part()).await.map_or(0, |m| m.len());
@@ -698,14 +712,16 @@ mod offer_tests {
     use super::*;
 
     #[tokio::test]
-    async fn an_offer_of_another_size_fails_the_download() {
+    async fn an_offer_of_another_size_is_taken_and_marks_the_partial_stale() {
         let (e, tmp) = crate::offline_engine().await;
         let name: RawStr = "m\\a.flac".into();
         add(&e.0, "peer", name.clone(), 1000, tmp.path().join("a.flac"));
-        assert!(!on_transfer_request(&e.0, "peer", 1, &name, 1001));
+        assert!(on_transfer_request(&e.0, "peer", 1, &name, 1001));
         let view = e.0.downloads.view("peer", &name).unwrap();
-        assert_eq!(view.state, "failed", "{view:?}");
-        assert!(e.0.downloads.by_token.is_empty());
+        assert_eq!(view.state, "starting", "{view:?}");
+        assert_eq!(view.size, 1001);
+        let d = e.0.downloads.get("peer", &name).unwrap();
+        assert!(d.resized.load(Ordering::Relaxed));
     }
 
     #[tokio::test]
