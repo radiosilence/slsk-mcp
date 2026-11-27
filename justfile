@@ -7,7 +7,7 @@ check:
     actionlint
     git diff --quiet Cargo.lock || { echo 'Cargo.lock has uncommitted changes'; exit 1; }
     cargo fmt --all -- --check
-    askama-analyzer fmt --check
+    askama-analyzer fmt --check crates/slsk-mcp/templates
     cargo clippy --workspace --all-targets --locked -- -D warnings
     cargo test --workspace --locked
     cd deploy/pulumi && npm run -s check && npm run -s build
@@ -20,7 +20,7 @@ check:
 fast:
     git diff --quiet Cargo.lock || { echo 'Cargo.lock has uncommitted changes'; exit 1; }
     cargo fmt --all -- --check
-    askama-analyzer fmt --check
+    askama-analyzer fmt --check crates/slsk-mcp/templates
 
 # Fail when the committed stylesheet is not what the sources and the kit give.
 css-fresh: kit
@@ -67,10 +67,11 @@ css: kit-check
 dev:
     scripts/dev.sh
 
-# Format the Rust and the templates
+# Format the Rust and the templates. The template directory is named because the gitignored kit link under styles/
+# holds the kit's own templates.
 fmt:
     cargo fmt --all
-    askama-analyzer fmt
+    askama-analyzer fmt crates/slsk-mcp/templates
 
 # Install the git hooks
 hooks:
