@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.30.2
+
+### Fixed
+
+- **A file whose size changed since the sharer last scanned now downloads.** A sharer's index lags its files, so retagging a track or embedding its cover changes the size without a rescan; the download takes the size the peer offers (still capped) instead of failing, and discards any partial written against the old size.
+
+### Internal
+
+- **Dependencies updated, koan-kit-web to 0.8.1.** The stylesheet is recompiled against the kit's new rules; the rest of the lockfile moves within semver, with rmcp 3.12, hyper 1.13 and zstd 1.6 among them.
+
 ## 0.30.1
 
 ### Fixed
