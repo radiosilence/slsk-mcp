@@ -1,4 +1,13 @@
 {#- The form counts what is ticked once this row, after its last album, is in. -#}
-<div id="{{ slot }}-pv-apply" class="mt-2.5 flex flex-wrap items-center gap-2" data-form="{{ slot }}-apply" data-init="document.getElementById(el.dataset.form).dispatchEvent(new Event('change'))">
-{%- if let Some(action) = action %}{{ kit::Button::primary(action.name()).post("/library/apply/{}"|format(action.slug())).sends("{}-apply"|format(slot)) }}<span id="{{ slot }}-apply-count" class="text-meta text-muted"></span>{% endif -%}
-{{ kit::Button::quiet("Cancel").get(self.dismiss()) }}</div>
+<div
+  id="{{ slot }}-pv-apply"
+  class="mt-2.5 flex flex-wrap items-center gap-2"
+  data-form="{{ slot }}-apply"
+  data-init="document.getElementById(el.dataset.form).dispatchEvent(new Event('change'))"
+>
+  {%- if let Some(action) = action %}{{
+      kit::Button::primary(action.name())
+          .post("/library/apply/{}"|format(action.slug()))
+          .sends("{}-apply"|format(slot))
+  }}<span id="{{ slot }}-apply-count" class="text-meta text-muted"></span>{% endif -%}
+  {{ kit::Button::quiet("Cancel").get(self.dismiss()) }}</div>

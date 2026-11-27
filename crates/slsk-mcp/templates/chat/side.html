@@ -1,42 +1,67 @@
 <div id="chat">
-{% match error %}{% when Some with (e) %}{{ kit::Notice::bad(e).class("wrap-anywhere") }}{% when None %}
-  <h3>Rooms</h3>
-  {% if rooms.is_empty() %}{{ kit::Empty::new("In no rooms.").compact() }}{% endif %}
-  <ul class="rows">
-  {% for r in rooms %}
-    <li>{{ kit::Link::new(r.0, crate::web::chat_href("room", r.0)).in_place().busy_key("chat").class("wrap-anywhere") }}<span class="text-meta text-muted wrap-anywhere">{{ r.1 }} in the room</span></li>
-  {% endfor %}
-  </ul>
-  <h3>Messages</h3>
-  {% if conversations.is_empty() %}{{ kit::Empty::new("No private messages.").compact() }}{% endif %}
-  <ul class="rows">
-  {% for c in conversations %}
-    <li>
-      <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5 basis-full">
-        {% if c.unread > 0 %}{% filter kit::wrap(kit::Link::new("", crate::web::chat_href("pm", c.username)).in_place().busy_key("chat").class("wrap-anywhere")) %}<strong>{{ c.username }}</strong>{% endfilter %}{% else %}{{ kit::Link::new(c.username, crate::web::chat_href("pm", c.username)).in_place().busy_key("chat").class("wrap-anywhere") }}{% endif %}
-        {% if c.unread > 0 %}<span class="text-meta text-brand">{{ c.unread }} new</span>{% endif %}
-        <span class="text-meta text-muted wrap-anywhere">{{ self.ago(c) }}</span>
-      </div>
-      <div class="min-w-0 basis-full truncate text-meta text-muted">{% if c.ours %}you: {% endif %}{{ c.last }}</div>
-    </li>
-  {% endfor %}
-  </ul>
-  <h3>Buddies</h3>
-  {% if buddies.is_empty() %}{{ kit::Empty::new("No buddies.").compact() }}{% endif %}
-  <ul class="rows">
-  {% for b in buddies %}
-    <li>
-      <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5 basis-full">
-        {{ kit::Link::new(b.username, crate::web::chat_href("pm", b.username)).in_place().busy_key("chat").class("wrap-anywhere") }}
-        {{ crate::web::state(b.status, b.status) }}
-        <span class="flex-1 max-sm:hidden"></span>
-        {{ kit::Button::quiet("Profile").href(crate::web::profile_href(b.username)) }}
-        {{ kit::Button::quiet("Browse").href(crate::web::browse_href(b.username, "")) }}
-        {{ kit::Button::quiet("Remove").post(crate::web::row_url("/chat/buddy/remove", "username", b.username)) }}
-      </div>
-      {% if !b.note.is_empty() %}<div class="basis-full text-meta text-muted wrap-anywhere">{{ b.note }}</div>{% endif %}
-    </li>
-  {% endfor %}
-  </ul>
-{% endmatch %}
+  {% match error %}{% when Some with (e) %}{{ kit::Notice::bad(e).class("wrap-anywhere") }}{% when None %}
+      <h3>Rooms</h3>
+      {% if rooms.is_empty() %}{{ kit::Empty::new("In no rooms.").compact() }}{% endif %}
+      <ul class="rows">
+        {% for r in rooms %}
+          <li>{{
+              kit::Link::new(r.0, crate::web::chat_href("room", r.0))
+                  .in_place()
+                  .busy_key("chat")
+                  .class("wrap-anywhere")
+          }}<span class="text-meta text-muted wrap-anywhere">{{ r.1 }} in the room</span></li>
+        {% endfor %}
+      </ul>
+      <h3>Messages</h3>
+      {% if conversations.is_empty() %}{{ kit::Empty::new("No private messages.").compact() }}{% endif %}
+      <ul class="rows">
+        {% for c in conversations %}
+          <li>
+            <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5 basis-full">
+              {% if c.unread > 0 %}{%
+                  filter kit::wrap(
+                      kit::Link::new("", crate::web::chat_href("pm", c.username))
+                          .in_place()
+                          .busy_key("chat")
+                          .class("wrap-anywhere"),
+                  )
+              %}<strong>{{ c.username }}</strong>{% endfilter %}{% else %}{{
+                  kit::Link::new(c.username, crate::web::chat_href("pm", c.username))
+                      .in_place()
+                      .busy_key("chat")
+                      .class("wrap-anywhere")
+              }}{% endif %}
+              {% if c.unread > 0 %}<span class="text-meta text-brand">{{ c.unread }} new</span>{% endif %}
+              <span class="text-meta text-muted wrap-anywhere">{{ self.ago(c) }}</span>
+            </div>
+            <div class="min-w-0 basis-full truncate text-meta text-muted">{% if c.ours %}you: {% endif %}{{ c.last }}</div>
+          </li>
+        {% endfor %}
+      </ul>
+      <h3>Buddies</h3>
+      {% if buddies.is_empty() %}{{ kit::Empty::new("No buddies.").compact() }}{% endif %}
+      <ul class="rows">
+        {% for b in buddies %}
+          <li>
+            <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5 basis-full">
+              {{
+                  kit::Link::new(b.username, crate::web::chat_href("pm", b.username))
+                      .in_place()
+                      .busy_key("chat")
+                      .class("wrap-anywhere")
+              }}
+              {{ crate::web::state(b.status, b.status) }}
+              <span class="flex-1 max-sm:hidden"></span>
+              {{ kit::Button::quiet("Profile").href(crate::web::profile_href(b.username)) }}
+              {{ kit::Button::quiet("Browse").href(crate::web::browse_href(b.username, "")) }}
+              {{
+                  kit::Button::quiet("Remove")
+                      .post(crate::web::row_url("/chat/buddy/remove", "username", b.username))
+              }}
+            </div>
+            {% if !b.note.is_empty() %}<div class="basis-full text-meta text-muted wrap-anywhere">{{ b.note }}</div>{% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+  {% endmatch %}
 </div>

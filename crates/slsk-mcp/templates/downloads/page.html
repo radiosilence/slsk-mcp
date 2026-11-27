@@ -3,7 +3,17 @@
   {% include "search/finder.html" %}
   {% let import = kit::Form::post("/import-url") %}
   <form {{ import.attrs() }} class="mt-2 grid">
-    {{ kit::Combo::new(kit::Input::url("url").label("Download link").placeholder("Download link, such as a Bandcamp purchase").autocomplete("off").required(), import.submit(kit::Button::primary("Import"))).compact() }}
+    {{
+        kit::Combo::new(
+            kit::Input::url("url")
+                .label("Download link")
+                .placeholder("Download link, such as a Bandcamp purchase")
+                .autocomplete("off")
+                .required(),
+            import.submit(kit::Button::primary("Import")),
+        )
+        .compact()
+    }}
   </form>
 </section>
 {{ live }}

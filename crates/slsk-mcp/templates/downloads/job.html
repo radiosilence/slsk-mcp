@@ -1,13 +1,13 @@
 <div id="job" class="grid min-w-0 gap-4">
   <p class="m-0 text-meta"><a href="/">← Downloads</a></p>
   {% if gone %}<p class="m-0 text-meta text-muted">Nothing is known of this job.</p>{% else %}
-  {% match card %}{% when Some with (c) %}{{ c.draw() }}{% when None %}<p class="m-0 text-meta text-muted">This job is no longer listed. What happened to it is kept below.</p>{% endmatch %}
-  {{ sources.draw() }}
-  {% if let Some(log) = import_log %}
-  <section class="min-w-0">
-    <h2>Import log</h2>
-    <p class="text-fine text-muted whitespace-pre-wrap wrap-anywhere">{{ log }}</p>
-  </section>
-  {% endif %}
+    {% match card %}{% when Some with (c) %}{{ c.draw() }}{% when None %}<p class="m-0 text-meta text-muted">This job is no longer listed. What happened to it is kept below.</p>{% endmatch %}
+    {{ sources.draw() }}
+    {% if let Some(log) = import_log %}
+      <section class="min-w-0">
+        <h2>Import log</h2>
+        <p class="text-fine text-muted whitespace-pre-wrap wrap-anywhere">{{ log }}</p>
+      </section>
+    {% endif %}
   {% endif %}
 </div>

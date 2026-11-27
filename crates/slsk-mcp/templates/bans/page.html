@@ -1,8 +1,24 @@
 <div class="grid min-w-0 gap-3 *:min-w-0">
   {#- Banning asks first, once the name is filled; the question's yes posts the form. -#}
   <form id="ban" class="flex flex-wrap items-center gap-2">
-    {{ kit::Input::text("username").label("Username to ban").placeholder("Username").autocomplete("off").attr("autocapitalize", "off").required().bind("_banuser").class("basis-full") }}
-    {{ kit::Button::primary("Ban").class("flex-auto").post("/bans/add").sends("ban").confirm("Ban this user?", "Ban").detail("They will get nothing more from you.") }}
+    {{
+        kit::Input::text("username")
+            .label("Username to ban")
+            .placeholder("Username")
+            .autocomplete("off")
+            .attr("autocapitalize", "off")
+            .required()
+            .bind("_banuser")
+            .class("basis-full")
+    }}
+    {{
+        kit::Button::primary("Ban")
+            .class("flex-auto")
+            .post("/bans/add")
+            .sends("ban")
+            .confirm("Ban this user?", "Ban")
+            .detail("They will get nothing more from you.")
+    }}
   </form>
   {{ list }}
 </div>

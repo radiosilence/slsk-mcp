@@ -1,22 +1,30 @@
 <div class="grid min-w-0 gap-3 *:min-w-0">
   <p class="text-meta text-muted">Why albums did not land cleanly, by cause, with every example, newest first.</p>
   <div class="mt-2.5 flex flex-wrap items-center gap-[18px]">
-    {% for d in self.periods() %}{{ kit::Link::new("{} days"|format(d), "/triage?days={}"|format(d)).in_place().busy_key("triage").current(*d == days).class("py-1 text-control text-muted hover:text-ink hover:no-underline aria-[current=page]:text-ink aria-[current=page]:underline aria-[current=page]:decoration-brand aria-[current=page]:underline-offset-[5px]") }}{% endfor %}
+    {% for d in self.periods() %}{{
+        kit::Link::new("{} days"|format(d), "/triage?days={}"|format(d))
+            .in_place()
+            .busy_key("triage")
+            .current(*d == days)
+            .class(
+                "py-1 text-control text-muted hover:text-ink hover:no-underline aria-[current=page]:text-ink aria-[current=page]:underline aria-[current=page]:decoration-brand aria-[current=page]:underline-offset-[5px]",
+            )
+    }}{% endfor %}
   </div>
-{% match error %}{% when Some with (e) %}{{ kit::Notice::bad(e).class("wrap-anywhere") }}{% when None %}
-  {% if causes.is_empty() %}{{ kit::Empty::new("Everything in the last {} days landed cleanly."|format(days)) }}{% endif %}
-  <div class="grid gap-3">
-  {% for c in causes %}
-  <article class="panel">
-    <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5"><strong class="min-w-0 flex-auto wrap-anywhere">{{ self.label(c.cause) }}</strong><span class="text-ink">{{ c.count }}</span></div>
-    <ul class="rows tight">
-    {% for e in c.examples %}
-      <li><span class="min-w-0 flex-[1_1_60%] truncate">{{ e.title }}</span><span class="text-meta text-muted wrap-anywhere">{{ self.ago(e.at) }} · {{ e.outcome }} · {{ e.version }}{% match e.detail %}{% when Some with (d) %} · {{ d }}{% when None %}{% endmatch %}</span></li>
-    {% endfor %}
-    {% if c.count > c.examples.len() %}<li class="text-meta text-muted">and {{ c.count - c.examples.len() }} earlier</li>{% endif %}
-    </ul>
-  </article>
-  {% endfor %}
-  </div>
-{% endmatch %}
+  {% match error %}{% when Some with (e) %}{{ kit::Notice::bad(e).class("wrap-anywhere") }}{% when None %}
+      {% if causes.is_empty() %}{{ kit::Empty::new("Everything in the last {} days landed cleanly."|format(days)) }}{% endif %}
+      <div class="grid gap-3">
+        {% for c in causes %}
+          <article class="panel">
+            <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5"><strong class="min-w-0 flex-auto wrap-anywhere">{{ self.label(c.cause) }}</strong><span class="text-ink">{{ c.count }}</span></div>
+            <ul class="rows tight">
+              {% for e in c.examples %}
+                <li><span class="min-w-0 flex-[1_1_60%] truncate">{{ e.title }}</span><span class="text-meta text-muted wrap-anywhere">{{ self.ago(e.at) }} · {{ e.outcome }} · {{ e.version }}{% match e.detail %}{% when Some with (d) %} · {{ d }}{% when None %}{% endmatch %}</span></li>
+              {% endfor %}
+              {% if c.count > c.examples.len() %}<li class="text-meta text-muted">and {{ c.count - c.examples.len() }} earlier</li>{% endif %}
+            </ul>
+          </article>
+        {% endfor %}
+      </div>
+  {% endmatch %}
 </div>

@@ -1,38 +1,76 @@
 <div id="settings" class="grid min-w-0 gap-3 *:min-w-0">
-{% if !connected %}<p class="text-meta text-muted">Sign in to Soulseek first.</p>{% else %}
-  <h3>Shares</h3>
-  <p class="text-meta text-muted">{{ files }} files in {{ folders }} folders.</p>
-  <div class="mt-2.5 flex flex-wrap items-center gap-2">
-    {{ kit::Button::bordered("Rescan shares").post("/settings/rescan") }}
-    {{ kit::Button::bordered("Reconnect").post("/reconnect") }}
-  </div>
-  <h3>Uploads</h3>
-  {% let slots_form = kit::Form::post("/settings/slots") %}
-  <form {{ slots_form.attrs() }} class="my-1.5 flex flex-wrap items-end gap-2">
-    {{ kit::Field::new("upload slots", kit::Input::number("slots").value(slots).min(1).required().attr("inputmode", "numeric").class("w-[7em]")) }}
-    {{ slots_form.submit(kit::Button::primary("Save")) }}
-  </form>
-  {% let limits_form = kit::Form::post("/settings/limits") %}
-  <form {{ limits_form.attrs() }} class="my-1.5 flex flex-wrap items-end gap-2">
-    {{ kit::Field::new("upload KB/s", kit::Input::number("up").value(up_kb).min(0).required().attr("inputmode", "numeric").class("w-[7em]")) }}
-    {{ kit::Field::new("download KB/s", kit::Input::number("down").value(down_kb).min(0).required().attr("inputmode", "numeric").class("w-[7em]")) }}
-    {{ limits_form.submit(kit::Button::primary("Save")) }}
-  </form>
-  <p class="text-meta text-muted">Now: {{ slots }} slots, up {{ self.rate(up_kb) }}, down {{ self.rate(down_kb) }}. 0 is unlimited. These hold until the service restarts, which returns to the deployment's settings.</p>
-  <h3>Interests</h3>
-  <p class="text-meta text-muted">What you like and dislike drives the server's recommendations and similar users.</p>
-  {% let interest = kit::Form::post("/settings/interest") %}
-  <form {{ interest.attrs() }} class="my-1.5 flex flex-wrap items-center gap-2">
-    {{ kit::Input::text("item").label("Interest").placeholder("dub techno").autocomplete("off").required().bind("_interest").class("flex-[1_1_12em]") }}
-    {{ interest.submit(kit::Button::bordered("Like").named("liked", "true")) }}
-    {{ interest.submit(kit::Button::quiet("Dislike").named("liked", "false")) }}
-  </form>
-  <ul class="rows">
-  {% for i in interests %}
-    <li><span class="min-w-0 flex-[1_1_60%] truncate">{{ i.0 }}</span>{% if i.1 %}{{ kit::Status::ok("like") }}{% else %}{{ kit::Status::bad("dislike") }}{% endif %}<span class="flex-1 max-sm:hidden"></span>{{ kit::Button::quiet("Forget").post(crate::web::row_url("/settings/interest", "item", i.0)) }}</li>
-  {% endfor %}
-  </ul>
-{% endif %}
+  {% if !connected %}<p class="text-meta text-muted">Sign in to Soulseek first.</p>{% else %}
+    <h3>Shares</h3>
+    <p class="text-meta text-muted">{{ files }} files in {{ folders }} folders.</p>
+    <div class="mt-2.5 flex flex-wrap items-center gap-2">
+      {{ kit::Button::bordered("Rescan shares").post("/settings/rescan") }}
+      {{ kit::Button::bordered("Reconnect").post("/reconnect") }}
+    </div>
+    <h3>Uploads</h3>
+    {% let slots_form = kit::Form::post("/settings/slots") %}
+    <form {{ slots_form.attrs() }} class="my-1.5 flex flex-wrap items-end gap-2">
+      {{
+          kit::Field::new(
+              "upload slots",
+              kit::Input::number("slots")
+                  .value(slots)
+                  .min(1)
+                  .required()
+                  .attr("inputmode", "numeric")
+                  .class("w-[7em]"),
+          )
+      }}
+      {{ slots_form.submit(kit::Button::primary("Save")) }}
+    </form>
+    {% let limits_form = kit::Form::post("/settings/limits") %}
+    <form {{ limits_form.attrs() }} class="my-1.5 flex flex-wrap items-end gap-2">
+      {{
+          kit::Field::new(
+              "upload KB/s",
+              kit::Input::number("up")
+                  .value(up_kb)
+                  .min(0)
+                  .required()
+                  .attr("inputmode", "numeric")
+                  .class("w-[7em]"),
+          )
+      }}
+      {{
+          kit::Field::new(
+              "download KB/s",
+              kit::Input::number("down")
+                  .value(down_kb)
+                  .min(0)
+                  .required()
+                  .attr("inputmode", "numeric")
+                  .class("w-[7em]"),
+          )
+      }}
+      {{ limits_form.submit(kit::Button::primary("Save")) }}
+    </form>
+    <p class="text-meta text-muted">Now: {{ slots }} slots, up {{ self.rate(up_kb) }}, down {{ self.rate(down_kb) }}. 0 is unlimited. These hold until the service restarts, which returns to the deployment's settings.</p>
+    <h3>Interests</h3>
+    <p class="text-meta text-muted">What you like and dislike drives the server's recommendations and similar users.</p>
+    {% let interest = kit::Form::post("/settings/interest") %}
+    <form {{ interest.attrs() }} class="my-1.5 flex flex-wrap items-center gap-2">
+      {{
+          kit::Input::text("item")
+              .label("Interest")
+              .placeholder("dub techno")
+              .autocomplete("off")
+              .required()
+              .bind("_interest")
+              .class("flex-[1_1_12em]")
+      }}
+      {{ interest.submit(kit::Button::bordered("Like").named("liked", "true")) }}
+      {{ interest.submit(kit::Button::quiet("Dislike").named("liked", "false")) }}
+    </form>
+    <ul class="rows">
+      {% for i in interests %}
+        <li><span class="min-w-0 flex-[1_1_60%] truncate">{{ i.0 }}</span>{% if i.1 %}{{ kit::Status::ok("like") }}{% else %}{{ kit::Status::bad("dislike") }}{% endif %}<span class="flex-1 max-sm:hidden"></span>{{ kit::Button::quiet("Forget").post(crate::web::row_url("/settings/interest", "item", i.0)) }}</li>
+      {% endfor %}
+    </ul>
+  {% endif %}
   <h3>Matching</h3>
   {% if discogs %}<p class="text-meta text-muted">MusicBrainz first, then Discogs when MusicBrainz has no strong match. A release from either can be pasted on a job in review or a library album, by id (<code>discogs:123</code>) or link.</p>{% else %}<p class="text-meta text-muted">MusicBrainz only. Setting <code>DISCOGS_TOKEN</code> to a Discogs personal access token adds Discogs, consulted when MusicBrainz has no strong match.</p>{% endif %}
   {% if acoustid %}<p class="text-meta text-muted">Folders no release matches strongly are identified by their audio on AcoustID.</p>{% else %}<p class="text-meta text-muted">Setting <code>ACOUSTID_CLIENT</code> to an AcoustID application key identifies folders no release matches strongly by their audio.</p>{% endif %}

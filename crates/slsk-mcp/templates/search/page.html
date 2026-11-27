@@ -3,7 +3,14 @@
   {% filter kit::wrap(kit::Disclosure::new("search several at once").class("mt-2")) %}
     {% let several = kit::Form::plain_get("/search") %}
     <form {{ several.attrs() }} class="mt-2 grid gap-2">
-      {{ kit::Textarea::new("q").rows(6).label("Searches, one per line").placeholder("One search per line: artist album").attr("autocomplete", "off").required() }}
+      {{
+          kit::Textarea::new("q")
+              .rows(6)
+              .label("Searches, one per line")
+              .placeholder("One search per line: artist album")
+              .attr("autocomplete", "off")
+              .required()
+      }}
       <div class="flex flex-wrap items-center gap-2">
         {{ kit::Check::new("lossless", "lossless").value("true").checked(lossless) }}
         {{ several.submit(kit::Button::primary("Search all").class("flex-auto")) }}
@@ -11,5 +18,11 @@
     </form>
   {% endfilter %}
   {{ tabs }}
-  {% if let Some(html) = results %}{{ html }}{% else %}{{ kit::Empty::new("No search open.").detail("Search the network for an album: artist and title words work best. Each search opens a tab that keeps its results; they can be searched again at any time, and after ten minutes are marked stale. Pinned tabs stay when the others are closed.").class("mt-3") }}{% endif %}
+  {% if let Some(html) = results %}{{ html }}{% else %}{{
+      kit::Empty::new("No search open.")
+          .detail(
+              "Search the network for an album: artist and title words work best. Each search opens a tab that keeps its results; they can be searched again at any time, and after ten minutes are marked stale. Pinned tabs stay when the others are closed.",
+          )
+          .class("mt-3")
+  }}{% endif %}
 </section>

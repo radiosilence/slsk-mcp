@@ -1,15 +1,20 @@
 <div id="activity-feed">
   <p class="text-meta text-muted">{{ hour.0 }} searches reached you this hour, {{ hour.2 }} of them through the distributed network; your shares answered {{ hour.1 }}.</p>
-  {% if events.is_empty() %}{{ kit::Empty::new("Nobody has come by yet.").detail("Nobody has browsed, searched your shares or downloaded since the service started.") }}{% endif %}
+  {% if events.is_empty() %}{{
+      kit::Empty::new("Nobody has come by yet.")
+          .detail(
+              "Nobody has browsed, searched your shares or downloaded since the service started.",
+          )
+  }}{% endif %}
   <ul class="rows">
-  {% for e in events %}
-    <li class="flex min-w-0 flex-wrap items-baseline gap-x-2">
-      <span class="flex-none text-meta text-muted">{{ self.when(e) }}</span>
-      <a class="wrap-anywhere" href="{{ crate::web::profile_href(e.username) }}">{{ e.username }}</a>
-      <span class="text-muted">{{ self.what(e) }}</span>
-      {% match e.detail %}{% when Some with (d) %}<span class="min-w-0 flex-[1_1_40%] wrap-anywhere" title="{{ d }}">{% if e.kind == "search" %}“{{ d }}”{% else %}{{ self.leaf(d) }}{% endif %}</span>{% when None %}{% endmatch %}
-      {% match e.results %}{% when Some with (n) %}<span class="text-meta text-muted">{{ n }} file{% if *n != 1 %}s{% endif %} matched{% if e.distributed %} · distributed{% endif %}</span>{% when None %}{% endmatch %}
-    </li>
-  {% endfor %}
+    {% for e in events %}
+      <li class="flex min-w-0 flex-wrap items-baseline gap-x-2">
+        <span class="flex-none text-meta text-muted">{{ self.when(e) }}</span>
+        <a class="wrap-anywhere" href="{{ crate::web::profile_href(e.username) }}">{{ e.username }}</a>
+        <span class="text-muted">{{ self.what(e) }}</span>
+        {% match e.detail %}{% when Some with (d) %}<span class="min-w-0 flex-[1_1_40%] wrap-anywhere" title="{{ d }}">{% if e.kind == "search" %}“{{ d }}”{% else %}{{ self.leaf(d) }}{% endif %}</span>{% when None %}{% endmatch %}
+        {% match e.results %}{% when Some with (n) %}<span class="text-meta text-muted">{{ n }} file{% if *n != 1 %}s{% endif %} matched{% if e.distributed %} · distributed{% endif %}</span>{% when None %}{% endmatch %}
+      </li>
+    {% endfor %}
   </ul>
 </div>

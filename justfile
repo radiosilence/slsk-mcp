@@ -1,12 +1,13 @@
 # slsk-mcp — a Soulseek client that runs as a service
 
-# What CI checks, short of the audit and the release builds: format, lint with
-# warnings as errors, tests, the Pulumi package, the compiled stylesheet, the
-# changelog fragments and the one version number.
+# What CI checks, short of the audit and the release builds: format (Rust and
+# templates), lint with warnings as errors, tests, the Pulumi package, the
+# compiled stylesheet, the changelog fragments and the one version number.
 check:
     actionlint
     git diff --quiet Cargo.lock || { echo 'Cargo.lock has uncommitted changes'; exit 1; }
     cargo fmt --all -- --check
+    askama-analyzer fmt --check
     cargo clippy --workspace --all-targets --locked -- -D warnings
     cargo test --workspace --locked
     cd deploy/pulumi && npm run -s check && npm run -s build
@@ -19,6 +20,7 @@ check:
 fast:
     git diff --quiet Cargo.lock || { echo 'Cargo.lock has uncommitted changes'; exit 1; }
     cargo fmt --all -- --check
+    askama-analyzer fmt --check
 
 # Fail when the committed stylesheet is not what the sources and the kit give.
 css-fresh: kit
@@ -65,9 +67,10 @@ css: kit-check
 dev:
     scripts/dev.sh
 
-# Format
+# Format the Rust and the templates
 fmt:
     cargo fmt --all
+    askama-analyzer fmt
 
 # Install the git hooks
 hooks:

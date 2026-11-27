@@ -4,22 +4,32 @@
   {{ kit::Input::hidden("slot", slot) }}
   {% include "library/filter.html" %}
   {% if asking %}<p class="text-meta text-muted">{{ kit::Spinner::new() }} Asking for releases that fit these files…</p>{% else %}
-  {% if let Some(e) = error %}{{ kit::Notice::bad(e).class("wrap-anywhere") }}{% endif %}
-  {% if candidates.is_empty() %}<p class="text-meta text-muted">{% if discogs %}Neither MusicBrainz nor Discogs has{% else %}MusicBrainz has{% endif %} nothing that fits these files. Paste a release from its page.</p>{% else %}
-  <p class="text-meta text-muted">Releases that fit these files, closest first. Pick one to see every tag it would change.{% if let Some(r) = review %} The tagger would not choose on its own: {{ r }}.{% endif %}</p>
-  <ul class="rows">
-  {% for c in candidates %}
-    <li>
-      {{ kit::Check::radio("release", c.id, "{} — {}"|format(c.artist, c.title)).checked(loop.first).class("min-w-0 flex-[1_1_60%] wrap-anywhere") }}
-      <span class="text-meta text-muted wrap-anywhere">{% if let Some(d) = c.date %}{{ d }} · {% endif %}{% if let Some(co) = c.country %}{{ co }} · {% endif %}{% if let Some(m) = c.media %}{{ m }} · {% endif %}{{ c.tracks }} tracks · distance {{ c.distance }}{% if c.missing > 0 %} · {{ c.missing }} missing{% endif %}{% if c.extra > 0 %} · {{ c.extra }} unmatched{% endif %}{% if let Some(d) = c.disambiguation %} · {{ d }}{% endif %}</span>
-      {% let (site, href) = crate::library::release_link(c.id) %}<a class="text-meta" href="{{ href }}" target="_blank" rel="noopener">{{ site }}</a>
-    </li>
-  {% endfor %}
-  </ul>
-  {% endif %}
-  <div class="flex flex-wrap items-center gap-2">
-    {{ kit::Input::text("pasted").label("MusicBrainz release id or link").placeholder(self.paste_hint()).autocomplete("off").class("basis-full") }}
-    {{ form.submit(kit::Button::primary("Preview re-tag").class("flex-auto")) }}
-  </div>
+    {% if let Some(e) = error %}{{ kit::Notice::bad(e).class("wrap-anywhere") }}{% endif %}
+    {% if candidates.is_empty() %}<p class="text-meta text-muted">{% if discogs %}Neither MusicBrainz nor Discogs has{% else %}MusicBrainz has{% endif %} nothing that fits these files. Paste a release from its page.</p>{% else %}
+      <p class="text-meta text-muted">Releases that fit these files, closest first. Pick one to see every tag it would change.{% if let Some(r) = review %} The tagger would not choose on its own: {{ r }}.{% endif %}</p>
+      <ul class="rows">
+        {% for c in candidates %}
+          <li>
+            {{
+                kit::Check::radio("release", c.id, "{} — {}"|format(c.artist, c.title))
+                    .checked(loop.first)
+                    .class("min-w-0 flex-[1_1_60%] wrap-anywhere")
+            }}
+            <span class="text-meta text-muted wrap-anywhere">{% if let Some(d) = c.date %}{{ d }} · {% endif %}{% if let Some(co) = c.country %}{{ co }} · {% endif %}{% if let Some(m) = c.media %}{{ m }} · {% endif %}{{ c.tracks }} tracks · distance {{ c.distance }}{% if c.missing > 0 %} · {{ c.missing }} missing{% endif %}{% if c.extra > 0 %} · {{ c.extra }} unmatched{% endif %}{% if let Some(d) = c.disambiguation %} · {{ d }}{% endif %}</span>
+            {% let (site, href) = crate::library::release_link(c.id) %}<a class="text-meta" href="{{ href }}" target="_blank" rel="noopener">{{ site }}</a>
+          </li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+    <div class="flex flex-wrap items-center gap-2">
+      {{
+          kit::Input::text("pasted")
+              .label("MusicBrainz release id or link")
+              .placeholder(self.paste_hint())
+              .autocomplete("off")
+              .class("basis-full")
+      }}
+      {{ form.submit(kit::Button::primary("Preview re-tag").class("flex-auto")) }}
+    </div>
   {% endif %}
 </form>

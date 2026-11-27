@@ -1,10 +1,19 @@
 <div class="grid min-w-0 gap-3 *:min-w-0">
   {% let find = kit::Form::get("/browse") %}
   <form {{ find.attrs() }} class="flex flex-wrap items-center gap-2">
-    {{ kit::Input::text("username").value(username).label("Username to browse").placeholder("Username").autocomplete("off").attr("autocapitalize", "off").required().class("basis-full") }}
+    {{
+        kit::Input::text("username")
+            .value(username)
+            .label("Username to browse")
+            .placeholder("Username")
+            .autocomplete("off")
+            .attr("autocapitalize", "off")
+            .required()
+            .class("basis-full")
+    }}
     {{ find.submit(kit::Button::primary("Browse").class("flex-auto")) }}
   </form>
   {% if let Some(html) = shares %}{{ html }}{% else %}
-  {% filter kit::wrap(kit::Empty::new("Browse someone's shares.")) %}Type their name, or tap a name in search results, uploads or chat.{% if let Some(me) = me %} Or browse <a class="wrap-anywhere" href="{{ crate::web::browse_href(me, "") }}">your own</a>.{% endif %}{% endfilter %}
+    {% filter kit::wrap(kit::Empty::new("Browse someone's shares.")) %}Type their name, or tap a name in search results, uploads or chat.{% if let Some(me) = me %} Or browse <a class="wrap-anywhere" href="{{ crate::web::browse_href(me, "") }}">your own</a>.{% endif %}{% endfilter %}
   {% endif %}
 </div>
