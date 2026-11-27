@@ -85,11 +85,8 @@ impl Wishes {
             next,
         }
     }
-    fn searched(&self, w: &Wish) -> String {
-        match w.searched_at {
-            Some(t) => format!("searched {}", crate::web::ago(t)),
-            None => "not searched yet".into(),
-        }
+    fn searched(&self, w: &Wish) -> Option<kit::Time<'static>> {
+        w.searched_at.map(crate::web::ago)
     }
     /// When `w` is searched next, if it is the next one.
     fn next_for(&self, w: &Wish) -> Option<i64> {
@@ -121,9 +118,7 @@ pub(in crate::web) async fn add(
     }
     match s.app.social.add_wish(q, f.lossless, f.grab).await {
         Ok(_) => askama_datastar::events([
-            crate::web::flash::ok(format!("Wished for {q}"))
-                .patch()
-                .into(),
+            kit::Flash::ok(format!("Wished for {q}")).patch().into(),
             signals(serde_json::json!({ "_wishq": "" })),
         ]),
         Err(e) => failed(&e),
@@ -132,7 +127,7 @@ pub(in crate::web) async fn add(
 
 pub(in crate::web) async fn remove(State(s): State<UiState>, Path(id): Path<Uuid>) -> Response {
     match s.app.social.remove_wish(id).await {
-        Ok(()) => askama_datastar::events([crate::web::flash::region().patch().into()]),
+        Ok(()) => askama_datastar::events([kit::Flash::region().patch().into()]),
         Err(e) => failed(&e),
     }
 }

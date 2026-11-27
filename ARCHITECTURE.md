@@ -169,10 +169,10 @@ the address afresh.
 
 An action changes something and answers with as little as it can:
 
-- An action that fails answers with an error flash (`web::failed`). Every
-  flash comes from `web::flash`, since each replaces the region whole and must
-  carry what the region says when a request fails outright: an error status,
-  a server that cannot be reached, or a session that has ended.
+- An action that fails answers with an error flash (`web::failed`). A request
+  that fails outright (an error status, a server that cannot be reached, a
+  session that has ended) is said by the layout's flash region, which hears
+  it from beside the region so no flash replaces the handlers.
 - When the page's stream draws what changed, the action answers with a flash
   or nothing, and closes the page's question (`kit::Confirm::close`) if one
   was asked. The change arriving is the confirmation. Downloads, search tabs,
@@ -232,8 +232,10 @@ them: `kit::Button::sends`, or an input's `form=`.
 ### The kit
 
 Every control, status, meter, notice, flash, empty state, disclosure, row of
-tabs and question is a koan-kit-web component; templates add layout utilities
-only.
+tabs, list of values a peer or a file chose, instant and question is a
+koan-kit-web component, as are the top bar and footer; templates add layout
+utilities only. Instants are `kit::Time`, drawn by the browser in the
+reader's zone, with relative times kept current there.
 Buttons that send requests are busy for exactly as long as their own request
 runs, grouped by `busy_key` where several act on one thing. Disclosures that
 read their content when opened use `kit::Disclosure::loads` and are answered

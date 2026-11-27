@@ -49,12 +49,12 @@ const STALE: Duration = Duration::from_secs(600);
 pub(in crate::web) struct Search;
 
 /// A search page's address: `tab` names the tab shown and `shown` how many
-/// of its folders are drawn. `q` (one search per line) and `lossless` open
-/// tabs and are replaced by the first of them.
+/// of its folders are drawn. `q` (any number of them, each one search per
+/// line) and `lossless` open tabs and are replaced by the first of them.
 #[derive(serde::Deserialize, Default)]
 #[serde(default)]
 pub(in crate::web) struct SearchQuery {
-    q: String,
+    q: Vec<String>,
     /// Any value means lossless, as the page reads it.
     lossless: String,
     tab: String,
@@ -92,8 +92,8 @@ impl Page for Search {
 
     async fn body(s: &UiState, View(view): View<SearchQuery>) -> anyhow::Result<Body> {
         // A search typed or pasted opens its tabs, and the page moves to the first.
-        if !view.q.trim().is_empty() {
-            let first = open(s, &view.q, !view.lossless.is_empty()).await?;
+        if view.q.iter().any(|q| !q.trim().is_empty()) {
+            let first = open(s, &view.q.join("\n"), !view.lossless.is_empty()).await?;
             return Ok(Body::redirect(
                 first.map_or("/search".to_string(), |id| format!("/search?tab={id}")),
             ));
@@ -169,6 +169,7 @@ fn stale(tab: &SearchTab) -> bool {
         .is_some_and(|at| (chrono::Utc::now() - at).to_std().is_ok_and(|d| d > STALE))
 }
 
+/// How long ago, as text for a tab's title, an attribute that cannot hold a [`kit::Time`].
 fn ago(at: chrono::DateTime<chrono::Utc>) -> String {
     let mins = (chrono::Utc::now() - at).num_minutes().max(0);
     match mins {
@@ -324,8 +325,8 @@ pub(in crate::web) struct Results {
     /// Folders found, of which the best `KEEP` are kept.
     found: usize,
     error: Option<String>,
-    /// How long ago the search finished.
-    age: Option<String>,
+    /// When the search finished.
+    age: Option<kit::Time<'static>>,
     stale: bool,
     /// Whether the peers behind the folders are online, as far as the
     /// server has said.
@@ -348,7 +349,7 @@ impl Results {
         let more = folders.len().saturating_sub(shown);
         folders.truncate(shown);
         Self {
-            age: tab.searched_at.map(ago),
+            age: tab.searched_at.map(crate::web::ago),
             stale: stale(tab),
             tab: tab.id,
             query: tab.query.clone(),
@@ -388,7 +389,7 @@ impl Results {
             responses: responses.len(),
             found,
             error: heard.error.as_ref().map(|e| e.to_string()),
-            age: heard.done.then(|| ago(chrono::Utc::now())),
+            age: heard.done.then(|| crate::web::ago(chrono::Utc::now())),
             stale: false,
             statuses: HashMap::new(),
         }
@@ -486,7 +487,7 @@ fn go(url: &str) -> Response {
 /// The tab changed; the page's stream draws the strip.
 fn changed() -> Response {
     askama_datastar::events([
-        crate::web::flash::region().patch().into(),
+        kit::Flash::region().patch().into(),
         kit::Confirm::close().into(),
     ])
 }
@@ -606,11 +607,11 @@ pub(in crate::web) async fn download(State(s): State<UiState>, body: Bytes) -> R
     match s.app.jobs.from_folder(&folder, title, Vec::new()).await {
         Ok(_) => {
             let name = crate::web::folder_heading(&folder.path).unwrap_or(folder.path.clone());
-            askama_datastar::events([crate::web::flash::ok(format!(
-                "Downloading {name} from {username}"
-            ))
-            .patch()
-            .into()])
+            askama_datastar::events([
+                kit::Flash::ok(format!("Downloading {name} from {username}"))
+                    .patch()
+                    .into(),
+            ])
         }
         Err(e) => failed(&e),
     }

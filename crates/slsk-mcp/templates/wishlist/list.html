@@ -9,7 +9,7 @@
               {{ kit::Button::quiet("Remove").post("/wishlist/{}/remove"|format(r.wish.id)) }}
             </div>
             <div class="text-meta text-muted wrap-anywhere">
-              {% if r.wish.lossless %}lossless · {% endif %}{% if r.wish.grab %}grabs when found{% else %}search only{% endif %} · {{ self.searched(r.wish) }}{% match self.next_for(r.wish) %}{% when Some with (at) %} · searched next, in <span data-until="{{ at }}"></span>{% when None %}{% endmatch %}
+              {% if r.wish.lossless %}lossless · {% endif %}{% if r.wish.grab %}grabs when found{% else %}search only{% endif %} · {% if let Some(t) = self.searched(r.wish) %}searched {{ t }}{% else %}not searched yet{% endif %}{% match self.next_for(r.wish) %}{% when Some with (at) %} · searched next, in <span data-until="{{ at }}"></span>{% when None %}{% endmatch %}
               {% match r.job %}{% when Some with (j) %} · became <a href="/jobs/{{ r.wish.job_id.unwrap_or_default() }}">{{ j.0 }}</a> ({{ self.label(j.1) }}){% when None %}{% endmatch %}
             </div>
           </li>

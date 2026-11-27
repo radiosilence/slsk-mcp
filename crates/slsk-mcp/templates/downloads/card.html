@@ -57,7 +57,7 @@
     <ul class="mt-1.5 grid gap-1">
     {% for t in j.analysis %}
       <li class="flex flex-wrap items-baseline gap-2">
-        {% let v = self.verdict(t) %}{% if v == "lossless" %}{{ kit::Status::ok(v) }}{% else if v == "lossy" || v == "upsampled" %}{{ kit::Status::bad(v) }}{% else %}{{ kit::Status::wait(v) }}{% endif %}
+        {% let v = self.verdict(t) %}{% if v == "lossless" %}{{ kit::Status::ok(v) }}{% else if v == "lossy" || v == "upsampled" %}{{ kit::Status::bad(v) }}{% else %}{{ kit::Status::neutral(v) }}{% endif %}
         <span>{{ t.file }}</span>
         <span class="text-meta text-muted wrap-anywhere">{% match t.cutoff_hz %}{% when Some with (c) %}ends at {{ c / 1000.0 }} kHz{% when None %}{% endmatch %}{% match t.estimate %}{% when Some with (e) %} · {{ e }}{% when None %}{% endmatch %}</span>
         <a href="/jobs/{{ j.id.as_str() }}/spectrogram/{{ loop.index0 }}" target="_blank" rel="noopener">spectrogram</a>

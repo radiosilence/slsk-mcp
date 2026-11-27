@@ -33,7 +33,7 @@ impl TriagePage {
     fn label(&self, cause: &str) -> &'static str {
         cause_label(cause)
     }
-    fn ago(&self, at: &chrono::DateTime<chrono::Utc>) -> String {
+    fn ago(&self, at: &chrono::DateTime<chrono::Utc>) -> kit::Time<'static> {
         crate::web::ago(*at)
     }
 }

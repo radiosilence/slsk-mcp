@@ -220,7 +220,7 @@ pub(in crate::web) async fn import_url(
 /// closed. The stream draws what changed.
 fn accepted() -> Response {
     askama_datastar::events([
-        crate::web::flash::region().patch().into(),
+        kit::Flash::region().patch().into(),
         kit::Confirm::close().into(),
     ])
 }
@@ -240,7 +240,7 @@ pub(in crate::web) async fn act(
                     scam.jobs.len()
                 );
                 askama_datastar::events([
-                    crate::web::flash::ok(&msg).patch().into(),
+                    kit::Flash::ok(&msg).patch().into(),
                     kit::Confirm::close().into(),
                 ])
             }
@@ -421,7 +421,7 @@ impl Sources {
     fn cause(&self, cause: &str) -> &'static str {
         super::triage::cause_label(cause)
     }
-    fn ago(&self, at: &chrono::DateTime<chrono::Utc>) -> String {
+    fn ago(&self, at: &chrono::DateTime<chrono::Utc>) -> kit::Time<'static> {
         crate::web::ago(*at)
     }
     fn size(&self, bytes: &u64) -> String {

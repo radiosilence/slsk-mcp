@@ -191,7 +191,7 @@ impl History {
             None => String::new(),
         }
     }
-    fn ago(&self, h: &crate::db::UploadRow) -> String {
+    fn ago(&self, h: &crate::db::UploadRow) -> kit::Time<'static> {
         crate::web::ago(h.finished_at)
     }
     fn leaf<'a>(&self, name: &'a str) -> &'a str {
@@ -216,5 +216,5 @@ pub(in crate::web) async fn cancel(
     if let Some(e) = s.app.session.engine() {
         e.cancel_upload(&q.username, &RawStr::from(q.filename));
     }
-    askama_datastar::events([crate::web::flash::region().patch().into()])
+    askama_datastar::events([kit::Flash::region().patch().into()])
 }

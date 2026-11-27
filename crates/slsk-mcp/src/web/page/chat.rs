@@ -189,7 +189,7 @@ impl Side {
             },
         }
     }
-    fn ago(&self, c: &Conversation) -> String {
+    fn ago(&self, c: &Conversation) -> kit::Time<'static> {
         crate::web::ago(c.at)
     }
 }
@@ -317,7 +317,7 @@ impl Lines {
             }
         }
     }
-    fn at(&self, l: &Line) -> String {
+    fn at(&self, l: &Line) -> kit::Time<'static> {
         crate::web::ago(l.at)
     }
 }
@@ -418,7 +418,7 @@ pub(in crate::web) async fn send(State(s): State<UiState>, body: Bytes) -> Respo
     };
     match result {
         Ok(()) => askama_datastar::events([
-            crate::web::flash::ok("Sent").patch().into(),
+            kit::Flash::ok("Sent").patch().into(),
             signals(serde_json::json!({ "_msg": "" })),
         ]),
         Err(e) => failed(&e),
@@ -441,7 +441,7 @@ pub(in crate::web) async fn join(
     opened(
         &s,
         t.as_ref(),
-        Some(crate::web::flash::ok(format!("Joining {room}"))),
+        Some(kit::Flash::ok(format!("Joining {room}"))),
     )
     .await
 }
@@ -456,14 +456,7 @@ pub(in crate::web) async fn leave(
         return failed(&anyhow::anyhow!("Say which room."));
     };
     match s.app.social.leave_room(room).await {
-        Ok(()) => {
-            opened(
-                &s,
-                None,
-                Some(crate::web::flash::ok(format!("Left {room}"))),
-            )
-            .await
-        }
+        Ok(()) => opened(&s, None, Some(kit::Flash::ok(format!("Left {room}")))).await,
         Err(e) => failed(&e),
     }
 }
@@ -481,7 +474,7 @@ pub(in crate::web) async fn add_buddy(
     let note = field(&form, "note").unwrap_or_default().trim();
     match s.app.social.add_buddy(user, note).await {
         Ok(()) => askama_datastar::events([
-            crate::web::flash::ok(format!("Added {user} as a buddy"))
+            kit::Flash::ok(format!("Added {user} as a buddy"))
                 .patch()
                 .into(),
             signals(serde_json::json!({ "_buddy": "", "_buddynote": "" })),
@@ -500,7 +493,7 @@ pub(in crate::web) async fn remove_buddy(
         return failed(&anyhow::anyhow!("Say who to remove."));
     };
     match s.app.social.remove_buddy(user).await {
-        Ok(()) => askama_datastar::events([crate::web::flash::region().patch().into()]),
+        Ok(()) => askama_datastar::events([kit::Flash::region().patch().into()]),
         Err(e) => failed(&e),
     }
 }

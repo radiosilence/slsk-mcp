@@ -24,7 +24,7 @@
       {% endif %}
     </div>
     {% if !stats.is_empty() %}{{ self.pairs().class("mt-2.5") }}{% endif %}
-    {% if !likes.is_empty() %}<p class="mt-2.5 text-meta wrap-anywhere"><span class="text-muted">Likes</span> {{ likes.join(", ") }}</p>{% endif %}
-    {% if !hates.is_empty() %}<p class="text-meta wrap-anywhere"><span class="text-muted">Dislikes</span> {{ hates.join(", ") }}</p>{% endif %}
+    {% if !likes.is_empty() %}<p class="mt-2.5 text-meta text-muted">Likes</p>{{ kit::List::new(likes).class("text-meta") }}{% endif %}
+    {% if !hates.is_empty() %}<p class="mt-2.5 text-meta text-muted">Dislikes</p>{{ kit::List::new(hates).class("text-meta") }}{% endif %}
   </article>
 </div>

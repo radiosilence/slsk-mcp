@@ -597,11 +597,9 @@ pub(in crate::web) async fn download_files(
         .unwrap_or_default()
         .to_string();
     match s.app.jobs.from_files(username, files, title).await {
-        Ok(job) => {
-            askama_datastar::events([crate::web::flash::ok(format!("Downloading {}", job.title))
-                .patch()
-                .into()])
-        }
+        Ok(job) => askama_datastar::events([kit::Flash::ok(format!("Downloading {}", job.title))
+            .patch()
+            .into()]),
         Err(e) => failed(&e),
     }
 }
@@ -760,7 +758,7 @@ pub(in crate::web) async fn download_tree(
         _ => format!("Downloading {count} albums"),
     };
     askama_datastar::events([
-        crate::web::flash::ok(&msg).patch().into(),
+        kit::Flash::ok(&msg).patch().into(),
         kit::Confirm::close().into(),
     ])
 }

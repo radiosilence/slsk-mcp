@@ -17,6 +17,8 @@ use axum::response::{IntoResponse, Redirect, Response};
 use super::layout::{Layout, Main, Nav, Status, Title};
 pub(super) use askama_datastar::View;
 
+use koan_kit_web as kit;
+
 use super::{Draw, UiState};
 
 pub(super) mod activity;
@@ -199,7 +201,7 @@ pub(super) async fn shown<P: Page>(
         super::patch(&Html::from_iter([
             Main { body: body.html }.draw(),
             Title::of(P::TAB, body.heading.as_deref()).draw(),
-            crate::web::flash::region().html(),
+            kit::Flash::region().html(),
         ])),
         super::signals(signals),
     ])

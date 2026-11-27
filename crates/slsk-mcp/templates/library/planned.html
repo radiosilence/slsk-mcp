@@ -51,8 +51,8 @@
     {% when Body::Reimport with { release, files, missing, untouched, cover, companions } %}
     <p class="text-meta text-muted wrap-anywhere">{% let (site, href) = crate::library::release_link(release.id) %}<a href="{{ href }}" target="_blank" rel="noopener">{{ site }} release</a>{% if let Some(m) = release.media %} · {{ m }}{% endif %}{% if let Some(co) = release.country %} · {{ co }}{% endif %} · {{ release.tracks }} tracks</p>
     {% include "library/changes.html" %}
-    {% if !missing.is_empty() %}<p class="my-0.5 text-meta text-warn">No file for: {{ missing.join(", ") }}</p>{% endif %}
-    {% if !untouched.is_empty() %}<p class="my-0.5 text-meta text-warn">Matched to no track, left as they are: {{ untouched.join(", ") }}</p>{% endif %}
+    {% if !missing.is_empty() %}<p class="my-0.5 text-meta text-warn">No file for:</p>{{ kit::List::new(missing).class("text-meta") }}{% endif %}
+    {% if !untouched.is_empty() %}<p class="my-0.5 text-meta text-warn">Matched to no track, left as they are:</p>{{ kit::List::new(untouched).class("text-meta") }}{% endif %}
     {% if cover %}<p class="text-meta text-muted wrap-anywhere">Cover: each file's front cover is replaced by the release's (or the album's own, when it has none).</p>{% endif %}
     {% if !companions.is_empty() %}
     <p class="text-meta text-muted wrap-anywhere">Other files:</p>
@@ -66,11 +66,11 @@
     {% if let Some(d) = into %}<p class="text-meta text-muted wrap-anywhere">Re-filed into <span class="wrap-anywhere">{{ d }}</span></p>{% endif %}
     {% include "library/changes.html" %}
     {% when Body::RemoveArt with (r) %}
-    {% if !r.files.is_empty() %}<p class="text-meta text-muted wrap-anywhere">Pictures taken out of: {{ r.files.join(", ") }}</p>{% endif %}
+    {% if !r.files.is_empty() %}<p class="text-meta text-muted">Pictures taken out of:</p>{{ kit::List::new(r.files).class("text-meta text-muted") }}{% endif %}
     {% when Body::SetArt with { set, token } %}
     <img src="/library/art/pending/{{ token }}" alt="The new art" class="my-1.5 size-32 border border-rule object-cover">
     <p class="text-meta text-muted wrap-anywhere">{{ set.mime }}, {{ set.width }}×{{ set.height }}, {{ set.bytes }} bytes{% if set.resized %}, scaled down to the width imports embed{% endif %}</p>
-    {% if !set.embedded.is_empty() %}<p class="text-meta text-muted wrap-anywhere">The only picture embedded in: {{ set.embedded.join(", ") }}</p>{% endif %}
+    {% if !set.embedded.is_empty() %}<p class="text-meta text-muted">The only picture embedded in:</p>{{ kit::List::new(set.embedded).class("text-meta text-muted") }}{% endif %}
     {% if let Some(f) = set.cover_file %}<p class="text-meta text-muted wrap-anywhere">Written beside them as {{ f }}{% if !set.binned.is_empty() %}; to the bin: {{ set.binned.join(", ") }}{% endif %}</p>{% endif %}
     {% when Body::Bin with { to, keep, reason } %}
     {% if !reason.is_empty() %}<p class="text-meta text-muted wrap-anywhere">Spare: {{ reason }}. The copy kept is <span class="wrap-anywhere">{{ self.rel(keep) }}</span>.</p>{% endif %}

@@ -1,4 +1,7 @@
-<div id="status" class="{{ state }} flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1.5">
+<div
+  id="status"
+  class="{{ state }} flex min-w-0 flex-[1_1_20rem] flex-wrap items-center gap-x-2.5 gap-y-1.5"
+>
   {% match username %}{% when Some with (u) %}<strong><a href="{{ crate::web::profile_href("") }}">{{ u }}</a></strong>{% when None %}{% endmatch %}
   {{ crate::web::state(state, state) }}
   {% match detail %}{% when Some with (d) %}<span class="basis-full text-meta text-muted">{{ d }}</span>{% when None %}{% endmatch %}

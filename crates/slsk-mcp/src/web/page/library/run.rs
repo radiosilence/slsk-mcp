@@ -268,7 +268,7 @@ pub(in crate::web) async fn apply(
             done - failed,
             if failed > 0 { format!(", {failed} failed") } else { String::new() }
         );
-        yield crate::web::flash::ok(&msg).patch().into();
+        yield kit::Flash::ok(&msg).patch().into();
     })
     .into_response()
 }

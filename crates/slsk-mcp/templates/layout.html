@@ -13,15 +13,27 @@
     {{ kit::SkipLink::new("Skip to content", "main") }}
     {{ kit::Navigation::new() }}
     <div hidden{{ self.stream() }}></div>
-    <header
-      class="sticky top-0 z-2 border-b border-rule bg-surface px-4 py-2.5 pt-[max(10px,env(safe-area-inset-top))] max-sm:px-3 max-sm:py-2"
-    >
-      {{ status }}
-    </header>
+    {%
+        filter kit::wrap(
+            kit::TopBar::new("slsk", "/").home_label("slsk: downloads").class("flex-wrap"),
+        )
+    %}{{ status }}{% endfilter %}
     {{ nav }}
     {{ main }}
-    <footer class="px-4 py-6 text-center text-fine">{{ kit::Release::new("slsk-mcp", self.version(), "https://github.com/radiosilence/slsk-mcp") }}</footer>
+    {{
+        kit::Footer::new()
+            .body(kit::Release::new(
+                "slsk-mcp",
+                self.version(),
+                "https://github.com/radiosilence/slsk-mcp",
+            ))
+    }}
     {{ kit::Confirm::new("Cancel") }}
-    {{ crate::web::flash::region() }}
+    {{
+        kit::Flash::region()
+            .failed("That did not work. Try again.")
+            .unreachable("The server could not be reached.")
+            .sign_in("/auth/login")
+    }}
   </body>
 </html>
