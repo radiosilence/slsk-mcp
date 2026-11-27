@@ -447,12 +447,12 @@ pub(in crate::web) async fn sources(State(s): State<UiState>, Path(id): Path<Uui
             &id.to_string(),
             job.as_ref().map_or(0, |j| j.alternates.0.len()),
         )
-        .answer(Sources::new(job.as_ref(), events).draw()),
+        .answer(Sources::new(job.as_ref(), events).markup()),
         (Err(e), _) | (_, Err(e)) => Lazy::sources(&id.to_string(), 0).answer(
             Trouble {
                 error: format!("Couldn't read the history: {e:#}"),
             }
-            .draw(),
+            .markup(),
         ),
     }
 }
@@ -536,7 +536,7 @@ pub(in crate::web) async fn files(State(s): State<UiState>, Path(id): Path<Uuid>
             albums,
             tracks,
         }
-        .draw(),
+        .markup(),
     )
 }
 
@@ -566,7 +566,7 @@ impl Pick {
 }
 
 pub(in crate::web) async fn pick(State(s): State<UiState>, Path(id): Path<Uuid>) -> Response {
-    Lazy::pick(&id.to_string()).answer(Pick::of(&s.app, id, None).await.draw())
+    Lazy::pick(&id.to_string()).answer(Pick::of(&s.app, id, None).await.markup())
 }
 
 /// The ticked files are fetched and the rest skipped.
@@ -593,7 +593,7 @@ pub(in crate::web) async fn pick_files(
         .await
         .err()
         .map(|e| format!("{e:#}"));
-    let pick = Pick::of(&s.app, id, error).await.draw();
+    let pick = Pick::of(&s.app, id, error).await.markup();
     Lazy::pick(&id.to_string()).answer(pick)
 }
 
@@ -626,7 +626,7 @@ pub(in crate::web) async fn compare(
         Ok(c) => (Some(c), None),
         Err(e) => (None, Some(format!("Couldn't compare: {e:#}"))),
     };
-    Lazy::compare(&id.to_string(), &release).answer(Compare { error, cmp }.draw())
+    Lazy::compare(&id.to_string(), &release).answer(Compare { error, cmp }.markup())
 }
 
 #[cfg(test)]
