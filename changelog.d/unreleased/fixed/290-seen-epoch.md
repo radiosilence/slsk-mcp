@@ -1,0 +1,1 @@
+- **A page held open across a restart, or a stream whose read failed, no longer stays stale.** A page's `seen` now carries the boot its counts were taken in, so one from before a restart matches nothing and the page is drawn whole; a pass that could not read what it draws leaves `seen` where it was, so the next stream draws it again.
