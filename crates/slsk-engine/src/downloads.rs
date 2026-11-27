@@ -443,7 +443,7 @@ pub(crate) fn on_transfer_request(
     if !d.transition(from, DownloadState::Starting) {
         return false;
     }
-    if size != queued {
+    if queued > 0 && size != queued {
         d.resized.store(true, Ordering::Relaxed);
     }
     d.size.store(size, Ordering::Relaxed);
