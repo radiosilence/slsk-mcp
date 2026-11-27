@@ -166,18 +166,18 @@ impl Body {
 /// Page `P`'s body, and the live topics' counts as they stood before it was
 /// drawn: the page's stream draws what changed after them, and nothing the
 /// body already drew.
-async fn draw<P: Page>(s: &UiState, args: P::Args) -> anyhow::Result<(Body, crate::live::Counts)> {
-    let seen = *crate::live::subscribe().borrow();
+async fn draw<P: Page>(s: &UiState, args: P::Args) -> anyhow::Result<(Body, crate::live::Seen)> {
+    let seen = crate::live::Seen::of(*crate::live::subscribe().borrow());
     Ok((P::body(s, args).await?, seen))
 }
 
 /// The signals a page starts with: its own, the address it shows, and the
 /// counts its stream carries on from.
-fn signals(body: &mut Body, url: &str, seen: crate::live::Counts) -> serde_json::Value {
+fn signals(body: &mut Body, url: &str, seen: crate::live::Seen) -> serde_json::Value {
     let mut signals = serde_json::Value::Object(std::mem::take(&mut body.signals));
     if let Some(all) = signals.as_object_mut() {
         all.insert("url".into(), url.into());
-        all.insert("seen".into(), seen.to_vec().into());
+        all.insert("seen".into(), serde_json::json!(seen));
     }
     signals
 }

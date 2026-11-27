@@ -14,6 +14,8 @@ use askama_datastar::Last;
 pub(in crate::web) struct Job {
     id: Option<Uuid>,
     page: Last,
+    /// The last pass could not read the job.
+    failed: bool,
 }
 
 impl Live for Job {
@@ -23,10 +25,12 @@ impl Live for Job {
         Self {
             id: of_path(shown.path()),
             page: last(),
+            failed: false,
         }
     }
 
     async fn draw(&mut self, s: &UiState, c: &Changed) -> Vec<Event> {
+        self.failed = false;
         let Some(id) = self.id else {
             return Vec::new();
         };
@@ -37,8 +41,13 @@ impl Live for Job {
             Ok((page, _)) => self.page.send(&page.draw()).into_iter().collect(),
             Err(e) => {
                 tracing::warn!(%id, error = %e, "could not show job");
+                self.failed = true;
                 Vec::new()
             }
         }
+    }
+
+    fn failed(&self) -> bool {
+        self.failed
     }
 }

@@ -33,6 +33,8 @@ pub(in crate::web) struct Downloads {
     cards: HashMap<String, (String, Instant)>,
     /// When a card held back by [`CARD_EVERY`] is due, which wakes the stream.
     recheck: watch::Sender<Option<Instant>>,
+    /// The last pass could not read the jobs.
+    failed: bool,
 }
 
 impl Live for Downloads {
@@ -46,14 +48,17 @@ impl Live for Downloads {
             list: last(),
             cards: HashMap::new(),
             recheck: watch::Sender::new(None),
+            failed: false,
         }
     }
 
     async fn draw(&mut self, s: &UiState, c: &Changed) -> Vec<Event> {
         let mut events = Vec::new();
+        self.failed = false;
         let jobs = c.topic(Topic::Jobs);
         if jobs || c.minute {
             let settled = Settled::newest(&s.app, self.shown.jobs).await;
+            self.failed |= settled.failed;
             if self.settled.as_ref() != Some(&settled) {
                 events.push(settled.draw().patch().into());
                 self.settled = Some(settled);
@@ -72,6 +77,7 @@ impl Live for Downloads {
         };
         let any_settled = !settled.jobs.is_empty();
         let live = Jobs::of(&s.app, self.shown.jobs, &self.shown.files, any_settled).await;
+        self.failed |= live.failed;
         let now = Instant::now();
         let mut recheck: Option<Instant> = None;
         let shape = live.shape();
@@ -115,6 +121,10 @@ impl Live for Downloads {
     }
 
     /// Each time a card held back comes due.
+    fn failed(&self) -> bool {
+        self.failed
+    }
+
     fn wakes(&self) -> Option<BoxStream<'static, ()>> {
         let due = self.recheck.subscribe();
         Some(

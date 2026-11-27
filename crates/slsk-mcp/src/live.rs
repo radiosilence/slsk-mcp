@@ -51,6 +51,38 @@ pub fn subscribe() -> watch::Receiver<Counts> {
     CHANGES.subscribe()
 }
 
+/// Drawn as the process starts. The counts restart with the process, so a
+/// page's counts from before a restart are told apart by it.
+static BOOT: LazyLock<String> = LazyLock::new(|| uuid::Uuid::new_v4().simple().to_string());
+
+/// How far the topics had changed when a page or stream drew them: the
+/// counts, and the boot they were counted in.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Seen {
+    pub boot: String,
+    pub counts: Counts,
+}
+
+impl Seen {
+    /// `counts`, counted in this boot.
+    pub fn of(counts: Counts) -> Self {
+        Self {
+            boot: BOOT.clone(),
+            counts,
+        }
+    }
+
+    /// Which topics moved between `self`, as a page holds it, and `now`:
+    /// every one when `self` is from another boot, whose counts mean nothing
+    /// now.
+    pub fn moved(&self, now: &Seen) -> [bool; TOPICS] {
+        if self.boot != now.boot {
+            return [true; TOPICS];
+        }
+        std::array::from_fn(|i| self.counts[i] != now.counts[i])
+    }
+}
+
 /// State held in memory that a page shows: a writer's lock announces the
 /// change when it is let go, a reader's does not.
 #[derive(Default)]
@@ -171,5 +203,36 @@ mod tests {
         rx.changed().await.unwrap();
         let after = *rx.borrow_and_update();
         assert!(after[Topic::Search as usize] > before[Topic::Search as usize]);
+    }
+}
+
+#[cfg(test)]
+mod seen_tests {
+    use super::*;
+
+    #[test]
+    fn a_page_drawn_as_things_stand_is_not_drawn_again() {
+        let now = Seen::of([3, 1, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(now.moved(&now), [false; TOPICS]);
+    }
+
+    #[test]
+    fn a_page_behind_draws_the_topics_that_moved() {
+        let then = Seen::of([2, 1, 0, 0, 0, 0, 0, 0]);
+        let now = Seen::of([3, 1, 0, 0, 0, 0, 0, 0]);
+        let mut moved = [false; TOPICS];
+        moved[Topic::Jobs as usize] = true;
+        assert_eq!(then.moved(&now), moved);
+    }
+
+    #[test]
+    fn a_page_drawn_before_a_restart_is_drawn_whole() {
+        // The same counts from another boot: they restarted with it.
+        let now = Seen::of([3, 1, 0, 0, 0, 0, 0, 0]);
+        let before = Seen {
+            boot: "another".into(),
+            counts: now.counts,
+        };
+        assert_eq!(before.moved(&now), [true; TOPICS]);
     }
 }

@@ -105,20 +105,24 @@ pub(in crate::web) struct Settled {
     pub(in crate::web) jobs: Vec<Done>,
     /// Older jobs exist beyond those shown.
     more: bool,
+    /// The database did not answer, so this is not the list as it stands.
+    pub(in crate::web) failed: bool,
 }
 
 impl Settled {
     pub(in crate::web) async fn newest(app: &App, shown: i64) -> Self {
         let shown = shown.clamp(1, MOST);
-        let mut jobs = crate::db::settled_jobs(&app.db, shown + 1)
+        let read = crate::db::settled_jobs(&app.db, shown + 1)
             .await
-            .inspect_err(|e| tracing::warn!(error = %e, "could not list settled jobs"))
-            .unwrap_or_default();
+            .inspect_err(|e| tracing::warn!(error = %e, "could not list settled jobs"));
+        let failed = read.is_err();
+        let mut jobs = read.unwrap_or_default();
         let more = shown < MOST && jobs.len() as i64 > shown;
         jobs.truncate(shown as usize);
         Self {
             jobs: jobs.into_iter().map(Done::from).collect(),
             more,
+            failed,
         }
     }
 
@@ -137,6 +141,8 @@ pub(in crate::web) struct Live {
     pub(in crate::web) underway: Vec<Card>,
     /// Nothing in hand and nothing settled either.
     empty: bool,
+    /// The database did not answer, so this is not the list as it stands.
+    pub(in crate::web) failed: bool,
 }
 
 impl Live {
@@ -144,14 +150,19 @@ impl Live {
     /// names. `settled` is whether any job is done with, for the line an
     /// empty list shows.
     pub(in crate::web) async fn of(app: &App, shown: i64, files: &str, settled: bool) -> Self {
+        let mut failed = false;
         let active = crate::db::active_jobs(&app.db, shown.clamp(1, MOST))
             .await
             .inspect_err(|e| tracing::warn!(error = %e, "could not list jobs"))
-            .unwrap_or_default();
+            .unwrap_or_else(|_| {
+                failed = true;
+                Vec::new()
+            });
         let jobs = graphql::job_views(app, active, true)
             .await
             .unwrap_or_else(|e| {
                 tracing::warn!(error = ?e, "could not show jobs");
+                failed = true;
                 Vec::new()
             });
         let empty = jobs.is_empty() && !settled;
@@ -166,6 +177,7 @@ impl Live {
             attention,
             underway,
             empty,
+            failed,
         }
     }
 
