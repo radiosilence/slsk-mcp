@@ -8,26 +8,31 @@
       <div class="mt-2.5 flex flex-wrap items-center gap-2">
         {{ kit::Button::quiet("Profile").href(crate::web::profile_href(name)) }}
         {{ kit::Button::quiet("Browse shares").href(crate::web::browse_href(name, "")) }}
-        {{ kit::Button::quiet("Add buddy")
-            .post(crate::web::row_url("/chat/buddy/add", "username", name)) }}
+        {{
+            kit::Button::quiet("Add buddy")
+                .post(crate::web::row_url("/chat/buddy/add", "username", name))
+        }}
       </div>
     {% else %}
       <div class="mt-2.5 flex flex-wrap items-center gap-2">
-        {{ kit::Button::quiet("Leave room")
-            .post(crate::web::row_url("/chat/leave", "room", name)) }}
+        {{
+            kit::Button::quiet("Leave room").post(crate::web::row_url("/chat/leave", "room", name))
+        }}
       </div>
       {% if !members.is_empty() %}{% filter kit::wrap(kit::Disclosure::new("{} in the room"|format(members.len()))) %}<p class="text-meta text-muted wrap-anywhere">{% for m in members %}{% if !loop.first %}, {% endif %}<a href="{{ crate::web::profile_href(m) }}">{{ m }}</a>{% endfor %}</p>{% endfilter %}{% endif %}
     {% endif %}
     {% let composer = kit::Form::post("/chat/send") %}
     <form {{ composer.attrs() }} class="mt-2.5 flex items-end gap-2">
       {{ kit::Input::hidden("kind", kind) }}{{ kit::Input::hidden("name", name) }}
-      {{ kit::Textarea::new("message")
-          .rows(2)
-          .label("Message")
-          .placeholder("Message")
-          .required()
-          .bind("_msg")
-          .class("min-w-0 flex-1 resize-y") }}
+      {{
+          kit::Textarea::new("message")
+              .rows(2)
+              .label("Message")
+              .placeholder("Message")
+              .required()
+              .bind("_msg")
+              .class("min-w-0 flex-1 resize-y")
+      }}
       {{ composer.submit(kit::Button::primary("Send")) }}
     </form>
     {% if let Some(l) = lines %}{{ l }}{% endif %}

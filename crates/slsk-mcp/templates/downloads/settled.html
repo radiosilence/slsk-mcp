@@ -14,12 +14,14 @@
                     .busy_key(j.id)
                     .post("/jobs/{}/retry"|format(j.id))
             }}
-              {{ kit::Button::quiet("Clear")
-                  .class("flex-none")
-                  .busy_key(j.id)
-                  .post("/jobs/{}/remove"|format(j.id))
-                  .confirm("Remove this album and delete its downloaded files?", "Remove")
-                  .attr("title", "Forget this entry; the album stays in the library") }}
+              {{
+                  kit::Button::quiet("Clear")
+                      .class("flex-none")
+                      .busy_key(j.id)
+                      .post("/jobs/{}/remove"|format(j.id))
+                      .confirm("Remove this album and delete its downloaded files?", "Remove")
+                      .attr("title", "Forget this entry; the album stays in the library")
+              }}
             {% else %}{{
                 kit::Button::quiet("Clear")
                     .class("flex-none")

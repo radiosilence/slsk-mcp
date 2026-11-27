@@ -79,9 +79,11 @@
     <ul class="mt-2 grid gap-1.5">
       {% for c in j.candidates %}
         <li class="flex flex-wrap items-baseline gap-2">
-          {{ kit::Button::bordered("Use")
-              .busy_key(j.id.as_str())
-              .post(self.url("resolve/{}"|format(c.release_id))) }}
+          {{
+              kit::Button::bordered("Use")
+                  .busy_key(j.id.as_str())
+                  .post(self.url("resolve/{}"|format(c.release_id)))
+          }}
           <span>{{ c.artist }} — {{ c.title }}</span>
           <span class="text-meta text-muted wrap-anywhere">{% match c.date %}{% when Some with (d) %}{{ d }}{% when None %}{% endmatch %} {% match c.country %}{% when Some with (x) %}{{ x }}{% when None %}{% endmatch %} {% match c.media %}{% when Some with (m) %}{{ m }}{% when None %}{% endmatch %} · {{ c.tracks }} tracks · distance {{ c.distance }}{% if c.missing > 0 %} · {{ c.missing }} missing{% endif %}{% if c.extra > 0 %} · {{ c.extra }} extra{% endif %}</span>
           {% let (site, href) = crate::library::release_link(c.release_id) %}<a class="text-meta" href="{{ href }}" target="_blank" rel="noopener">{{ site }}</a>
@@ -91,12 +93,14 @@
     </ul>
     {% let release = kit::Form::post(self.url("release")).busy_key(j.id.as_str()) %}
     <form {{ release.attrs() }} class="my-1.5 flex flex-wrap items-center gap-2">
-      {{ kit::Input::text("release")
-          .label("Release id or link")
-          .placeholder(self.release_hint())
-          .autocomplete("off")
-          .required()
-          .class("flex-[1_1_12em]") }}
+      {{
+          kit::Input::text("release")
+              .label("Release id or link")
+              .placeholder(self.release_hint())
+              .autocomplete("off")
+              .required()
+              .class("flex-[1_1_12em]")
+      }}
       {{ release.submit(kit::Button::bordered("Use release")) }}
     </form>
   {% endif %}

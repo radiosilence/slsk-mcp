@@ -21,12 +21,14 @@
       </nav>
       {% if !mine && tree_files > 0 %}
         <div class="mt-2.5 flex flex-wrap items-center gap-2">
-          {{ crate::web::page::browse::tree_download(
-              kit::Button::primary("Download folder · {} files"|format(tree_files)),
-              username,
-              here_key,
-              tree_files,
-          ) }}
+          {{
+              crate::web::page::browse::tree_download(
+                  kit::Button::primary("Download folder · {} files"|format(tree_files)),
+                  username,
+                  here_key,
+                  tree_files,
+              )
+          }}
           {% if has_files %}{% let ticked = kit::Form::post("/browse/files").id("browse-files") %}<form {{ ticked.attrs() }}>
               {{ kit::Input::hidden("username", username) }}
               {{ kit::Input::hidden("key", here_key) }}

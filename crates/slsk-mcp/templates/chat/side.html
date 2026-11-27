@@ -18,7 +18,19 @@
         {% for c in conversations %}
           <li>
             <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5 basis-full">
-              {% if c.unread > 0 %}{% filter kit::wrap(kit::Link::new("", crate::web::chat_href("pm", c.username)).in_place().busy_key("chat").class("wrap-anywhere")) %}<strong>{{ c.username }}</strong>{% endfilter %}{% else %}{{ kit::Link::new(c.username, crate::web::chat_href("pm", c.username)).in_place().busy_key("chat").class("wrap-anywhere") }}{% endif %}
+              {% if c.unread > 0 %}{%
+                  filter kit::wrap(
+                      kit::Link::new("", crate::web::chat_href("pm", c.username))
+                          .in_place()
+                          .busy_key("chat")
+                          .class("wrap-anywhere"),
+                  )
+              %}<strong>{{ c.username }}</strong>{% endfilter %}{% else %}{{
+                  kit::Link::new(c.username, crate::web::chat_href("pm", c.username))
+                      .in_place()
+                      .busy_key("chat")
+                      .class("wrap-anywhere")
+              }}{% endif %}
               {% if c.unread > 0 %}<span class="text-meta text-brand">{{ c.unread }} new</span>{% endif %}
               <span class="text-meta text-muted wrap-anywhere">{{ self.ago(c) }}</span>
             </div>
@@ -32,16 +44,20 @@
         {% for b in buddies %}
           <li>
             <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5 basis-full">
-              {{ kit::Link::new(b.username, crate::web::chat_href("pm", b.username))
-                  .in_place()
-                  .busy_key("chat")
-                  .class("wrap-anywhere") }}
+              {{
+                  kit::Link::new(b.username, crate::web::chat_href("pm", b.username))
+                      .in_place()
+                      .busy_key("chat")
+                      .class("wrap-anywhere")
+              }}
               {{ crate::web::state(b.status, b.status) }}
               <span class="flex-1 max-sm:hidden"></span>
               {{ kit::Button::quiet("Profile").href(crate::web::profile_href(b.username)) }}
               {{ kit::Button::quiet("Browse").href(crate::web::browse_href(b.username, "")) }}
-              {{ kit::Button::quiet("Remove")
-                  .post(crate::web::row_url("/chat/buddy/remove", "username", b.username)) }}
+              {{
+                  kit::Button::quiet("Remove")
+                      .post(crate::web::row_url("/chat/buddy/remove", "username", b.username))
+              }}
             </div>
             {% if !b.note.is_empty() %}<div class="basis-full text-meta text-muted wrap-anywhere">{{ b.note }}</div>{% endif %}
           </li>

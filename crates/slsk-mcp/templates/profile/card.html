@@ -15,8 +15,10 @@
       {{ kit::Button::quiet(self.browse_label()).href(crate::web::browse_href(username, "")) }}
       {% if !mine %}
         {{ kit::Button::quiet("Message").href(crate::web::chat_href("pm", username)) }}
-        {{ kit::Button::quiet("Add buddy")
-            .post(crate::web::row_url("/chat/buddy/add", "username", username)) }}
+        {{
+            kit::Button::quiet("Add buddy")
+                .post(crate::web::row_url("/chat/buddy/add", "username", username))
+        }}
         {{ crate::web::peer::ban_button(username, *banned) }}
         {{ kit::Button::quiet("Refresh").href(self.refresh()).in_place() }}
       {% endif %}

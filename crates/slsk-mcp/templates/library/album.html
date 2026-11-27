@@ -20,50 +20,59 @@
       {% include "library/filter.html" %}
     </form>
     <div class="my-2.5 flex flex-wrap gap-2">
-      {{ kit::Button::bordered("Re-tag from MusicBrainz")
-          .get("/library/album/releases")
-          .sends(one)
-          .busy_key(slot) }}
+      {{
+          kit::Button::bordered("Re-tag from MusicBrainz")
+              .get("/library/album/releases")
+              .sends(one)
+              .busy_key(slot)
+      }}
       {{ kit::Button::bordered("Edit tags").get("/library/album/edit").sends(one).busy_key(slot) }}
       {% if row.refile().is_some() %}{{ kit::Button::bordered("Re-file").post("/library/preview/refile").sends(one).busy_key(slot) }}{% endif %}
-      {{ kit::Combo::new(
-          kit::Input::text("split")
-              .placeholder("split on")
-              .label("Separator to split artist credits on")
-              .autocomplete("off")
-              .attr("form", one)
-              .attr(
-                  "title",
-                  "Split each credit on this, as typed, for artists the library holds nothing else by",
-              )
-              .datastar(
-                  "on:keydown",
-                  "evt.key == 'Enter' && (evt.preventDefault(), el.nextElementSibling.click())",
-              ),
-          kit::Button::bordered("Credit artists")
-              .post("/library/preview/credit")
+      {{
+          kit::Combo::new(
+              kit::Input::text("split")
+                  .placeholder("split on")
+                  .label("Separator to split artist credits on")
+                  .autocomplete("off")
+                  .attr("form", one)
+                  .attr(
+                      "title",
+                      "Split each credit on this, as typed, for artists the library holds nothing else by",
+                  )
+                  .datastar(
+                      "on:keydown",
+                      "evt.key == 'Enter' && (evt.preventDefault(), el.nextElementSibling.click())",
+                  ),
+              kit::Button::bordered("Credit artists")
+                  .post("/library/preview/credit")
+                  .sends(one)
+                  .busy_key(slot),
+          )
+          .compact()
+      }}
+      {{
+          kit::Button::bordered("Enrich").post("/library/preview/enrich").sends(one).busy_key(slot)
+      }}
+      {{
+          kit::Button::bordered("Remove embedded art")
+              .post("/library/preview/remove-art")
               .sends(one)
-              .busy_key(slot),
-      )
-      .compact() }}
-      {{ kit::Button::bordered("Enrich")
-          .post("/library/preview/enrich")
-          .sends(one)
-          .busy_key(slot) }}
-      {{ kit::Button::bordered("Remove embedded art")
-          .post("/library/preview/remove-art")
-          .sends(one)
-          .busy_key(slot) }}
-      {{ kit::Button::bordered("Set art")
-          .data("slot", slot)
-          .datastar(
-              "on:click",
-              "$_artform = $_artform == el.dataset.slot ? '' : el.dataset.slot",
-          ) }}
-      {{ kit::Button::bordered(self.bin_label())
-          .post("/library/preview/bin")
-          .sends(one)
-          .busy_key(slot) }}
+              .busy_key(slot)
+      }}
+      {{
+          kit::Button::bordered("Set art")
+              .data("slot", slot)
+              .datastar(
+                  "on:click",
+                  "$_artform = $_artform == el.dataset.slot ? '' : el.dataset.slot",
+              )
+      }}
+      {{
+          kit::Button::bordered(self.bin_label())
+              .post("/library/preview/bin")
+              .sends(one)
+              .busy_key(slot)
+      }}
     </div>
     {#- Shown while `_artform` names this album's slot, one album's at a time: Set art toggles it, and a change applied to
         the album clears it. A signal rather than the element's own state, so a redraw of the album keeps it open. -#}
@@ -79,13 +88,17 @@
       {{ kit::Input::hidden("path", row.album.path) }}
       {{ kit::Input::hidden("slot", slot) }}
       {% include "library/filter.html" %}
-      {{ kit::Field::url("url", "image url")
-          .placeholder("https://…")
-          .autocomplete("off")
-          .id("{}-art-url"|format(slot)) }}
-      {{ kit::Field::new("or a file", self.image_input())
-          .hint("A JPEG or PNG.")
-          .id("{}-art-image"|format(slot)) }}
+      {{
+          kit::Field::url("url", "image url")
+              .placeholder("https://…")
+              .autocomplete("off")
+              .id("{}-art-url"|format(slot))
+      }}
+      {{
+          kit::Field::new("or a file", self.image_input())
+              .hint("A JPEG or PNG.")
+              .id("{}-art-image"|format(slot))
+      }}
       <div class="flex flex-wrap items-center gap-x-4 gap-y-1">
         {{ kit::Check::new("embed", "embedded in the files").value("1").checked(true) }}
         {{ kit::Check::new("file", "cover file").value("1") }}

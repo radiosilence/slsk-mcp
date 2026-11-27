@@ -14,11 +14,13 @@
       </div>
     {% endfilter %}
       {% else %}
-        {{ kit::Field::text("a-{}"|format(field), label)
-            .value(self.now(field))
-            .placeholder(self.differs(field))
-            .autocomplete("off")
-            .id("{}-a-{}"|format(slot, field)) }}
+        {{
+            kit::Field::text("a-{}"|format(field), label)
+                .value(self.now(field))
+                .placeholder(self.differs(field))
+                .autocomplete("off")
+                .id("{}-a-{}"|format(slot, field))
+        }}
       {% endif %}
     {% endfor %}
   </div>

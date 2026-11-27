@@ -7,16 +7,20 @@
   {% if state == "no-account" || state == "rejected" %}
     {% let account = kit::Form::post("/account") %}
     <form {{ account.attrs() }} class="flex w-full flex-wrap gap-1.5">
-      {{ kit::Input::text("username")
-          .label("Soulseek username")
-          .placeholder("Soulseek username")
-          .autocomplete("username")
-          .class("flex-[1_1_160px]") }}
-      {{ kit::Input::password("password")
-          .label("Soulseek password")
-          .placeholder("password")
-          .autocomplete("current-password")
-          .class("flex-[1_1_160px]") }}
+      {{
+          kit::Input::text("username")
+              .label("Soulseek username")
+              .placeholder("Soulseek username")
+              .autocomplete("username")
+              .class("flex-[1_1_160px]")
+      }}
+      {{
+          kit::Input::password("password")
+              .label("Soulseek password")
+              .placeholder("password")
+              .autocomplete("current-password")
+              .class("flex-[1_1_160px]")
+      }}
       {{ account.submit(kit::Button::primary("Sign in")) }}
     </form>
   {% endif %}
