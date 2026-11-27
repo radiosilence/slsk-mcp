@@ -196,8 +196,11 @@ async fn a_partial_download_resumes() {
     );
 }
 
+/// A sharer that retagged a file without rescanning lists the old size. The
+/// file as offered is downloaded, and a partial from the listed size is not
+/// resumed onto it.
 #[tokio::test(flavor = "multi_thread")]
-async fn an_offer_of_another_size_is_refused() {
+async fn a_file_resized_since_it_was_listed_downloads_whole() {
     let server = TestServer::start().await;
     let tmp = tempfile::tempdir().unwrap();
     let music = tmp.path().join("music");
@@ -207,19 +210,17 @@ async fn an_offer_of_another_size_is_refused() {
     let bob = engine(&server, "bob", vec![], tmp.path()).await;
 
     let dest = tmp.path().join("dl/01.flac");
+    std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
+    std::fs::write(tmp.path().join("dl/01.flac.part"), vec![0xAA; 1000]).unwrap();
     let name: RawStr = "music\\Boards of Canada\\Geogaddi\\01 Ready Lets Go.flac".into();
-    bob.download("alice", name.clone(), data.len() as u64 + 1, dest.clone());
-    for _ in 0..200 {
-        let view = bob.download_view("alice", &name).unwrap();
-        if view.state == "failed" {
-            assert!(view.error.unwrap().contains("bytes"));
-            assert!(!dest.exists());
-            return;
-        }
-        assert_ne!(view.state, "completed");
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    panic!("the download was not refused");
+    bob.download(
+        "alice",
+        name.clone(),
+        data.len() as u64 - 50_000,
+        dest.clone(),
+    );
+    wait_completed(&bob, "alice", &name).await;
+    assert_eq!(std::fs::read(&dest).unwrap(), data);
 }
 
 #[tokio::test(flavor = "multi_thread")]
