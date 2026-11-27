@@ -1,3 +1,16 @@
-{%- filter kit::wrap(kit::Tabs::new("Sections").id("nav").class("sticky top-0 z-1 flex-nowrap overflow-x-auto bg-surface px-4 pt-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden")) -%}
-  {%- for t in self.tabs() %}{{ kit::Tab::new(t.label(), t.href()).current(*t == tab).count(self.badge(t)).class("flex-none whitespace-nowrap") }}{% endfor -%}
+{%-
+    filter kit::wrap(
+        kit::Tabs::new("Sections")
+            .id("nav")
+            .class(
+                "sticky top-0 z-1 flex-nowrap overflow-x-auto bg-surface px-4 pt-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+            ),
+    )
+-%}
+  {%- for t in self.tabs() %}{{
+      kit::Tab::new(t.label(), t.href())
+          .current(*t == tab)
+          .count(self.badge(t))
+          .class("flex-none whitespace-nowrap")
+  }}{% endfor -%}
 {%- endfilter -%}

@@ -1,7 +1,11 @@
 <div class="grid min-w-0 gap-3 *:min-w-0">
   <p class="text-meta text-muted">Why albums did not land cleanly, by cause, with every example, newest first.</p>
   {%- filter kit::wrap(kit::Tabs::new("Period").class("mt-2.5")) -%}
-    {%- for d in self.periods() %}{{ kit::Tab::new("{} days"|format(d), "/triage?days={}"|format(d)).in_place().current(*d == days) }}{% endfor -%}
+    {%- for d in self.periods() %}{{
+        kit::Tab::new("{} days"|format(d), "/triage?days={}"|format(d))
+            .in_place()
+            .current(*d == days)
+    }}{% endfor -%}
   {%- endfilter %}
   {% match error %}{% when Some with (e) %}{{ kit::Notice::bad(e).class("wrap-anywhere") }}{% when None %}
       {% if causes.is_empty() %}{{ kit::Empty::new("Everything in the last {} days landed cleanly."|format(days)) }}{% endif %}
