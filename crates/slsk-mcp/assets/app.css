@@ -1047,6 +1047,10 @@
     inset: 0;
   }
 
+  .skeleton > * {
+    visibility: hidden;
+  }
+
   .code {
     border-style: var(--tw-border-style);
     border-width: 1px;
@@ -1432,6 +1436,84 @@
   dialog.sheet > footer {
     padding-inline: calc(var(--spacing) * 5);
     padding-bottom: calc(var(--spacing) * 5);
+  }
+
+  .tabs {
+    align-items: flex-end;
+    column-gap: calc(var(--spacing) * 5);
+    row-gap: var(--spacing);
+    border-bottom-style: var(--tw-border-style);
+    border-bottom-width: 1px;
+    border-color: var(--rule);
+    flex-wrap: wrap;
+    display: flex;
+  }
+
+  .tab {
+    align-items: center;
+    gap: calc(var(--spacing) * 1.5);
+    border-bottom-style: var(--tw-border-style);
+    padding-bottom: calc(var(--spacing) * 1.5);
+    font-size: var(--text-control);
+    line-height: var(--tw-leading, var(--text-control--line-height));
+    border-color: #0000;
+    border-bottom-width: 2px;
+    margin-bottom: -1px;
+    display: inline-flex;
+  }
+
+  .tab > a {
+    color: var(--muted);
+  }
+
+  @media (hover: hover) {
+    .tab > a:hover {
+      color: var(--ink);
+      text-decoration-line: none;
+    }
+  }
+
+  .tab.current {
+    border-color: var(--brand);
+  }
+
+  .tab.current > a {
+    color: var(--strong);
+  }
+
+  .tab > small {
+    font-size: var(--text-fine);
+    line-height: var(--tw-leading, var(--text-fine--line-height));
+    color: var(--muted);
+    --tw-numeric-spacing: tabular-nums;
+    font-variant-numeric: var(--tw-ordinal, ) var(--tw-slashed-zero, ) var(--tw-numeric-figure, ) var(--tw-numeric-spacing, ) var(--tw-numeric-fraction, );
+  }
+
+  a.card {
+    color: var(--ink);
+    display: block;
+  }
+
+  @media (hover: hover) {
+    a.card:hover {
+      text-decoration-line: none;
+    }
+  }
+
+  .cover {
+    position: relative;
+  }
+
+  .cover[aria-busy="true"] > :not(.spinner) {
+    pointer-events: none;
+    opacity: .4;
+    transition-property: opacity;
+    transition-timing-function: var(--tw-ease, var(--default-transition-timing-function));
+    transition-duration: var(--tw-duration, var(--default-transition-duration));
+  }
+
+  .cover:not([aria-busy="true"]) > .spinner {
+    display: none;
   }
 
   .controls {
