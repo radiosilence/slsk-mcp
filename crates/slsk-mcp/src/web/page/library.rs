@@ -110,9 +110,9 @@ fn rel<'a>(root: &str, p: &'a str) -> &'a str {
 
 /// When an album was imported: how long ago within the week, else the date.
 fn imported(secs: Option<i64>) -> Option<kit::Time<'static>> {
-    let t = chrono::DateTime::from_timestamp(secs?, 0)?;
-    let time = kit::Time::seconds(t.timestamp());
-    Some(if (chrono::Utc::now() - t).num_days() < 7 {
+    let secs = secs?;
+    let time = kit::Time::seconds(secs);
+    Some(if chrono::Utc::now().timestamp() - secs < 7 * 86_400 {
         time.relative()
     } else {
         time.date()

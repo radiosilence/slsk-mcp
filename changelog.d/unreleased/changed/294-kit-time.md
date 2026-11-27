@@ -1,1 +1,0 @@
-- **Times read in the reader's zone and language.** Every "ago", the activity feed's clock and the library's import dates are koan-kit-web's `Time`, which the browser writes for the reader and keeps relative times current, where the server wrote them in English and UTC.

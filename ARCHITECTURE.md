@@ -128,7 +128,11 @@ line and nav, then the page's regions; it says what moved, so each stream
 draws only the regions that could have changed, and `askama_datastar::Last`
 sends a region only when it differs from what was last sent. The kit names a
 control's busy signal by what the control is, so a region drawn twice from one
-state is the same markup.
+state is the same markup. Relative times are `kit::Time`, which the browser
+keeps current, so the minute redraws only what is counted over a window of
+time: the hour's search budget, the activity feed's hour and week, the day's
+and week's uploads, and the search tabs (a tab's age in its title, and
+whether it is stale).
 
 A page opens its stream through `askama_datastar::reopen_on`, which opens it
 again when it ends or goes quiet, and afresh when `$url` changes. A stream

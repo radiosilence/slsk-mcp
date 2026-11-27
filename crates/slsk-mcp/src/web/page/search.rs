@@ -80,6 +80,8 @@ struct SearchPage<'a> {
     /// The finder starts empty: what is typed there opens a new tab.
     q: &'a str,
     lossless: bool,
+    /// Searches were sent, every one of them empty.
+    blank: bool,
     tabs: Html,
     /// The tab's results, as kept or as heard so far.
     results: Option<Html>,
@@ -127,6 +129,7 @@ impl Page for Search {
         Ok(Body::of(&SearchPage {
             q: "",
             lossless: tab.as_ref().is_none_or(|t| t.lossless),
+            blank: !view.q.is_empty(),
             tabs: Tabs::of(&s.app, view.tab()).await.draw(),
             results,
         })
@@ -170,7 +173,7 @@ fn stale(tab: &SearchTab) -> bool {
 }
 
 /// How long ago, as text for a tab's title, an attribute that cannot hold a [`kit::Time`].
-fn ago(at: chrono::DateTime<chrono::Utc>) -> String {
+fn title_ago(at: chrono::DateTime<chrono::Utc>) -> String {
     let mins = (chrono::Utc::now() - at).num_minutes().max(0);
     match mins {
         0 => "just now".to_string(),
@@ -300,7 +303,7 @@ impl Tabs {
                 "{} · {quality} · {} folders, searched {}",
                 t.query,
                 t.found,
-                ago(at)
+                title_ago(at)
             ),
         }
     }
@@ -389,7 +392,7 @@ impl Results {
             responses: responses.len(),
             found,
             error: heard.error.as_ref().map(|e| e.to_string()),
-            age: heard.done.then(|| crate::web::ago(chrono::Utc::now())),
+            age: heard.finished.map(crate::web::ago),
             stale: false,
             statuses: HashMap::new(),
         }

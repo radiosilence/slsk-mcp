@@ -21,7 +21,7 @@ impl Live for Wishlist {
     }
 
     async fn draw(&mut self, s: &UiState, c: &Changed) -> Vec<Event> {
-        if !(c.topic(Topic::Social) || c.topic(Topic::Jobs) || c.minute) {
+        if !(c.topic(Topic::Social) || c.topic(Topic::Jobs)) {
             return Vec::new();
         }
         self.list

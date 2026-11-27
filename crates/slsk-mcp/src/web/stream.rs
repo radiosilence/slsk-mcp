@@ -180,7 +180,8 @@ pub(super) struct Changed {
     pub(super) moved: bool,
     /// The session's connection changed.
     pub(super) connection: bool,
-    /// The minute turned, so times shown as "3 min ago" are redrawn.
+    /// The minute turned, for what is counted over a window of time (the
+    /// hour's searches, the day's uploads), which moves with no event.
     pub(super) minute: bool,
     /// A change of the stream's own ([`Live::wakes`]).
     pub(super) woke: bool,
@@ -206,13 +207,14 @@ struct Header {
 impl Header {
     async fn draw(&mut self, s: &UiState, c: &Changed) -> Vec<Event> {
         let mut events = Vec::new();
+        // The minute rolls the hour's search budget along.
         if c.connection || c.moved || c.minute {
             events.extend(self.status.send(&Status::of(&s.app).draw()));
         }
-        if self.unread.is_none() || c.topic(Topic::Social) || c.minute {
+        if self.unread.is_none() || c.topic(Topic::Social) {
             self.unread = Some(s.app.social.unread().await.unwrap_or(0));
         }
-        if c.moved || c.minute || c.topic(Topic::Social) {
+        if c.moved || c.topic(Topic::Social) {
             let nav = Nav::new(&s.app, self.tab, self.unread.unwrap_or(0));
             events.extend(self.nav.send(&nav.draw()));
         }

@@ -29,7 +29,7 @@ impl Live for Uploads {
 
     async fn draw(&mut self, s: &UiState, c: &Changed) -> Vec<Event> {
         let mut events = Vec::new();
-        if c.moved || c.minute {
+        if c.moved {
             events.extend(self.peers.send(&Peers::now(&s.app).draw()));
         }
         if c.topic(Topic::Uploads) || c.minute {

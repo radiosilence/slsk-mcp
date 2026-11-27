@@ -56,7 +56,7 @@ impl Live for Downloads {
         let mut events = Vec::new();
         self.failed = false;
         let jobs = c.topic(Topic::Jobs);
-        if jobs || c.minute {
+        if jobs {
             let settled = Settled::newest(&s.app, self.shown.jobs).await;
             self.failed |= settled.failed;
             if self.settled.as_ref() != Some(&settled) {
@@ -64,7 +64,7 @@ impl Live for Downloads {
                 self.settled = Some(settled);
             }
         }
-        if !(jobs || c.moved || c.minute || c.woke) {
+        if !(jobs || c.moved || c.woke) {
             return events;
         }
         // The page drew the jobs done with; read them only to know whether

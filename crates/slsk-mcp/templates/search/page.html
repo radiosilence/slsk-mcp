@@ -18,6 +18,7 @@
       </div>
     </form>
   {% endfilter %}
+  {% if blank %}{{ kit::Notice::warn("Nothing to search for: type an artist and album first.").class("mt-2") }}{% endif %}
   {{ tabs }}
   {% if let Some(html) = results %}{{ html }}{% else %}{{
       kit::Empty::new("No search open.")

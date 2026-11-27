@@ -1217,6 +1217,8 @@ pub(crate) struct Heard {
     pub responses: Arc<Vec<Arc<SearchResponse>>>,
     /// It has stopped listening, or could not be sent.
     pub done: bool,
+    /// When it stopped.
+    pub finished: Option<chrono::DateTime<chrono::Utc>>,
     /// Why it could not be sent.
     pub error: Option<Arc<str>>,
 }
@@ -1360,6 +1362,7 @@ where
                 forget();
                 tx.send_replace(Heard {
                     done: true,
+                    finished: Some(chrono::Utc::now()),
                     error: Some(format!("{e:#}").into()),
                     ..Default::default()
                 });
@@ -1396,6 +1399,7 @@ where
                 tx.send_replace(Heard {
                     responses: Arc::new(responses.clone()),
                     done,
+                    finished: done.then(chrono::Utc::now),
                     error: None,
                 });
             }

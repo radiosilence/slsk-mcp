@@ -34,7 +34,7 @@ impl Live for Job {
         let Some(id) = self.id else {
             return Vec::new();
         };
-        if !(c.topic(Topic::Jobs) || c.moved || c.minute) {
+        if !(c.topic(Topic::Jobs) || c.moved) {
             return Vec::new();
         }
         match JobPage::of(&s.app, id).await {
