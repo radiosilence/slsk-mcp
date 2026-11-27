@@ -194,33 +194,6 @@ impl Changed {
     }
 }
 
-/// A region as last sent, compared without the names the kit gives afresh on
-/// every render ([`unnamed`]).
-pub(super) fn last() -> Last {
-    Last::comparing(unnamed)
-}
-
-/// Markup as a stream compares it with what it last sent. The kit names a request button's own busy signal afresh on
-/// every render, keyed or not, so a region drawn twice from the same state differs only in those names; they are left
-/// out, or every redraw would be sent again. A region sent for another change brings its new names with it.
-pub(super) fn unnamed(html: &str) -> String {
-    const SIGNAL: &str = "_busy";
-    let mut out = String::with_capacity(html.len());
-    let mut rest = html;
-    while let Some(at) = rest.find(SIGNAL) {
-        let (before, after) = rest.split_at(at + SIGNAL.len());
-        out.push_str(before);
-        let hex = after
-            .bytes()
-            .take(12)
-            .take_while(u8::is_ascii_hexdigit)
-            .count();
-        rest = if hex == 12 { &after[12..] } else { after };
-    }
-    out.push_str(rest);
-    out
-}
-
 /// The status line and the nav, on every page.
 struct Header {
     tab: Tab,
@@ -353,7 +326,7 @@ pub(super) async fn serve<L: Live>(
         Some((changed, sources))
     });
     let events = async_stream::stream! {
-        let mut header = Header { tab: L::TAB, status: last(), nav: last(), unread: None };
+        let mut header = Header { tab: L::TAB, status: Last::new(), nav: Last::new(), unread: None };
         let mut changes = std::pin::pin!(paced(changes, Pace::default()));
         // Said on the first pass whatever else is sent, so the page hears from
         // a stream as soon as it opens.

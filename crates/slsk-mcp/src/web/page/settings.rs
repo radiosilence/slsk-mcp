@@ -86,7 +86,7 @@ impl Panel {
 async fn saved(app: &App, msg: &str) -> Response {
     askama_datastar::events([
         Panel::of(app).await.draw().patch().into(),
-        kit::Flash::ok(msg).patch().into(),
+        crate::web::flash::ok(msg).patch().into(),
     ])
 }
 
@@ -138,9 +138,11 @@ pub(in crate::web) async fn rescan(State(s): State<UiState>) -> Response {
             tokio::spawn(async move { e.rescan().await });
             askama_datastar::events([
                 Status::of(&s.app).draw().patch().into(),
-                kit::Flash::ok("Rescanning shares; the count above updates when it finishes")
-                    .patch()
-                    .into(),
+                crate::web::flash::ok(
+                    "Rescanning shares; the count above updates when it finishes",
+                )
+                .patch()
+                .into(),
             ])
         }
         Err(e) => failed(&e),
@@ -166,7 +168,7 @@ pub(in crate::web) async fn interest(
     match s.app.social.set_interest(item, liked).await {
         Ok(()) => askama_datastar::events([
             Panel::of(&s.app).await.draw().patch().into(),
-            kit::Flash::region().patch().into(),
+            crate::web::flash::region().patch().into(),
             signals(serde_json::json!({ "_interest": "" })),
         ]),
         Err(e) => failed(&e),

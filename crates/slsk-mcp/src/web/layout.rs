@@ -35,11 +35,6 @@ impl Layout {
     fn css(&self) -> String {
         APP_CSS.url("/assets/app.css")
     }
-    /// The address bar following `$url`, the address a page loaded in place
-    /// shows.
-    fn history(&self) -> Html {
-        askama_datastar::history("url")
-    }
     fn live(&self) -> String {
         LIVE_JS.url("/assets/live.js")
     }
@@ -107,13 +102,14 @@ impl Nav {
     fn tabs(&self) -> &'static [Tab] {
         Tab::ALL
     }
-    fn badge(&self, t: &Tab) -> Option<String> {
+    /// A tab's count, empty when it has none.
+    fn badge(&self, t: &Tab) -> String {
         let n = match t {
             Tab::Uploads => self.uploads as i64,
             Tab::Chat => self.unread,
             _ => 0,
         };
-        (n > 0).then(|| n.to_string())
+        if n > 0 { n.to_string() } else { String::new() }
     }
 }
 

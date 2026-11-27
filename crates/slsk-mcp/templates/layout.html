@@ -9,8 +9,9 @@
     <link rel="apple-touch-icon" href="{{ icons[2] }}">
     <script type="module" src="{{ self.live() }}"></script>
   </head>
-  <body data-now="{{ now }}" data-signals="{{ signals }}"{{ self.history() }}>
+  <body data-now="{{ now }}" data-signals="{{ signals }}">
     {{ kit::SkipLink::new("Skip to content", "main") }}
+    {{ kit::Navigation::new() }}
     <div hidden{{ self.stream() }}></div>
     <header
       class="sticky top-0 z-2 border-b border-rule bg-surface px-4 py-2.5 pt-[max(10px,env(safe-area-inset-top))] max-sm:px-3 max-sm:py-2"
@@ -21,6 +22,6 @@
     {{ main }}
     <footer class="px-4 py-6 text-center text-fine">{{ kit::Release::new("slsk-mcp", self.version(), "https://github.com/radiosilence/slsk-mcp") }}</footer>
     {{ kit::Confirm::new("Cancel") }}
-    {{ kit::Flash::region() }}
+    {{ crate::web::flash::region() }}
   </body>
 </html>

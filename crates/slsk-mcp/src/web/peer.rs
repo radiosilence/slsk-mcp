@@ -200,7 +200,7 @@ async fn set(s: &UiState, username: &str, banned: bool) -> Response {
             ElementPatchMode::Replace,
             &ban_button(username, banned).html(),
         ),
-        kit::Flash::ok(&said).patch().into(),
+        crate::web::flash::ok(&said).patch().into(),
         kit::Confirm::close().into(),
     ])
 }

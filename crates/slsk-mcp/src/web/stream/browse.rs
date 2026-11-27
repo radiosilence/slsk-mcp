@@ -4,7 +4,7 @@
 
 use axum::response::sse::Event;
 
-use super::{Changed, Live, Shown, last};
+use super::{Changed, Live, Shown};
 use crate::live::Topic;
 use crate::web::page::Tab;
 use crate::web::page::browse::{BrowseQuery, Place, Shares};
@@ -25,7 +25,7 @@ impl Live for Browse {
         Self {
             place: Place::from_query(&shown.view::<BrowseQuery>()).ok(),
             drawn: None,
-            shares: last(),
+            shares: Last::new(),
         }
     }
 

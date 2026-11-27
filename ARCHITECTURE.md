@@ -97,7 +97,11 @@ form that loads in place (`kit::Link::in_place`, `kit::Form::get`), gets the
 body morphed into `main`, the title, and the address as `$url`
 (`askama_datastar::address`, the request's address less Datastar's own
 `datastar` parameter, spelled as the person wrote it). The layout's
-`askama_datastar::history("url")` keeps the address bar on `$url`. An action
+`kit::Navigation` owns the history: it pushes `$url` once a load has settled,
+loads Back and Forward in place, and loads every link inside an element marked
+`data-kit-in-place` in place through one listener, which suits a long list
+such as the browse tree. Links that lead to another tab load whole, since each
+tab holds its own stream. An action
 that takes the page elsewhere answers the same way, through `page::shown`, or
 with `askama_datastar::go` when it must load another page whole. So a reload,
 a shared link, back and forward all draw exactly what the address names.
@@ -122,9 +126,9 @@ answers) into a stream of `Changed`, which `askama_datastar::paced` spaces at
 most one every 250 ms and ends after a minute. Each `Changed` draws the status
 line and nav, then the page's regions; it says what moved, so each stream
 draws only the regions that could have changed, and `askama_datastar::Last`
-(through `stream::last`, which compares markup without the busy signals the
-kit names afresh on each render) sends a region only when it differs from
-what was last sent.
+sends a region only when it differs from what was last sent. The kit names a
+control's busy signal by what the control is, so a region drawn twice from one
+state is the same markup.
 
 A page opens its stream through `askama_datastar::reopen_on`, which opens it
 again when it ends or goes quiet, and afresh when `$url` changes. A stream
@@ -165,6 +169,10 @@ the address afresh.
 
 An action changes something and answers with as little as it can:
 
+- An action that fails answers with an error flash (`web::failed`). Every
+  flash comes from `web::flash`, since each replaces the region whole and must
+  carry what the region says when a request fails outright: an error status,
+  a server that cannot be reached, or a session that has ended.
 - When the page's stream draws what changed, the action answers with a flash
   or nothing, and closes the page's question (`kit::Confirm::close`) if one
   was asked. The change arriving is the confirmation. Downloads, search tabs,
@@ -223,8 +231,9 @@ them: `kit::Button::sends`, or an input's `form=`.
 
 ### The kit
 
-Every control, status, meter, notice, flash, empty state, disclosure and
-question is a koan-kit-web component; templates add layout utilities only.
+Every control, status, meter, notice, flash, empty state, disclosure, row of
+tabs and question is a koan-kit-web component; templates add layout utilities
+only.
 Buttons that send requests are busy for exactly as long as their own request
 runs, grouped by `busy_key` where several act on one thing. Disclosures that
 read their content when opened use `kit::Disclosure::loads` and are answered

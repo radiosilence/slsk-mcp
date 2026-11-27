@@ -1727,10 +1727,6 @@
     width: 100%;
   }
 
-  .max-w-\[18em\] {
-    max-width: 18em;
-  }
-
   .max-w-\[1100px\] {
     max-width: 1100px;
   }
@@ -1803,6 +1799,10 @@
     flex-direction: column;
   }
 
+  .flex-nowrap {
+    flex-wrap: nowrap;
+  }
+
   .flex-wrap {
     flex-wrap: wrap;
   }
@@ -1855,10 +1855,6 @@
     gap: calc(var(--spacing) * 6);
   }
 
-  .gap-\[18px\] {
-    gap: 18px;
-  }
-
   .gap-x-1 {
     column-gap: var(--spacing);
   }
@@ -1881,6 +1877,10 @@
 
   .gap-x-4 {
     column-gap: calc(var(--spacing) * 4);
+  }
+
+  .gap-x-5 {
+    column-gap: calc(var(--spacing) * 5);
   }
 
   .gap-y-0\.5 {
@@ -1919,26 +1919,13 @@
     border-bottom-width: 1px;
   }
 
-  .border-b-2 {
-    border-bottom-style: var(--tw-border-style);
-    border-bottom-width: 2px;
-  }
-
   .border-l-2 {
     border-left-style: var(--tw-border-style);
     border-left-width: 2px;
   }
 
-  .border-brand {
-    border-color: var(--brand);
-  }
-
   .border-rule {
     border-color: var(--rule);
-  }
-
-  .border-transparent {
-    border-color: #0000;
   }
 
   .border-l-brand {
@@ -1997,14 +1984,6 @@
     padding-block: calc(var(--spacing) * 6);
   }
 
-  .ps-2\.5 {
-    padding-inline-start: calc(var(--spacing) * 2.5);
-  }
-
-  .pe-1 {
-    padding-inline-end: var(--spacing);
-  }
-
   .pt-1 {
     padding-top: var(--spacing);
   }
@@ -2047,11 +2026,6 @@
 
   .align-top {
     vertical-align: top;
-  }
-
-  .text-control {
-    font-size: var(--text-control);
-    line-height: var(--tw-leading, var(--text-control--line-height));
   }
 
   .text-fine {
@@ -2151,43 +2125,7 @@
     overflow-wrap: anywhere;
   }
 
-  .empty\:hidden:empty {
-    display: none;
-  }
-
-  @media (hover: hover) {
-    .hover\:text-ink:hover {
-      color: var(--ink);
-    }
-
-    .hover\:no-underline:hover {
-      text-decoration-line: none;
-    }
-  }
-
-  .aria-\[current\=page\]\:border-brand[aria-current="page"] {
-    border-color: var(--brand);
-  }
-
-  .aria-\[current\=page\]\:text-ink[aria-current="page"] {
-    color: var(--ink);
-  }
-
-  .aria-\[current\=page\]\:underline[aria-current="page"] {
-    text-decoration-line: underline;
-  }
-
-  .aria-\[current\=page\]\:decoration-brand[aria-current="page"] {
-    -webkit-text-decoration-color: var(--brand);
-    -webkit-text-decoration-color: var(--brand);
-    text-decoration-color: var(--brand);
-  }
-
-  .aria-\[current\=page\]\:underline-offset-\[5px\][aria-current="page"] {
-    text-underline-offset: 5px;
-  }
-
-  .data-attr\:hidden[data-attr] {
+  .empty\:hidden:empty, .data-attr\:hidden[data-attr] {
     display: none;
   }
 
@@ -2215,6 +2153,28 @@
 
   .\[\&\:\:-webkit-scrollbar\]\:hidden::-webkit-scrollbar {
     display: none;
+  }
+
+  .\[\&\>a\]\:max-w-\[18em\] > a {
+    max-width: 18em;
+  }
+
+  .\[\&\>a\]\:min-w-0 > a {
+    min-width: 0;
+  }
+
+  .\[\&\>a\]\:truncate > a {
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+
+  .\[\&\>a\]\:text-bad > a {
+    color: var(--bad);
+  }
+
+  .\[\&\>a\]\:italic > a {
+    font-style: italic;
   }
 }
 

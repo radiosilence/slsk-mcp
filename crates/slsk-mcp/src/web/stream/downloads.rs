@@ -12,7 +12,7 @@ use futures_util::stream::BoxStream;
 use tokio::sync::watch;
 use tokio::time::Instant;
 
-use super::{Changed, Live, Shown, last, unnamed};
+use super::{Changed, Live, Shown};
 use crate::live::Topic;
 use crate::web::page::Tab;
 use crate::web::page::downloads::{Live as Jobs, Settled};
@@ -45,7 +45,7 @@ impl Live for Downloads {
             shown,
             settled: None,
             shape: String::new(),
-            list: last(),
+            list: Last::new(),
             cards: HashMap::new(),
             recheck: watch::Sender::new(None),
             failed: false,
@@ -86,7 +86,12 @@ impl Live for Downloads {
                 .attention
                 .iter()
                 .chain(&live.underway)
-                .map(|card| (card.j.id.to_string(), (unnamed(&card.draw()), now)))
+                .map(|card| {
+                    (
+                        card.j.id.to_string(),
+                        (card.draw().as_str().to_owned(), now),
+                    )
+                })
                 .collect();
             events.extend(self.list.send(&live.draw()));
             self.shape = shape;
@@ -95,7 +100,7 @@ impl Live for Downloads {
         }
         for card in live.attention.iter().chain(&live.underway) {
             let html = card.draw();
-            let compared = unnamed(&html);
+            let compared = html.as_str().to_owned();
             let id = card.j.id.to_string();
             let sent = self.cards.get(&id);
             if sent.is_some_and(|(h, _)| *h == compared) {
@@ -114,7 +119,7 @@ impl Live for Downloads {
             events.push(html.patch().into());
             self.cards.insert(id, (compared, now));
             // The list as last sent no longer matches the page.
-            self.list = last();
+            self.list = Last::new();
         }
         self.recheck.send_replace(recheck);
         events

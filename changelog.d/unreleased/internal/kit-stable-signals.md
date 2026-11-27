@@ -1,0 +1,1 @@
+- **Live streams compare markup as drawn.** koan-kit-web 0.8 names a busy signal by what the control is, so a fragment drawn twice from one state is the same markup and the stream's masking of signal names is gone.

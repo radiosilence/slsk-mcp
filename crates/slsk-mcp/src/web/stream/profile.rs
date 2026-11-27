@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use axum::response::sse::Event;
 
-use super::{Changed, Live, Shown, last};
+use super::{Changed, Live, Shown};
 use crate::live::Topic;
 use crate::web::page::Tab;
 use crate::web::page::profile::{ProfileQuery, card};
@@ -33,7 +33,7 @@ impl Live for Profile {
         Self {
             username,
             drawn: (None, None),
-            card: last(),
+            card: Last::new(),
         }
     }
 

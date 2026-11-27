@@ -9,7 +9,7 @@ use futures_util::StreamExt as _;
 use futures_util::stream::BoxStream;
 use tokio::sync::watch;
 
-use super::{Changed, Live, Shown, last};
+use super::{Changed, Live, Shown};
 use crate::db::SearchTab;
 use crate::graphql::Heard;
 use crate::live::Topic;
@@ -41,8 +41,8 @@ impl Live for Search {
             .and_then(|t| crate::graphql::listening(&t.query));
         Self {
             view,
-            strip: last(),
-            results: last(),
+            strip: Last::new(),
+            results: Last::new(),
             heard,
             failed: false,
         }

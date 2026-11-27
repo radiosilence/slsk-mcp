@@ -220,7 +220,7 @@ pub(in crate::web) async fn import_url(
 /// closed. The stream draws what changed.
 fn accepted() -> Response {
     askama_datastar::events([
-        kit::Flash::region().patch().into(),
+        crate::web::flash::region().patch().into(),
         kit::Confirm::close().into(),
     ])
 }
@@ -240,7 +240,7 @@ pub(in crate::web) async fn act(
                     scam.jobs.len()
                 );
                 askama_datastar::events([
-                    kit::Flash::ok(&msg).patch().into(),
+                    crate::web::flash::ok(&msg).patch().into(),
                     kit::Confirm::close().into(),
                 ])
             }

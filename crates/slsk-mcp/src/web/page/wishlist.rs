@@ -121,7 +121,9 @@ pub(in crate::web) async fn add(
     }
     match s.app.social.add_wish(q, f.lossless, f.grab).await {
         Ok(_) => askama_datastar::events([
-            kit::Flash::ok(format!("Wished for {q}")).patch().into(),
+            crate::web::flash::ok(format!("Wished for {q}"))
+                .patch()
+                .into(),
             signals(serde_json::json!({ "_wishq": "" })),
         ]),
         Err(e) => failed(&e),
@@ -130,7 +132,7 @@ pub(in crate::web) async fn add(
 
 pub(in crate::web) async fn remove(State(s): State<UiState>, Path(id): Path<Uuid>) -> Response {
     match s.app.social.remove_wish(id).await {
-        Ok(()) => askama_datastar::events([kit::Flash::region().patch().into()]),
+        Ok(()) => askama_datastar::events([crate::web::flash::region().patch().into()]),
         Err(e) => failed(&e),
     }
 }

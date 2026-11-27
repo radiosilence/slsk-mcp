@@ -200,7 +200,7 @@ pub(super) async fn shown<P: Page>(
         super::patch(&Html::from_iter([
             Main { body: body.html }.draw(),
             Title::of(P::TAB, body.heading.as_deref()).draw(),
-            kit::Flash::region().html(),
+            crate::web::flash::region().html(),
         ])),
         super::signals(signals),
     ])

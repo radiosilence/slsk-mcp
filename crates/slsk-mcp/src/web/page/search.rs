@@ -261,16 +261,22 @@ impl Tabs {
     fn href(&self, t: &SearchTab) -> String {
         format!("/search?tab={}", t.id)
     }
-    /// A tab's tone: red when its search failed, turning while it runs, muted once stale.
+    /// A tab's tone: red when its search failed, slanted once stale.
     fn tone(&self, t: &SearchTab) -> &'static str {
         if t.error.is_some() {
-            "text-bad"
-        } else if t.searched_at.is_none() {
-            "text-ink busy"
-        } else if stale(t) {
-            "text-muted italic"
+            "[&>a]:text-bad"
+        } else if t.searched_at.is_some() && stale(t) {
+            "[&>a]:italic"
         } else {
-            "text-ink"
+            ""
+        }
+    }
+    /// What a tab says after its words: that it is still searching, or how many folders it found.
+    fn state(&self, t: &SearchTab) -> String {
+        match (t.searched_at, &t.error) {
+            (None, _) => "searching".into(),
+            (Some(_), None) => t.found.to_string(),
+            (Some(_), Some(_)) => String::new(),
         }
     }
     fn pin_label(&self, t: &SearchTab) -> String {
@@ -480,7 +486,7 @@ fn go(url: &str) -> Response {
 /// The tab changed; the page's stream draws the strip.
 fn changed() -> Response {
     askama_datastar::events([
-        kit::Flash::region().patch().into(),
+        crate::web::flash::region().patch().into(),
         kit::Confirm::close().into(),
     ])
 }
@@ -600,11 +606,11 @@ pub(in crate::web) async fn download(State(s): State<UiState>, body: Bytes) -> R
     match s.app.jobs.from_folder(&folder, title, Vec::new()).await {
         Ok(_) => {
             let name = crate::web::folder_heading(&folder.path).unwrap_or(folder.path.clone());
-            askama_datastar::events([
-                kit::Flash::ok(format!("Downloading {name} from {username}"))
-                    .patch()
-                    .into(),
-            ])
+            askama_datastar::events([crate::web::flash::ok(format!(
+                "Downloading {name} from {username}"
+            ))
+            .patch()
+            .into()])
         }
         Err(e) => failed(&e),
     }

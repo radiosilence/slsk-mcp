@@ -372,9 +372,35 @@ fn signals(json: serde_json::Value) -> Event {
     PatchSignals::new(json.to_string()).into()
 }
 
+/// The page's flashes. Each replaces the region whole, so each carries what the region says of a request that failed,
+/// or every flash would leave the page silent about the next failure.
+mod flash {
+    use koan_kit_web::{Flash, Text};
+
+    fn hearing(flash: Flash<'_>) -> Flash<'_> {
+        flash
+            .failed("That did not work. Try again.")
+            .unreachable("The server could not be reached.")
+            .sign_in("/auth/login")
+    }
+
+    /// The empty region.
+    pub(super) fn region() -> Flash<'static> {
+        hearing(Flash::region())
+    }
+
+    pub(super) fn ok<'a>(message: impl Into<Text<'a>>) -> Flash<'a> {
+        hearing(Flash::ok(message))
+    }
+
+    pub(super) fn bad<'a>(message: impl Into<Text<'a>>) -> Flash<'a> {
+        hearing(Flash::bad(message))
+    }
+}
+
 /// An error, as the flash over the page.
 fn failed(e: &anyhow::Error) -> Response {
-    one(kit::Flash::bad(format!("{e:#}")).html())
+    one(flash::bad(format!("{e:#}")).html())
 }
 
 /// A form body whose fields may repeat (checkboxes, several hidden paths),

@@ -405,7 +405,7 @@ pub(in crate::web) async fn save(State(s): State<UiState>, mut multipart: Multip
             .draw()
             .patch()
             .into(),
-        kit::Flash::ok("Profile saved.").patch().into(),
+        crate::web::flash::ok("Profile saved.").patch().into(),
     ])
 }
 

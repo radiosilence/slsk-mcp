@@ -1,0 +1,1 @@
+- **A request that fails says so.** An error answer, which Datastar drops, raises an error flash; a server that cannot be reached is said over the page once Datastar stops retrying; and a request made after the session ended goes to sign-in.

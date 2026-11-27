@@ -70,7 +70,7 @@ async fn set(s: &UiState, user: &str, banned: bool) -> Response {
     };
     askama_datastar::events([
         List::of(&s.app).await.draw().patch().into(),
-        kit::Flash::ok(&said).patch().into(),
+        crate::web::flash::ok(&said).patch().into(),
         signals(serde_json::json!({ "_banuser": "" })),
         kit::Confirm::close().into(),
     ])

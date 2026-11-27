@@ -726,7 +726,7 @@ pub(in crate::web) async fn previewed(
             match s.app.library.known_artists().await {
                 Ok(k) => k.splitting_on(&split),
                 Err(e) => {
-                    yield kit::Flash::bad(format!("{e:#}")).patch().into();
+                    yield crate::web::flash::bad(format!("{e:#}")).patch().into();
                     return;
                 }
             }

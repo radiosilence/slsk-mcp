@@ -2,7 +2,7 @@
 
 use axum::response::sse::Event;
 
-use super::{Changed, Live, Shown, last};
+use super::{Changed, Live, Shown};
 use crate::live::Topic;
 use crate::web::page::Tab;
 use crate::web::page::wishlist::Wishes;
@@ -17,7 +17,7 @@ impl Live for Wishlist {
     const TAB: Tab = Tab::Wishlist;
 
     async fn open(_: &UiState, _: Shown) -> Self {
-        Self { list: last() }
+        Self { list: Last::new() }
     }
 
     async fn draw(&mut self, s: &UiState, c: &Changed) -> Vec<Event> {
