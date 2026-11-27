@@ -4,11 +4,12 @@
 
 use axum::response::sse::Event;
 
-use super::{Changed, Last, Live, Shown};
+use super::{Changed, Live, Shown, last};
 use crate::live::Topic;
 use crate::web::page::Tab;
 use crate::web::page::chat::{ChatQuery, Lines, Side, Thread};
 use crate::web::{Draw, UiState};
+use askama_datastar::Last;
 
 pub(in crate::web) struct Chat {
     thread: Option<Thread>,
@@ -22,8 +23,8 @@ impl Live for Chat {
     async fn open(_: &UiState, shown: Shown) -> Self {
         Self {
             thread: shown.view::<ChatQuery>().thread(),
-            lines: Last::default(),
-            side: Last::default(),
+            lines: last(),
+            side: last(),
         }
     }
 
@@ -35,9 +36,9 @@ impl Live for Chat {
         // The lines first: drawing a private conversation marks it read,
         // which the lists then reflect.
         if let Some(t) = &self.thread {
-            events.extend(self.lines.send(Lines::of(&s.app, t).await.draw()));
+            events.extend(self.lines.send(&Lines::of(&s.app, t).await.draw()));
         }
-        events.extend(self.side.send(Side::of(&s.app).await.draw()));
+        events.extend(self.side.send(&Side::of(&s.app).await.draw()));
         events
     }
 }

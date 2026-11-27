@@ -7,11 +7,12 @@ use std::time::Instant;
 
 use axum::response::sse::Event;
 
-use super::{Changed, Last, Live, Shown};
+use super::{Changed, Live, Shown, last};
 use crate::live::Topic;
 use crate::web::page::Tab;
 use crate::web::page::profile::{ProfileQuery, card};
 use crate::web::{Draw, UiState};
+use askama_datastar::Last;
 
 pub(in crate::web) struct Profile {
     username: String,
@@ -32,7 +33,7 @@ impl Live for Profile {
         Self {
             username,
             drawn: (None, None),
-            card: Last::default(),
+            card: last(),
         }
     }
 
@@ -49,6 +50,6 @@ impl Live for Profile {
         }
         self.drawn = answered;
         let card = card(s, engine, &self.username).await;
-        self.card.send(card.draw()).into_iter().collect()
+        self.card.send(&card.draw()).into_iter().collect()
     }
 }

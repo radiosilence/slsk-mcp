@@ -504,12 +504,6 @@ fn place(url: &str) -> Event {
     signals(serde_json::json!({ "url": url }))
 }
 
-/// The view an address describes; one that does not parse (a repeated key,
-/// a value of the wrong type) is the default view rather than an error.
-fn query<T: serde::de::DeserializeOwned + Default>(uri: &http::Uri) -> T {
-    axum_extra::extract::Query::try_from_uri(uri).map_or_else(|_| T::default(), |q| q.0)
-}
-
 /// Rows shown at first, and added by each "Show more", in the lists that
 /// grow without end: each kind of job, and upload history. A phone browser
 /// cannot hold many thousands of them.

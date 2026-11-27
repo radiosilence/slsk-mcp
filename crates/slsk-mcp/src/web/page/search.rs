@@ -468,7 +468,7 @@ fn folder_id(f: &Folder) -> u64 {
 
 /// Send the browser to `url`, a page of the app's own.
 fn go(url: &str) -> Response {
-    askama_datastar::events([kit::Confirm::go(url).into()])
+    askama_datastar::events([askama_datastar::go(url).into()])
 }
 
 /// The tab changed; the page's stream draws the strip.

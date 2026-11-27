@@ -9,14 +9,15 @@ use std::future::Future;
 
 use askama::Template;
 use askama_datastar::Html;
-use axum::extract::{FromRequestParts, State};
-use axum::http::request::Parts;
-use axum::http::{HeaderMap, StatusCode, Uri};
+use axum::extract::{FromRequestParts, OriginalUri, State};
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::sse::Event;
 use axum::response::{IntoResponse, Redirect, Response};
 use koan_kit_web as kit;
 
 use super::layout::{Layout, Main, Nav, Status, Title};
+pub(super) use askama_datastar::View;
+
 use super::{Draw, UiState};
 
 pub(super) mod activity;
@@ -162,19 +163,6 @@ impl Body {
     }
 }
 
-/// The view an address's query describes, for a page. One that does not
-/// parse (a repeated key, a value of the wrong type) is the default view
-/// rather than an error: an address is something a person types or keeps.
-pub(super) struct View<T>(pub(super) T);
-
-impl<T: serde::de::DeserializeOwned + Default + Send, S: Sync> FromRequestParts<S> for View<T> {
-    type Rejection = std::convert::Infallible;
-
-    async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Self::Rejection> {
-        Ok(Self(super::query(&parts.uri)))
-    }
-}
-
 /// Page `P`'s body, and the live topics' counts as they stood before it was
 /// drawn: the page's stream draws what changed after them, and nothing the
 /// body already drew.
@@ -205,7 +193,7 @@ pub(super) async fn shown<P: Page>(
 ) -> anyhow::Result<Vec<Event>> {
     let (mut body, seen) = draw::<P>(s, args).await?;
     if let Some(to) = body.redirect {
-        return Ok(vec![kit::Confirm::go(&to).into()]);
+        return Ok(vec![askama_datastar::go(&to).into()]);
     }
     let signals = signals(&mut body, url, seen);
     Ok(vec![
@@ -218,30 +206,14 @@ pub(super) async fn shown<P: Page>(
     ])
 }
 
-/// The page's address as the person asked for it, less the signals
-/// Datastar adds to a GET it sends. Every other pair stays, empty ones
-/// included, so the page and the address bar spell it alike.
-fn address(uri: &Uri) -> String {
-    let mut query = url::form_urlencoded::Serializer::new(String::new());
-    for (k, v) in url::form_urlencoded::parse(uri.query().unwrap_or_default().as_bytes()) {
-        if k != "datastar" {
-            query.append_pair(&k, &v);
-        }
-    }
-    match query.finish() {
-        q if q.is_empty() => uri.path().to_string(),
-        q => format!("{}?{q}", uri.path()),
-    }
-}
-
 /// Draw page `P`: whole for a browser, or in place for the page itself.
 pub(super) async fn serve<P: Page>(
     State(s): State<UiState>,
     headers: HeaderMap,
-    uri: Uri,
+    OriginalUri(uri): OriginalUri,
     args: P::Args,
 ) -> Response {
-    let url = &address(&uri);
+    let url = &askama_datastar::address(&uri);
     if askama_datastar::is_datastar(&headers) {
         return match shown::<P>(&s, args, url).await {
             Ok(events) => askama_datastar::events(events),
@@ -279,19 +251,5 @@ pub(super) async fn serve<P: Page>(
     match Html::render(&layout) {
         Ok(html) => (body.status, html).into_response(),
         Err(e) => crate::error::AppError::from(anyhow::Error::from(e)).into_response(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn the_address_leaves_out_what_datastar_adds() {
-        let uri = "/search?tab=t1&datastar=%7B%22url%22%3A%22%2F%22%7D&shown=200"
-            .parse()
-            .unwrap();
-        assert_eq!(super::address(&uri), "/search?tab=t1&shown=200");
-        let typed = "/library?q=foo%20bar&since=".parse().unwrap();
-        assert_eq!(super::address(&typed), "/library?q=foo+bar&since=");
-        assert_eq!(super::address(&"/".parse().unwrap()), "/");
     }
 }

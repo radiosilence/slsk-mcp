@@ -9,22 +9,18 @@
     <link rel="apple-touch-icon" href="{{ icons[2] }}">
     <script type="module" src="{{ self.live() }}"></script>
   </head>
-  {#- The address bar follows `$url`, compared as URLSearchParams spells both, so an address typed with %20 and the
-      same one written with + are one place and push no entry of their own. -#}
-  <body data-now="{{ now }}" data-signals="{{ signals }}"
-    data-effect="$url && (same => same($url, location.href) || history.pushState(null, '', $url))((a, b) => [a, b].map(u => (x => x.pathname + '?' + x.searchParams)(new URL(u, location.href))).reduce((x, y) => x == y))"
-    data-on:popstate__window="(same => same($url, location.href) || location.reload())((a, b) => [a, b].map(u => (x => x.pathname + '?' + x.searchParams)(new URL(u, location.href))).reduce((x, y) => x == y))">
-    {{ kit::SkipLink::new("Skip to content", "main") }}
-    <div hidden{{ self.stream() }}></div>
-    <header
-      class="sticky top-0 z-2 border-b border-rule bg-surface px-4 py-2.5 pt-[max(10px,env(safe-area-inset-top))] max-sm:px-3 max-sm:py-2"
-    >
-      {{ status }}
-    </header>
-    {{ nav }}
-    {{ main }}
-    <footer class="px-4 py-6 text-center text-fine">{{ kit::Release::new("slsk-mcp", self.version(), "https://github.com/radiosilence/slsk-mcp") }}</footer>
-    {{ kit::Confirm::new("Cancel") }}
-    {{ kit::Flash::region() }}
-  </body>
+<body data-now="{{ now }}" data-signals="{{ signals }}"{{ self.history() }}>
+  {{ kit::SkipLink::new("Skip to content", "main") }}
+  <div hidden{{ self.stream() }}></div>
+  <header
+    class="sticky top-0 z-2 border-b border-rule bg-surface px-4 py-2.5 pt-[max(10px,env(safe-area-inset-top))] max-sm:px-3 max-sm:py-2"
+  >
+    {{ status }}
+  </header>
+  {{ nav }}
+  {{ main }}
+  <footer class="px-4 py-6 text-center text-fine">{{ kit::Release::new("slsk-mcp", self.version(), "https://github.com/radiosilence/slsk-mcp") }}</footer>
+  {{ kit::Confirm::new("Cancel") }}
+  {{ kit::Flash::region() }}
+</body>
 </html>

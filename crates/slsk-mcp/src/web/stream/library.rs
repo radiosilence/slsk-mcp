@@ -6,12 +6,13 @@
 use askama_datastar::{ElementPatchMode, Html};
 use axum::response::sse::Event;
 
-use super::{Changed, Last, Live, Shown};
+use super::{Changed, Live, Shown, last};
 use crate::live::Topic;
 use crate::web::page::Tab;
 use crate::web::page::library::run::{RunHead, RunPanel, RunRow};
-use crate::web::page::library::{Filter, List, album_html, art_html, open_albums};
+use crate::web::page::library::{Filter, List, Open, album_html, art_html};
 use crate::web::{Draw, UiState, insert, signals};
+use askama_datastar::Last;
 
 pub(in crate::web) struct Library {
     filter: Filter,
@@ -30,15 +31,14 @@ impl Live for Library {
     const TAB: Tab = Tab::Library;
 
     async fn open(_: &UiState, shown: Shown) -> Self {
-        let uri = shown.uri();
         Self {
-            filter: crate::web::query(&uri),
-            open: open_albums(&uri),
+            filter: shown.view(),
+            open: shown.view::<Open>().albums(),
             seen: shown.libseen,
             held: shown.librows,
             panel: None,
-            head: Last::default(),
-            whole: Last::default(),
+            head: last(),
+            whole: last(),
         }
     }
 
@@ -84,7 +84,7 @@ impl Library {
             let sent = self.panel.map_or(0, |p| p.2);
             events.extend(
                 self.head.send(
-                    RunHead {
+                    &RunHead {
                         run: &run,
                         root: &root,
                     }
@@ -102,14 +102,14 @@ impl Library {
         } else {
             events.extend(
                 self.whole.send(
-                    RunPanel {
+                    &RunPanel {
                         run: &run,
                         root: &root,
                     }
                     .draw(),
                 ),
             );
-            self.head = Last::default();
+            self.head = last();
         }
         self.panel = Some((run.id(), run.running(), done));
         events
