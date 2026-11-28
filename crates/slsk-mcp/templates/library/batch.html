@@ -1,4 +1,4 @@
-<div id="lib-preview" class="panel" data-init="el.scrollIntoView({block: 'start'})">
+<div id="lib-preview" class="panel"{{ kit::scrolls_into_view() }}>
   <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5"><strong class="min-w-0 flex-auto wrap-anywhere">Edit tags: {{ rows.len() }} album{% if rows.len() != 1 %}s{% endif %}</strong></div>
   {% let batch = kit::Form::post("/library/preview/edit").id("lib-batch") %}
   <form {{ batch.attrs() }}>
@@ -9,40 +9,25 @@
     <div class="my-2 grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2">
       {% for (field, label) in self.fields() %}
         {% if field == "albumtypes" %}
-          {% filter kit::wrap(kit::Field::custom(label).class("col-span-full")) %}
+          {%
+              filter kit::wrap(
+                  kit::Field::custom(label)
+                      .clearable("clear-{}"|format(field), "clear")
+                      .class("col-span-full"),
+              )
+          %}
         <div class="flex flex-wrap items-center gap-2">
           {{ self.primary_select() }}
           {% include "library/types.html" %}
-          {{
-              kit::Check::new("clear-{}"|format(field), "clear")
-                  .value("1")
-                  .datastar(
-                      "on:change",
-                      "evt.target.closest('.field').querySelectorAll('select, [name=type-secondary]').forEach(c => c.disabled = evt.target.checked)",
-                  )
-          }}
         </div>
       {% endfilter %}
         {% else %}
-          {% filter kit::wrap(kit::Field::custom(label)) %}
-        <div class="flex items-center gap-2">
           {{
-              kit::Input::text("a-{}"|format(field))
-                  .label(label)
+              kit::Field::text("a-{}"|format(field), label)
                   .placeholder("leave as is")
                   .autocomplete("off")
-                  .class("flex-1")
+                  .clearable("clear-{}"|format(field), "clear")
           }}
-          {{
-              kit::Check::new("clear-{}"|format(field), "clear")
-                  .value("1")
-                  .datastar(
-                      "on:change",
-                      "evt.target.closest('.field').querySelector('input[name^=a-]').disabled = evt.target.checked",
-                  )
-          }}
-        </div>
-      {% endfilter %}
         {% endif %}
       {% endfor %}
       {%

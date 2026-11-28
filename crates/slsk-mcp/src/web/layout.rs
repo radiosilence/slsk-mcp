@@ -23,9 +23,6 @@ pub(super) struct Layout {
     /// The page's starting signals.
     pub(super) signals: String,
     pub(super) main: Html,
-    /// The server's clock as it drew the page (ms since the epoch), for
-    /// `live.js` to correct a client clock that differs.
-    pub(super) now: i64,
 }
 
 impl Layout {

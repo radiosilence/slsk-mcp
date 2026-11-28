@@ -31,7 +31,7 @@
             .option("formats", "in more than one format")
             .option("moves", "not where the rules file them")
             .bind("_libshow")
-            .datastar("on:change", "el.form.requestSubmit()")
+            .submits()
             .class("flex-auto")
     }}
     {{ find.submit(kit::Button::primary("Find").class("flex-auto")) }}

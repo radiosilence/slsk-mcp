@@ -1,24 +1,24 @@
 <div id="library">
   {% if let Some(e) = error %}{{ kit::Notice::bad(e).class("wrap-anywhere") }}{% else %}
     {% if total == 0 %}{{ kit::Empty::new("No albums match.") }}{% else %}
-      {#- Every action submits the form's fields to its own URL, the albums ticked in it, as one busy group. -#}
-      <form id="lib-sel" data-signals="{_sel: 0, _spares: 0}"
-        data-on:change="evt.target.name == 'all' ? el.querySelectorAll('input[name=path]').forEach(c => c.checked = evt.target.checked) : (evt.target.checked || (el.querySelector('input[name=all]').checked = false)); $_sel = el.querySelector('input[name=all]').checked ? {{ total }} : el.querySelectorAll('input[name=path]:checked').length; $_spares = el.querySelector('input[name=all]').checked ? {{ spares }} : el.querySelectorAll('input[name=path][data-spare]:checked').length">
+      {#- Every action submits the selection's fields to its own URL, the albums ticked in it, as one busy group. -#}
+      {% filter kit::wrap(kit::Selection::new("lib-sel", "path").total(total)) %}
         {% include "library/filter.html" %}
         <div class="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-rule pt-1 pb-2">
-          {{ kit::Check::new("all", "select all {}"|format(total)).value("1") }}
+          {{ kit::Selection::select_all("select all {}"|format(total)) }}
           <span class="text-meta text-muted">{{ total }} album{% if total != 1 %}s{% endif %}, newest import first</span>
         </div>
         <ul id="lib-rows" class="rows">
           {% if let Some(r) = rows %}{{ r.draw() }}{% endif %}
         </ul>
         {% if let Some(r) = rows %}{{ r.more.draw() }}{% endif %}
-        <div
-          class="compact sticky bottom-0 z-1 mt-2 flex flex-wrap items-center gap-2 border border-rule bg-bg px-3 py-2.5 pb-[max(10px,env(safe-area-inset-bottom))]"
-          hidden
-          data-attr:hidden="!($_sel > 0)"
-        >
-          <span class="mr-auto text-ink" data-text="$_sel + ' selected'"></span>
+        {%
+            filter kit::wrap(kit::SelectionBar::new(kit::SelectionCount::new(
+                "{} selected",
+                "{} selected",
+            ))
+            .class("compact"))
+        %}
           {{
               kit::Button::bordered("Re-file")
                   .post("/library/preview/refile")
@@ -69,16 +69,18 @@
                   .sends("lib-sel")
                   .busy_key("lib")
           }}
-          {{
+          {#- Only while a spare copy is ticked, or every album is and some have one. -#}
+          {% if spares > 0 %}{{
               kit::Button::bordered("Bin spares")
                   .post("/library/preview/bin")
                   .sends("lib-sel")
                   .busy_key("lib")
-                  .attr("hidden", "")
-                  .datastar("attr:hidden", "!($_spares > 0)")
-          }}
-        </div>
-      </form>
+                  .class(
+                      "[form:not(:has(input[data-spare]:checked,input[name=all]:checked))_&]:hidden",
+                  )
+          }}{% endif %}
+        {% endfilter %}
+      {% endfilter %}
     {% endif %}
   {% endif %}
 </div>

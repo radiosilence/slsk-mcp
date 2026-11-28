@@ -11,9 +11,3 @@
 @source "../src";
 @import "./kit/theme.css";
 
-@layer components {
-  /* Rows inside a panel's detail: closer together than a page's list. */
-  .rows.tight > li {
-    @apply py-1;
-  }
-}

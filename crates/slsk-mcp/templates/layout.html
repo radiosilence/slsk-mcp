@@ -9,13 +9,16 @@
     <link rel="apple-touch-icon" href="{{ icons[2] }}">
     <script type="module" src="{{ self.live() }}"></script>
   </head>
-  <body data-now="{{ now }}" data-signals="{{ signals }}">
+  <body data-signals="{{ signals }}">
     {{ kit::SkipLink::new("Skip to content", "main") }}
     {{ kit::Navigation::new() }}
     <div hidden{{ self.stream() }}></div>
     {%
         filter kit::wrap(
-            kit::TopBar::new("slsk", "/").home_label("slsk: downloads").class("flex-wrap"),
+            kit::TopBar::new("slsk", "/")
+                .home_label("slsk: downloads")
+                .in_place()
+                .class("flex-wrap"),
         )
     %}{{ status }}{% endfilter %}
     {{ nav }}
