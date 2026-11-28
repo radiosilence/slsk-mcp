@@ -1,0 +1,1 @@
+- **Times stay in the reader's zone after a redraw, and a dropped stream raises no flash.** koan-kit-web 0.9.1 keeps a `Time`'s localised text through a stream's redraw, where 0.9.0 fell back to English and UTC, and its failure flash no longer fires when the page's live stream drops.

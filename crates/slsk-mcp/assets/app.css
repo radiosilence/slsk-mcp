@@ -1673,6 +1673,10 @@
     padding-bottom: calc(var(--spacing) * 5);
   }
 
+  dialog.sheet[data-url]:has( > section[aria-busy="true"]) > footer {
+    visibility: hidden;
+  }
+
   .tabs {
     align-items: flex-end;
     column-gap: calc(var(--spacing) * 5);
