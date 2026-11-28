@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.30.3
+
+### Changed
+
+- **The web UI is drawn by koan-kit-web 0.9.** The nav, the search tabs and triage's periods are the kit's `Tabs`, a search tab showing its folder count or that it is still searching, and `Navigation` owns the address bar, so Back and Forward load a page in place and the browse tree's links load in place through one listener. Every "ago", the activity feed's clock and the library's import dates are the kit's `Time`, written by the browser in the reader's zone and language where the server wrote English and UTC, so streams no longer redraw each minute for them. A request that fails now says so: an error answer raises an error flash, a server that cannot be reached is said over the page, and a request after the session ended goes to sign-in. The status bar and footer are the kit's `TopBar` and `Footer`, clear of a phone's notch; a peer's likes and dislikes and a library preview's file names are bulleted `List`s, so a value holding a comma cannot pass as two; search several at once takes one search per row (`RepeatField`), and sending only empty rows says there is nothing to search for; and a settled state that is not a verdict (offline, cancelled, no account, a preview's would-move) takes the neutral tone rather than reading as still waiting.
+
+### Fixed
+
+- **Times stay in the reader's zone after a redraw, and a dropped stream raises no flash.** koan-kit-web 0.9.1 keeps a `Time`'s localised text through a stream's redraw, where 0.9.0 fell back to English and UTC, and its failure flash no longer fires when the page's live stream drops.
+
 ## 0.30.2
 
 ### Fixed
