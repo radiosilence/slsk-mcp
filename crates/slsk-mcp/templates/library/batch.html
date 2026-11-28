@@ -9,7 +9,13 @@
     <div class="my-2 grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2">
       {% for (field, label) in self.fields() %}
         {% if field == "albumtypes" %}
-          {% filter kit::wrap(kit::Field::custom(label).clearable("clear-{}"|format(field), "clear").class("col-span-full")) %}
+          {%
+              filter kit::wrap(
+                  kit::Field::custom(label)
+                      .clearable("clear-{}"|format(field), "clear")
+                      .class("col-span-full"),
+              )
+          %}
         <div class="flex flex-wrap items-center gap-2">
           {{ self.primary_select() }}
           {% include "library/types.html" %}

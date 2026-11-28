@@ -15,7 +15,10 @@
     <div hidden{{ self.stream() }}></div>
     {%
         filter kit::wrap(
-            kit::TopBar::new("slsk", "/").home_label("slsk: downloads").in_place().class("flex-wrap"),
+            kit::TopBar::new("slsk", "/")
+                .home_label("slsk: downloads")
+                .in_place()
+                .class("flex-wrap"),
         )
     %}{{ status }}{% endfilter %}
     {{ nav }}

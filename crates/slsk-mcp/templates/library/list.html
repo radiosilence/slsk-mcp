@@ -12,7 +12,13 @@
           {% if let Some(r) = rows %}{{ r.draw() }}{% endif %}
         </ul>
         {% if let Some(r) = rows %}{{ r.more.draw() }}{% endif %}
-        {% filter kit::wrap(kit::SelectionBar::new(kit::SelectionCount::new("{} selected", "{} selected")).class("compact")) %}
+        {%
+            filter kit::wrap(kit::SelectionBar::new(kit::SelectionCount::new(
+                "{} selected",
+                "{} selected",
+            ))
+            .class("compact"))
+        %}
           {{
               kit::Button::bordered("Re-file")
                   .post("/library/preview/refile")
@@ -69,7 +75,9 @@
                   .post("/library/preview/bin")
                   .sends("lib-sel")
                   .busy_key("lib")
-                  .class("[form:not(:has(input[data-spare]:checked,input[name=all]:checked))_&]:hidden")
+                  .class(
+                      "[form:not(:has(input[data-spare]:checked,input[name=all]:checked))_&]:hidden",
+                  )
           }}{% endif %}
         {% endfilter %}
       {% endfilter %}

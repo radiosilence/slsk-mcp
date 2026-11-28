@@ -16,7 +16,12 @@
   }}{% endif %}
   {#- Refuses to send none, and counts what is ticked beside its apply once that is drawn: none is while the rows stream
       in, or when nothing applies. -#}
-  {% filter kit::wrap(kit::Selection::new("{}-apply"|format(slot), "path").none("Tick an album to apply this to.")) %}
+  {%
+      filter kit::wrap(
+          kit::Selection::new("{}-apply"|format(slot), "path")
+              .none("Tick an album to apply this to."),
+      )
+  %}
     {% include "library/filter.html" %}
     {{ kit::Input::hidden("slot", slot) }}
     {% if all %}{{ kit::Input::hidden("all", "1") }}{% endif %}
