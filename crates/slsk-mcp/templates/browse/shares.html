@@ -9,15 +9,13 @@
       </div>
       <div class="text-meta text-muted wrap-anywhere">{{ folders }} folders{% match info %}{% when Some with (i) %} · {{ i.uploads }} uploads · queue {{ i.queue }} · {% if i.free %}<span class="text-brand">free slot</span>{% else %}no free slot{% endif %}{% when None %}{% endmatch %}</div>
       {% match info %}{% when Some with (i) %}{% if !i.description.is_empty() %}{% filter kit::wrap(kit::Disclosure::new("about")) %}<p class="whitespace-pre-wrap text-muted wrap-anywhere">{{ i.description }}</p>{% endfilter %}{% endif %}{% when None %}{% endmatch %}
-      <nav class="my-2 flex flex-wrap items-baseline gap-x-1.5 gap-y-1">
+      <nav class="my-2 flex flex-wrap items-baseline gap-x-1.5 gap-y-1" data-kit-in-place>
         {% if let Some(up) = up %}{{
             kit::Link::new("↑ Up", up)
-                .in_place()
-                .busy_key("browse")
                 .attr("title", "Up to the folder above")
                 .class("wrap-anywhere")
         }}{% endif %}
-        {% for c in crumbs %}{% if !loop.first %}<span class="text-meta text-muted">/</span>{% endif %}{{ kit::Link::new(c.name, c.href).in_place().busy_key("browse").current(loop.last).class("wrap-anywhere") }}{% endfor %}
+        {% for c in crumbs %}{% if !loop.first %}<span class="text-meta text-muted">/</span>{% endif %}{{ kit::Link::new(c.name, c.href).current(loop.last).class("wrap-anywhere") }}{% endfor %}
       </nav>
       {% if !mine && tree_files > 0 %}
         <div class="mt-2.5 flex flex-wrap items-center gap-2">
@@ -36,6 +34,6 @@
           </form>{% endif %}
         </div>
       {% endif %}
-      {% match rows %}{% when Some with (r) %}{% if r.trim().is_empty() %}{{ kit::Empty::new("This folder is empty.") }}{% else %}<ul>{{ r }}</ul>{% endif %}{% when None %}{% endmatch %}
+      {% match rows %}{% when Some with (r) %}{% if r.trim().is_empty() %}{{ kit::Empty::new("This folder is empty.") }}{% else %}<ul data-kit-in-place>{{ r }}</ul>{% endif %}{% when None %}{% endmatch %}
   {% endmatch %}
 </div>

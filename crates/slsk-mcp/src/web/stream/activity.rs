@@ -3,7 +3,7 @@
 
 use axum::response::sse::Event;
 
-use super::{Changed, Live, Shown, last};
+use super::{Changed, Live, Shown};
 use crate::live::Topic;
 use crate::web::page::Tab;
 use crate::web::page::activity::{Feed, Trends};
@@ -20,8 +20,8 @@ impl Live for Activity {
 
     async fn open(_: &UiState, _: Shown) -> Self {
         Self {
-            feed: last(),
-            trends: last(),
+            feed: Last::new(),
+            trends: Last::new(),
         }
     }
 

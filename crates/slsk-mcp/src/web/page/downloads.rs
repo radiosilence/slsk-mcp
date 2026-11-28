@@ -421,7 +421,7 @@ impl Sources {
     fn cause(&self, cause: &str) -> &'static str {
         super::triage::cause_label(cause)
     }
-    fn ago(&self, at: &chrono::DateTime<chrono::Utc>) -> String {
+    fn ago(&self, at: &chrono::DateTime<chrono::Utc>) -> kit::Time<'static> {
         crate::web::ago(*at)
     }
     fn size(&self, bytes: &u64) -> String {

@@ -3,7 +3,7 @@
   id="{{ slot }}-preview"
   class="panel empty:hidden{% if slot != "lib" %} mt-2{% endif %}"{% if slot == "lib" %} data-init="el.scrollIntoView({block: 'start'})"{% endif %}
 >
-  <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5"><strong class="min-w-0 flex-auto wrap-anywhere">{{ action.name() }}: {{ shown }} album{% if shown != 1 %}s{% endif %}</strong>{{ kit::Status::wait("preview") }}</div>
+  <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5"><strong class="min-w-0 flex-auto wrap-anywhere">{{ action.name() }}: {{ shown }} album{% if shown != 1 %}s{% endif %}</strong>{{ kit::Status::neutral("preview") }}</div>
   <p class="my-0.5 text-meta text-muted">{{ action.about() }} Nothing has changed yet.</p>
   {% if selected > shown %}{{
       kit::Notice::warn(

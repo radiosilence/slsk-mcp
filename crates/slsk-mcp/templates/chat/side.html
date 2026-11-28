@@ -7,7 +7,6 @@
           <li>{{
               kit::Link::new(r.0, crate::web::chat_href("room", r.0))
                   .in_place()
-                  .busy_key("chat")
                   .class("wrap-anywhere")
           }}<span class="text-meta text-muted wrap-anywhere">{{ r.1 }} in the room</span></li>
         {% endfor %}
@@ -22,13 +21,11 @@
                   filter kit::wrap(
                       kit::Link::new("", crate::web::chat_href("pm", c.username))
                           .in_place()
-                          .busy_key("chat")
                           .class("wrap-anywhere"),
                   )
               %}<strong>{{ c.username }}</strong>{% endfilter %}{% else %}{{
                   kit::Link::new(c.username, crate::web::chat_href("pm", c.username))
                       .in_place()
-                      .busy_key("chat")
                       .class("wrap-anywhere")
               }}{% endif %}
               {% if c.unread > 0 %}<span class="text-meta text-brand">{{ c.unread }} new</span>{% endif %}
@@ -47,7 +44,6 @@
               {{
                   kit::Link::new(b.username, crate::web::chat_href("pm", b.username))
                       .in_place()
-                      .busy_key("chat")
                       .class("wrap-anywhere")
               }}
               {{ crate::web::state(b.status, b.status) }}

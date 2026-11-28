@@ -108,17 +108,15 @@ fn rel<'a>(root: &str, p: &'a str) -> &'a str {
         .unwrap_or(p)
 }
 
-/// When an album was imported, as a person would say it.
-fn imported(secs: Option<i64>) -> String {
-    let Some(t) = secs.and_then(|s| chrono::DateTime::from_timestamp(s, 0)) else {
-        return String::new();
-    };
-    let days = (chrono::Utc::now() - t).num_days();
-    match days {
-        ..1 => crate::web::ago(t),
-        1..7 => format!("{days}d ago"),
-        _ => t.format("%-d %b %Y").to_string(),
-    }
+/// When an album was imported: how long ago within the week, else the date.
+fn imported(secs: Option<i64>) -> Option<kit::Time<'static>> {
+    let secs = secs?;
+    let time = kit::Time::seconds(secs);
+    Some(if chrono::Utc::now().timestamp() - secs < 7 * 86_400 {
+        time.relative()
+    } else {
+        time.date()
+    })
 }
 
 /// What the list shows: a search, an import date, and which albums.
@@ -532,7 +530,7 @@ impl Rows {
     fn rel<'a>(&self, p: &'a str) -> &'a str {
         rel(&self.root, p)
     }
-    fn imported(&self, a: &LibraryAlbum) -> String {
+    fn imported(&self, a: &LibraryAlbum) -> Option<kit::Time<'static>> {
         imported(a.added)
     }
     fn slot(&self, path: &str) -> String {

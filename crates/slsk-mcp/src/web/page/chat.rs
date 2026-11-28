@@ -189,7 +189,7 @@ impl Side {
             },
         }
     }
-    fn ago(&self, c: &Conversation) -> String {
+    fn ago(&self, c: &Conversation) -> kit::Time<'static> {
         crate::web::ago(c.at)
     }
 }
@@ -317,7 +317,7 @@ impl Lines {
             }
         }
     }
-    fn at(&self, l: &Line) -> String {
+    fn at(&self, l: &Line) -> kit::Time<'static> {
         crate::web::ago(l.at)
     }
 }

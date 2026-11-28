@@ -85,11 +85,8 @@ impl Wishes {
             next,
         }
     }
-    fn searched(&self, w: &Wish) -> String {
-        match w.searched_at {
-            Some(t) => format!("searched {}", crate::web::ago(t)),
-            None => "not searched yet".into(),
-        }
+    fn searched(&self, w: &Wish) -> Option<kit::Time<'static>> {
+        w.searched_at.map(crate::web::ago)
     }
     /// When `w` is searched next, if it is the next one.
     fn next_for(&self, w: &Wish) -> Option<i64> {

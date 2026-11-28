@@ -1,7 +1,5 @@
 use koan_kit_web as kit;
 
-use super::stream::unnamed;
-
 /// Datastar's `data-show` acts only once Datastar has loaded, so an element
 /// that starts hidden flashes until then; such elements carry `hidden` and
 /// `data-attr:hidden`. Nothing else may use the name either, since Datastar
@@ -1082,8 +1080,7 @@ fn the_stylesheet_names_the_font_the_kit_serves() {
     assert!(include_str!("../../assets/app.css").contains(&kit::font::url("app.css")));
 }
 
-/// A fragment drawn twice from the same state is not sent again, though the kit names its buttons' own busy signals
-/// afresh each time.
+/// A fragment drawn twice from the same state is the same markup, so a stream does not send it again.
 #[test]
 fn a_redraw_from_the_same_state_compares_equal() {
     let draw = |url: &'static str| {
@@ -1092,12 +1089,6 @@ fn a_redraw_from_the_same_state_compares_equal() {
             .post(url)
             .to_string()
     };
-    assert_eq!(
-        unnamed(&draw("/jobs/1/retry")),
-        unnamed(&draw("/jobs/1/retry"))
-    );
-    assert_ne!(
-        unnamed(&draw("/jobs/1/retry")),
-        unnamed(&draw("/jobs/2/retry"))
-    );
+    assert_eq!(draw("/jobs/1/retry"), draw("/jobs/1/retry"));
+    assert_ne!(draw("/jobs/1/retry"), draw("/jobs/2/retry"));
 }

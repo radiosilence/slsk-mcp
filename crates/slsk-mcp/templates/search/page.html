@@ -4,12 +4,13 @@
     {% let several = kit::Form::plain_get("/search") %}
     <form {{ several.attrs() }} class="mt-2 grid gap-2">
       {{
-          kit::Textarea::new("q")
-              .rows(6)
-              .label("Searches, one per line")
-              .placeholder("One search per line: artist album")
-              .attr("autocomplete", "off")
-              .required()
+          kit::RepeatField::new(
+              "Searches",
+              kit::Input::text("q").placeholder("artist album").attr("autocomplete", "off"),
+              "Add another",
+              "Remove",
+          )
+          .hint("Pasting several lines fills a row with each.")
       }}
       <div class="flex flex-wrap items-center gap-2">
         {{ kit::Check::new("lossless", "lossless").value("true").checked(lossless) }}
@@ -17,6 +18,7 @@
       </div>
     </form>
   {% endfilter %}
+  {% if blank %}{{ kit::Notice::warn("Nothing to search for: type an artist and album first.").class("mt-2") }}{% endif %}
   {{ tabs }}
   {% if let Some(html) = results %}{{ html }}{% else %}{{
       kit::Empty::new("No search open.")

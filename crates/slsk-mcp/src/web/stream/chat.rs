@@ -4,7 +4,7 @@
 
 use axum::response::sse::Event;
 
-use super::{Changed, Live, Shown, last};
+use super::{Changed, Live, Shown};
 use crate::live::Topic;
 use crate::web::page::Tab;
 use crate::web::page::chat::{ChatQuery, Lines, Side, Thread};
@@ -23,13 +23,13 @@ impl Live for Chat {
     async fn open(_: &UiState, shown: Shown) -> Self {
         Self {
             thread: shown.view::<ChatQuery>().thread(),
-            lines: last(),
-            side: last(),
+            lines: Last::new(),
+            side: Last::new(),
         }
     }
 
     async fn draw(&mut self, s: &UiState, c: &Changed) -> Vec<Event> {
-        if !(c.topic(Topic::Social) || c.topic(Topic::Chat) || c.minute) {
+        if !(c.topic(Topic::Social) || c.topic(Topic::Chat)) {
             return Vec::new();
         }
         let mut events = Vec::new();

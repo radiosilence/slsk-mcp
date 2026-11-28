@@ -51,8 +51,8 @@ impl Feed {
             hour: app.activity.this_hour(),
         }
     }
-    fn when(&self, e: &ShareEvent) -> String {
-        e.at.format("%H:%M:%S").to_string()
+    fn when(&self, e: &ShareEvent) -> kit::Time<'static> {
+        kit::Time::millis(e.at.timestamp_millis()).clock()
     }
     fn what(&self, e: &ShareEvent) -> &'static str {
         match e.kind.as_str() {
@@ -96,7 +96,7 @@ impl Trends {
     fn search_href(&self, term: &str) -> String {
         crate::web::place_url("/search", &[("q", term)])
     }
-    fn ago(&self, t: &chrono::DateTime<chrono::Utc>) -> String {
+    fn ago(&self, t: &chrono::DateTime<chrono::Utc>) -> kit::Time<'static> {
         crate::web::ago(*t)
     }
 }

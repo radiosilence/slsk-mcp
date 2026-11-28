@@ -4,7 +4,7 @@
 use axum::response::sse::Event;
 use uuid::Uuid;
 
-use super::{Changed, Live, Shown, last};
+use super::{Changed, Live, Shown};
 use crate::live::Topic;
 use crate::web::page::Tab;
 use crate::web::page::downloads::job::{JobPage, of_path};
@@ -24,7 +24,7 @@ impl Live for Job {
     async fn open(_: &UiState, shown: Shown) -> Self {
         Self {
             id: of_path(shown.path()),
-            page: last(),
+            page: Last::new(),
             failed: false,
         }
     }
@@ -34,7 +34,7 @@ impl Live for Job {
         let Some(id) = self.id else {
             return Vec::new();
         };
-        if !(c.topic(Topic::Jobs) || c.moved || c.minute) {
+        if !(c.topic(Topic::Jobs) || c.moved) {
             return Vec::new();
         }
         match JobPage::of(&s.app, id).await {

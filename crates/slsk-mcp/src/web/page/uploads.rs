@@ -191,7 +191,7 @@ impl History {
             None => String::new(),
         }
     }
-    fn ago(&self, h: &crate::db::UploadRow) -> String {
+    fn ago(&self, h: &crate::db::UploadRow) -> kit::Time<'static> {
         crate::web::ago(h.finished_at)
     }
     fn leaf<'a>(&self, name: &'a str) -> &'a str {

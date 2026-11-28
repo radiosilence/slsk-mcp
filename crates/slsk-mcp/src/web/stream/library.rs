@@ -6,7 +6,7 @@
 use askama_datastar::{ElementPatchMode, Html};
 use axum::response::sse::Event;
 
-use super::{Changed, Live, Shown, last};
+use super::{Changed, Live, Shown};
 use crate::live::Topic;
 use crate::web::page::Tab;
 use crate::web::page::library::run::{RunHead, RunPanel, RunRow};
@@ -37,8 +37,8 @@ impl Live for Library {
             seen: shown.libseen,
             held: shown.librows,
             panel: None,
-            head: last(),
-            whole: last(),
+            head: Last::new(),
+            whole: Last::new(),
         }
     }
 
@@ -109,7 +109,7 @@ impl Library {
                     .draw(),
                 ),
             );
-            self.head = last();
+            self.head = Last::new();
         }
         self.panel = Some((run.id(), run.running(), done));
         events

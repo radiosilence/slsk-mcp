@@ -3,7 +3,7 @@
 
 use axum::response::sse::Event;
 
-use super::{Changed, Live, Shown, last};
+use super::{Changed, Live, Shown};
 use crate::live::Topic;
 use crate::web::page::Tab;
 use crate::web::page::uploads::{History, Peers};
@@ -22,14 +22,14 @@ impl Live for Uploads {
     async fn open(_: &UiState, shown: Shown) -> Self {
         Self {
             shown: shown.history,
-            peers: last(),
-            history: last(),
+            peers: Last::new(),
+            history: Last::new(),
         }
     }
 
     async fn draw(&mut self, s: &UiState, c: &Changed) -> Vec<Event> {
         let mut events = Vec::new();
-        if c.moved || c.minute {
+        if c.moved {
             events.extend(self.peers.send(&Peers::now(&s.app).draw()));
         }
         if c.topic(Topic::Uploads) || c.minute {

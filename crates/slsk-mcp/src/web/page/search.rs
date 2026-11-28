@@ -49,12 +49,12 @@ const STALE: Duration = Duration::from_secs(600);
 pub(in crate::web) struct Search;
 
 /// A search page's address: `tab` names the tab shown and `shown` how many
-/// of its folders are drawn. `q` (one search per line) and `lossless` open
-/// tabs and are replaced by the first of them.
+/// of its folders are drawn. `q` (any number of them, each one search per
+/// line) and `lossless` open tabs and are replaced by the first of them.
 #[derive(serde::Deserialize, Default)]
 #[serde(default)]
 pub(in crate::web) struct SearchQuery {
-    q: String,
+    q: Vec<String>,
     /// Any value means lossless, as the page reads it.
     lossless: String,
     tab: String,
@@ -80,6 +80,8 @@ struct SearchPage<'a> {
     /// The finder starts empty: what is typed there opens a new tab.
     q: &'a str,
     lossless: bool,
+    /// Searches were sent, every one of them empty.
+    blank: bool,
     tabs: Html,
     /// The tab's results, as kept or as heard so far.
     results: Option<Html>,
@@ -92,8 +94,8 @@ impl Page for Search {
 
     async fn body(s: &UiState, View(view): View<SearchQuery>) -> anyhow::Result<Body> {
         // A search typed or pasted opens its tabs, and the page moves to the first.
-        if !view.q.trim().is_empty() {
-            let first = open(s, &view.q, !view.lossless.is_empty()).await?;
+        if view.q.iter().any(|q| !q.trim().is_empty()) {
+            let first = open(s, &view.q.join("\n"), !view.lossless.is_empty()).await?;
             return Ok(Body::redirect(
                 first.map_or("/search".to_string(), |id| format!("/search?tab={id}")),
             ));
@@ -127,6 +129,7 @@ impl Page for Search {
         Ok(Body::of(&SearchPage {
             q: "",
             lossless: tab.as_ref().is_none_or(|t| t.lossless),
+            blank: !view.q.is_empty(),
             tabs: Tabs::of(&s.app, view.tab()).await.draw(),
             results,
         })
@@ -169,7 +172,8 @@ fn stale(tab: &SearchTab) -> bool {
         .is_some_and(|at| (chrono::Utc::now() - at).to_std().is_ok_and(|d| d > STALE))
 }
 
-fn ago(at: chrono::DateTime<chrono::Utc>) -> String {
+/// How long ago, as text for a tab's title, an attribute that cannot hold a [`kit::Time`].
+fn title_ago(at: chrono::DateTime<chrono::Utc>) -> String {
     let mins = (chrono::Utc::now() - at).num_minutes().max(0);
     match mins {
         0 => "just now".to_string(),
@@ -261,16 +265,22 @@ impl Tabs {
     fn href(&self, t: &SearchTab) -> String {
         format!("/search?tab={}", t.id)
     }
-    /// A tab's tone: red when its search failed, turning while it runs, muted once stale.
+    /// A tab's tone: red when its search failed, slanted once stale.
     fn tone(&self, t: &SearchTab) -> &'static str {
         if t.error.is_some() {
-            "text-bad"
-        } else if t.searched_at.is_none() {
-            "text-ink busy"
-        } else if stale(t) {
-            "text-muted italic"
+            "[&>a]:text-bad"
+        } else if t.searched_at.is_some() && stale(t) {
+            "[&>a]:italic"
         } else {
-            "text-ink"
+            ""
+        }
+    }
+    /// What a tab says after its words: that it is still searching, or how many folders it found.
+    fn state(&self, t: &SearchTab) -> String {
+        match (t.searched_at, &t.error) {
+            (None, _) => "searching".into(),
+            (Some(_), None) => t.found.to_string(),
+            (Some(_), Some(_)) => String::new(),
         }
     }
     fn pin_label(&self, t: &SearchTab) -> String {
@@ -293,7 +303,7 @@ impl Tabs {
                 "{} · {quality} · {} folders, searched {}",
                 t.query,
                 t.found,
-                ago(at)
+                title_ago(at)
             ),
         }
     }
@@ -318,8 +328,8 @@ pub(in crate::web) struct Results {
     /// Folders found, of which the best `KEEP` are kept.
     found: usize,
     error: Option<String>,
-    /// How long ago the search finished.
-    age: Option<String>,
+    /// When the search finished.
+    age: Option<kit::Time<'static>>,
     stale: bool,
     /// Whether the peers behind the folders are online, as far as the
     /// server has said.
@@ -342,7 +352,7 @@ impl Results {
         let more = folders.len().saturating_sub(shown);
         folders.truncate(shown);
         Self {
-            age: tab.searched_at.map(ago),
+            age: tab.searched_at.map(crate::web::ago),
             stale: stale(tab),
             tab: tab.id,
             query: tab.query.clone(),
@@ -382,7 +392,7 @@ impl Results {
             responses: responses.len(),
             found,
             error: heard.error.as_ref().map(|e| e.to_string()),
-            age: heard.done.then(|| ago(chrono::Utc::now())),
+            age: heard.finished.map(crate::web::ago),
             stale: false,
             statuses: HashMap::new(),
         }

@@ -180,7 +180,8 @@ pub(super) struct Changed {
     pub(super) moved: bool,
     /// The session's connection changed.
     pub(super) connection: bool,
-    /// The minute turned, so times shown as "3 min ago" are redrawn.
+    /// The minute turned, for what is counted over a window of time (the
+    /// hour's searches, the day's uploads), which moves with no event.
     pub(super) minute: bool,
     /// A change of the stream's own ([`Live::wakes`]).
     pub(super) woke: bool,
@@ -192,33 +193,6 @@ impl Changed {
     pub(super) fn topic(&self, t: Topic) -> bool {
         self.topics[t as usize]
     }
-}
-
-/// A region as last sent, compared without the names the kit gives afresh on
-/// every render ([`unnamed`]).
-pub(super) fn last() -> Last {
-    Last::comparing(unnamed)
-}
-
-/// Markup as a stream compares it with what it last sent. The kit names a request button's own busy signal afresh on
-/// every render, keyed or not, so a region drawn twice from the same state differs only in those names; they are left
-/// out, or every redraw would be sent again. A region sent for another change brings its new names with it.
-pub(super) fn unnamed(html: &str) -> String {
-    const SIGNAL: &str = "_busy";
-    let mut out = String::with_capacity(html.len());
-    let mut rest = html;
-    while let Some(at) = rest.find(SIGNAL) {
-        let (before, after) = rest.split_at(at + SIGNAL.len());
-        out.push_str(before);
-        let hex = after
-            .bytes()
-            .take(12)
-            .take_while(u8::is_ascii_hexdigit)
-            .count();
-        rest = if hex == 12 { &after[12..] } else { after };
-    }
-    out.push_str(rest);
-    out
 }
 
 /// The status line and the nav, on every page.
@@ -233,13 +207,14 @@ struct Header {
 impl Header {
     async fn draw(&mut self, s: &UiState, c: &Changed) -> Vec<Event> {
         let mut events = Vec::new();
+        // The minute rolls the hour's search budget along.
         if c.connection || c.moved || c.minute {
             events.extend(self.status.send(&Status::of(&s.app).draw()));
         }
-        if self.unread.is_none() || c.topic(Topic::Social) || c.minute {
+        if self.unread.is_none() || c.topic(Topic::Social) {
             self.unread = Some(s.app.social.unread().await.unwrap_or(0));
         }
-        if c.moved || c.minute || c.topic(Topic::Social) {
+        if c.moved || c.topic(Topic::Social) {
             let nav = Nav::new(&s.app, self.tab, self.unread.unwrap_or(0));
             events.extend(self.nav.send(&nav.draw()));
         }
@@ -353,7 +328,7 @@ pub(super) async fn serve<L: Live>(
         Some((changed, sources))
     });
     let events = async_stream::stream! {
-        let mut header = Header { tab: L::TAB, status: last(), nav: last(), unread: None };
+        let mut header = Header { tab: L::TAB, status: Last::new(), nav: Last::new(), unread: None };
         let mut changes = std::pin::pin!(paced(changes, Pace::default()));
         // Said on the first pass whatever else is sent, so the page hears from
         // a stream as soon as it opens.

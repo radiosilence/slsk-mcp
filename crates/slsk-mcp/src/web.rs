@@ -397,14 +397,9 @@ fn field<'a>(fields: &'a [(String, String)], name: &str) -> Option<&'a str> {
         .filter(|v| !v.is_empty())
 }
 
-fn ago(t: chrono::DateTime<chrono::Utc>) -> String {
-    let secs = (chrono::Utc::now() - t).num_seconds().max(0);
-    match secs {
-        0..60 => "just now".into(),
-        60..3600 => format!("{}m ago", secs / 60),
-        3600..86400 => format!("{}h ago", secs / 3600),
-        _ => format!("{}d ago", secs / 86400),
-    }
+/// How long ago `t` was, in the reader's language and recomputed by the browser as time passes.
+fn ago(t: chrono::DateTime<chrono::Utc>) -> kit::Time<'static> {
+    kit::Time::millis(t.timestamp_millis()).relative()
 }
 
 fn human(bytes: u64) -> String {
@@ -447,6 +442,7 @@ fn state<'a>(state: &str, word: impl Into<kit::Text<'a>>) -> kit::Status<'a> {
         "connected" | "online" | "keep" | "imported" => kit::Tone::Ok,
         "displaced" | "disconnected" | "rejected" | "failed" | "suspect" => kit::Tone::Bad,
         "spare" | "away" | "review" | "downloading" | "importing" | "waiting" => kit::Tone::Warn,
+        "offline" | "cancelled" | "no-account" => kit::Tone::Neutral,
         _ => kit::Tone::Wait,
     };
     kit::Status::new(tone, word).busy(state == "connecting")
