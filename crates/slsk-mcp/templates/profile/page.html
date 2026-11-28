@@ -25,8 +25,7 @@
               kit::Textarea::new("description")
                   .rows(6)
                   .placeholder("About you and what you share")
-                  .value(description)
-                  .class("resize-y"),
+                  .value(description),
           )
       }}
       {{ kit::Field::new("picture", self.picture_input()).hint("A JPEG or PNG.") }}

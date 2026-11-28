@@ -265,22 +265,31 @@ impl Tabs {
     fn href(&self, t: &SearchTab) -> String {
         format!("/search?tab={}", t.id)
     }
-    /// A tab's tone: red when its search failed, slanted once stale.
-    fn tone(&self, t: &SearchTab) -> &'static str {
+    /// A tab's tone: bad when its search failed.
+    fn tone(&self, t: &SearchTab) -> kit::Tone {
         if t.error.is_some() {
-            "[&>a]:text-bad"
-        } else if t.searched_at.is_some() && stale(t) {
+            kit::Tone::Bad
+        } else {
+            kit::Tone::Wait
+        }
+    }
+    /// Slanted once its results are stale; the kit has no tone for that.
+    fn slant(&self, t: &SearchTab) -> &'static str {
+        if t.error.is_none() && t.searched_at.is_some() && stale(t) {
             "[&>a]:italic"
         } else {
             ""
         }
     }
-    /// What a tab says after its words: that it is still searching, or how many folders it found.
+    /// Still searching: the tab's ensō turns.
+    fn searching(&self, t: &SearchTab) -> bool {
+        t.searched_at.is_none()
+    }
+    /// How many folders a search that finished without failing found.
     fn state(&self, t: &SearchTab) -> String {
         match (t.searched_at, &t.error) {
-            (None, _) => "searching".into(),
             (Some(_), None) => t.found.to_string(),
-            (Some(_), Some(_)) => String::new(),
+            _ => String::new(),
         }
     }
     fn pin_label(&self, t: &SearchTab) -> String {

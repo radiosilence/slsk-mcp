@@ -228,10 +228,6 @@
     }
   }
 
-  textarea {
-    resize: vertical;
-  }
-
   ::-webkit-search-decoration {
     -webkit-appearance: none;
   }
@@ -477,6 +473,10 @@
     color: var(--ink);
     text-transform: none;
     background-color: #0000;
+  }
+
+  textarea {
+    resize: vertical;
   }
 
   select {
@@ -794,6 +794,22 @@
 
   .field.bad :is(input, select, textarea) {
     border-color: var(--bad);
+  }
+
+  input.short, .field input.short {
+    width: 7em;
+  }
+
+  .field > .clearable {
+    align-items: center;
+    column-gap: calc(var(--spacing) * 3);
+    row-gap: var(--spacing);
+    flex-wrap: wrap;
+    display: flex;
+  }
+
+  .field > .clearable > :is(input, select, textarea) {
+    flex: 1;
   }
 
   .field > small.warn, .field.warn > small {
@@ -1151,6 +1167,39 @@
     display: flex;
   }
 
+  .rows.tight > li {
+    padding-block: var(--spacing);
+  }
+
+  .selectionbar {
+    z-index: 10;
+    margin-top: calc(var(--spacing) * 2);
+    align-items: center;
+    gap: calc(var(--spacing) * 2);
+    border-style: var(--tw-border-style);
+    border-width: 1px;
+    border-color: var(--rule);
+    background-color: var(--bg);
+    padding-inline: calc(var(--spacing) * 3);
+    padding-block: calc(var(--spacing) * 2.5);
+    font-size: var(--text-meta);
+    line-height: var(--tw-leading, var(--text-meta--line-height));
+    padding-bottom: max(10px, env(safe-area-inset-bottom));
+    flex-wrap: wrap;
+    display: flex;
+    position: sticky;
+    bottom: 0;
+  }
+
+  .selectionbar[hidden] {
+    display: none;
+  }
+
+  .selectionbar > [data-kit-count] {
+    color: var(--ink);
+    margin-inline-end: auto;
+  }
+
   ul.list {
     margin: 0;
     list-style-type: square;
@@ -1490,6 +1539,10 @@
     margin: 0;
   }
 
+  dl.pairs.tight {
+    row-gap: 0;
+  }
+
   .empty {
     justify-items: center;
     gap: calc(var(--spacing) * 2);
@@ -1573,20 +1626,23 @@
     padding-top: max(12px, env(safe-area-inset-top));
   }
 
-  .topbar > .wordmark {
+  .wordmark {
     font-size: var(--text-title-sm);
     line-height: var(--tw-leading, var(--text-title-sm--line-height));
     --tw-font-weight: var(--font-weight-extralight);
     font-weight: var(--font-weight-extralight);
     color: var(--strong);
     text-transform: lowercase;
-    margin-inline-end: auto;
   }
 
   @media (hover: hover) {
-    .topbar > .wordmark:hover {
+    .wordmark:hover {
       text-decoration-line: none;
     }
+  }
+
+  .topbar > .wordmark {
+    margin-inline-end: auto;
   }
 
   .footer {
@@ -1728,6 +1784,22 @@
     font-variant-numeric: var(--tw-ordinal, ) var(--tw-slashed-zero, ) var(--tw-numeric-figure, ) var(--tw-numeric-spacing, ) var(--tw-numeric-fraction, );
   }
 
+  .tab.ok > a {
+    color: var(--ok);
+  }
+
+  .tab.warn > a {
+    color: var(--warn);
+  }
+
+  .tab.bad > a {
+    color: var(--bad);
+  }
+
+  .tab.neutral > a {
+    color: var(--ink);
+  }
+
   a.card {
     color: var(--ink);
     display: block;
@@ -1798,10 +1870,6 @@
     font-size: var(--text-meta);
     line-height: var(--tw-leading, var(--text-meta--line-height));
   }
-
-  .rows.tight > li {
-    padding-block: var(--spacing);
-  }
 }
 
 @layer utilities {
@@ -1823,10 +1891,6 @@
 
   .top-0 {
     top: 0;
-  }
-
-  .bottom-0 {
-    bottom: 0;
   }
 
   .z-1 {
@@ -1901,10 +1965,6 @@
     margin-top: calc(var(--spacing) * 5);
   }
 
-  .mr-auto {
-    margin-right: auto;
-  }
-
   .mb-0\.5 {
     margin-bottom: calc(var(--spacing) * .5);
   }
@@ -1952,10 +2012,6 @@
 
   .w-\[4\.5em\] {
     width: 4.5em;
-  }
-
-  .w-\[7em\] {
-    width: 7em;
   }
 
   .w-full {
@@ -2016,10 +2072,6 @@
 
   .basis-full {
     flex-basis: 100%;
-  }
-
-  .resize-y {
-    resize: vertical;
   }
 
   .\[scrollbar-width\:none\] {
@@ -2175,10 +2227,6 @@
     border-left-color: var(--warn);
   }
 
-  .bg-bg {
-    background-color: var(--bg);
-  }
-
   .bg-surface {
     background-color: var(--surface);
   }
@@ -2233,10 +2281,6 @@
 
   .pb-2 {
     padding-bottom: calc(var(--spacing) * 2);
-  }
-
-  .pb-\[max\(10px\,env\(safe-area-inset-bottom\)\)\] {
-    padding-bottom: max(10px, env(safe-area-inset-bottom));
   }
 
   .pl-6 {
@@ -2388,12 +2432,12 @@
     overflow: hidden;
   }
 
-  .\[\&\>a\]\:text-bad > a {
-    color: var(--bad);
-  }
-
   .\[\&\>a\]\:italic > a {
     font-style: italic;
+  }
+
+  form:not(:has(input[data-spare]:checked, input[name="all"]:checked)) .\[form\:not\(\:has\(input\[data-spare\]\:checked\,input\[name\=all\]\:checked\)\)_\&\]\:hidden {
+    display: none;
   }
 }
 

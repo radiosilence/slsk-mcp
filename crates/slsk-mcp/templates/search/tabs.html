@@ -9,9 +9,11 @@
           kit::Tab::new(t.query, self.href(t))
               .in_place()
               .current(self.is_active(t))
+              .busy(self.searching(t))
               .count(self.state(t))
+              .tone(self.tone(t))
               .class("compact min-w-0 max-w-full [&>a]:max-w-[18em] [&>a]:min-w-0 [&>a]:truncate")
-              .class(self.tone(t))
+              .class(self.slant(t))
               .attr("title", self.about(t))
               .data("close", "/search/tabs/{}/close"|format(t.id))
               .datastar(

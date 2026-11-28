@@ -392,7 +392,7 @@ impl LibraryPage {
             .label("Imported since")
             .bind("_libfrom")
             .datastar("attr:hidden", "$_libsince != 'date'")
-            .datastar("on:change", "el.form.requestSubmit()")
+            .submits()
             .class("flex-auto");
         if self.dated {
             input

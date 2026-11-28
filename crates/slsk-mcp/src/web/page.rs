@@ -247,7 +247,6 @@ pub(super) async fn serve<P: Page>(
         stream: P::STREAM,
         signals: all.to_string(),
         main: Main { body: body.html }.draw(),
-        now: chrono::Utc::now().timestamp_millis(),
     };
     match Html::render(&layout) {
         Ok(html) => (body.status, html).into_response(),

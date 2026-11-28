@@ -58,10 +58,7 @@ impl Live for Library {
                 .map(str::to_string)
                 .collect();
             events.push(list.draw().patch().into());
-            // A list drawn afresh has nothing ticked.
-            events.push(signals(
-                serde_json::json!({ "_sel": 0, "_spares": 0, "libseen": ended }),
-            ));
+            events.push(signals(serde_json::json!({ "libseen": ended })));
             for path in &open {
                 events.push(album_html(s, &self.filter, path).await.patch().into());
                 events.push(art_html(s, path).await.patch().into());

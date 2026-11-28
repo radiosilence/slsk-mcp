@@ -17,7 +17,7 @@
                   .min(1)
                   .required()
                   .attr("inputmode", "numeric")
-                  .class("w-[7em]"),
+                  .short(),
           )
       }}
       {{ slots_form.submit(kit::Button::primary("Save")) }}
@@ -32,7 +32,7 @@
                   .min(0)
                   .required()
                   .attr("inputmode", "numeric")
-                  .class("w-[7em]"),
+                  .short(),
           )
       }}
       {{
@@ -43,7 +43,7 @@
                   .min(0)
                   .required()
                   .attr("inputmode", "numeric")
-                  .class("w-[7em]"),
+                  .short(),
           )
       }}
       {{ limits_form.submit(kit::Button::primary("Save")) }}
