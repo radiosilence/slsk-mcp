@@ -220,10 +220,6 @@ impl Card {
         at.timestamp_millis()
     }
 
-    fn ms(&self, at: &Option<chrono::DateTime<chrono::Utc>>) -> i64 {
-        at.map_or(0, |t| t.timestamp_millis())
-    }
-
     fn size(&self, b: &u64) -> String {
         human(*b)
     }

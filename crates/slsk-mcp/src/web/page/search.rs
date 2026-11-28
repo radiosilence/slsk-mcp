@@ -265,13 +265,8 @@ impl Tabs {
     fn href(&self, t: &SearchTab) -> String {
         format!("/search?tab={}", t.id)
     }
-    /// A tab's tone: bad when its search failed.
-    fn tone(&self, t: &SearchTab) -> kit::Tone {
-        if t.error.is_some() {
-            kit::Tone::Bad
-        } else {
-            kit::Tone::Wait
-        }
+    fn failed(&self, t: &SearchTab) -> bool {
+        t.error.is_some()
     }
     /// Slanted once its results are stale; the kit has no tone for that.
     fn slant(&self, t: &SearchTab) -> &'static str {
@@ -281,9 +276,9 @@ impl Tabs {
             ""
         }
     }
-    /// Still searching: the tab's ensō turns.
+    /// Still searching: the tab's ensō turns. A failed search is never still searching.
     fn searching(&self, t: &SearchTab) -> bool {
-        t.searched_at.is_none()
+        t.searched_at.is_none() && t.error.is_none()
     }
     /// How many folders a search that finished without failing found.
     fn state(&self, t: &SearchTab) -> String {

@@ -5,13 +5,12 @@
   {%- filter kit::wrap(kit::Tabs::new("Searches").class("min-w-0 flex-auto")) -%}
     {%- for t in tabs %}
       {#- A middle click closes it. -#}
-      {{
-          kit::Tab::new(t.query, self.href(t))
+      {%
+          let tab = kit::Tab::new(t.query, self.href(t))
               .in_place()
               .current(self.is_active(t))
               .busy(self.searching(t))
               .count(self.state(t))
-              .tone(self.tone(t))
               .class("compact min-w-0 max-w-full [&>a]:max-w-[18em] [&>a]:min-w-0 [&>a]:truncate")
               .class(self.slant(t))
               .attr("title", self.about(t))
@@ -33,7 +32,8 @@
                       .post("/search/tabs/{}/close"|format(t.id))
                       .busy_key(t.id.to_string()),
               )
-      }}
+      %}
+      {% if self.failed(t) %}{{ tab.clone().tone(kit::Tone::Bad) }}{% else %}{{ tab }}{% endif %}
     {%- endfor -%}
   {%- endfilter -%}
   {% if self.unpinned() > 1 %}{{
